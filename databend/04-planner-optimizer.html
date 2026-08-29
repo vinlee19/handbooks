@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>04 · Planner / Optimizer：从 SExpr 到最优计划 · Databend 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#ff6b6b}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">☁️ <span>Databend 源码深度解析</span></span><nav class="nav"><a href="00-meta.html">元信息与阅读指南</a><a href="01-overview.html">总览：三层架构与设计取舍</a><a href="02-meta-service.html">Meta Service：客户端层 + 外部 OpenRaft 状态机</a><a href="03-sql-frontend.html">SQL 前端：词法 / 语法 / 绑定</a><a href="04-planner-optimizer.html" class=on>Planner / Optimizer：从 SExpr 到最优计划</a><a href="05-pipeline-execution.html">Pipeline 执行：Push-based + Event 状态机</a><a href="06-fuse-storage.html">FUSE 存储引擎：Snapshot / Segment / Block</a><a href="07-io-and-cache.html">IO 与多级缓存：OpenDAL Layer 栈 + CacheManager</a><a href="08-indexes-and-search.html">索引与搜索：Bloom / Inverted / Vector / Range / Page / Spatial</a><a href="09-cluster-and-exchange.html">集群与 Exchange：节点发现 + Flight Shuffle</a><a href="10-extensions.html">扩展：Stream / UDF / Iceberg / Delta</a><a href="99-diagrams.html">Mermaid 图源归档</a></nav></div></header>
+<main class="wrap">
+<h1>04 · Planner / Optimizer：从 SExpr 到最优计划</h1>
+<blockquote>
+<p>基于 commit <code>fe693bb677</code>。本篇覆盖 <code>databend-common-sql::planner::optimizer</code>，把 Binder 给出的 <code>SExpr</code> 一路打磨成 Cascades / DPHyp 协同后的最终逻辑+物理混合树。</p>
+</blockquote>
+<h2>1. 解决了什么问题</h2>
+<p>OLAP 优化器同时面对四类问题，没有任何单一框架能"一招打十"：</p>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>例子</th>
+<th>适合的方法</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>表达式重写</td>
+<td><code>x = 1 OR x = 1</code> → <code>x = 1</code></td>
+<td>等价规则（heuristic）</td>
+</tr>
+<tr>
+<td>谓词下推 / 投影下推</td>
+<td><code>WHERE x&gt;1 AND y='a'</code> 推到 Scan</td>
+<td>RBO 规则</td>
+</tr>
+<tr>
+<td>子查询解相关</td>
+<td><code>IN (SELECT ... WHERE outer.x = inner.x)</code> → SemiJoin</td>
+<td>专门的 decorrelator</td>
+</tr>
+<tr>
+<td>Join 重排</td>
+<td>10 表 join，如何选最便宜的连接顺序</td>
+<td>DPHyp / Cascades CBO</td>
+</tr>
+</tbody>
+</table>
+<p>把这些都丢给一个 Cascades 引擎并不现实——Cascades 在大查询树上爆炸。Databend 的取舍：<strong>把流水线拆开</strong>，先用一组规则做掉廉价重写、再用 DPHyp 解决 join 顺序、最后用 Cascades 做精细的物理性质（distribution、order）枚举。每段都可以独立替换。</p>
+<h2>2. 在 Databend 中的位置</h2>
+<div class="mermaid">
+flowchart LR
+  IN[Binder 输出\nPlan::Query { s_expr, metadata, bind_context, ... }]
+  IN --&gt; OPT[optimize_query\noptimizer.rs L≈246]
+  OPT --&gt; OUT[优化后的 SExpr\n(可含 Exchange / 物理性质)]
+  OUT --&gt; PB[PhysicalPlanBuilder]
+  PB --&gt; PP[PhysicalPlan]
+  PP --&gt; PiPB[PipelineBuilder]
+</div>
+<p>源码：</p>
+<table>
+<thead>
+<tr>
+<th>模块</th>
+<th>路径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>入口</td>
+<td><code>src/query/sql/src/planner/optimizer/optimizer.rs::optimize_query (L≈246)</code></td>
+</tr>
+<tr>
+<td>Pipeline 框架</td>
+<td><code>src/query/sql/src/planner/optimizer/pipeline/</code></td>
+</tr>
+<tr>
+<td>Cascades</td>
+<td><code>src/query/sql/src/planner/optimizer/optimizers/cascades/</code></td>
+</tr>
+<tr>
+<td>DPHyp</td>
+<td><code>src/query/sql/src/planner/optimizer/optimizers/hyper_dp/</code></td>
+</tr>
+<tr>
+<td>规则</td>
+<td><code>src/query/sql/src/planner/optimizer/optimizers/rule/</code></td>
+</tr>
+<tr>
+<td>解相关</td>
+<td><code>src/query/sql/src/planner/optimizer/optimizers/operator/decorrelate/subquery_decorrelator.rs</code></td>
+</tr>
+<tr>
+<td>分布式</td>
+<td><code>src/query/sql/src/planner/optimizer/optimizers/distributed/</code></td>
+</tr>
+<tr>
+<td>统计</td>
+<td><code>src/query/sql/src/planner/optimizer/statistics/</code></td>
+</tr>
+<tr>
+<td>成本模型</td>
+<td><code>src/query/sql/src/planner/optimizer/cost/</code></td>
+</tr>
+</tbody>
+</table>
+<h2>3. 关键数据结构</h2>
+<h3>3.1 SExpr — 不可变逻辑表达式树</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/sql/src/planner/optimizer/ir/expr/s_expr.rs:48</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">SExpr</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> plan: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">RelOperator</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> children: Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">SExpr</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+
+<span style="color: #F8F8F2">    original_group: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">IndexType</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,  </span><span style="color: #959077">// 来自 cascades memo 的回溯指针</span>
+
+<span style="color: #F8F8F2">    rel_prop: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">OnceLock</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">RelationalProperty</span><span style="color: #FF4689">&gt;&gt;&gt;</span><span style="color: #F8F8F2">, </span><span style="color: #959077">// 输出列、属性</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) stat_info: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">OnceLock</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">StatInfo</span><span style="color: #FF4689">&gt;&gt;&gt;</span><span style="color: #F8F8F2">, </span><span style="color: #959077">// 估算基数 + 列直方图</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) applied_rules: </span><span style="color: #A6E22E">AppliedRules</span><span style="color: #F8F8F2">,           </span><span style="color: #959077">// 位图，避免重复应用</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>要点：</p>
+<ul>
+<li><strong>不可变</strong>：所有变换都生成新 SExpr，children 是 <code>Arc</code>，复用上一版子树。</li>
+<li><strong>记忆化</strong>：<code>rel_prop</code> / <code>stat_info</code> 用 <code>OnceLock</code> 懒计算；同一个子树的属性在多个父算子里只算一次。</li>
+<li><strong>applied_rules</strong>：cascades 探索时用位图记录"这个 SExpr 已经试过哪些 rule"，杜绝循环。</li>
+</ul>
+<h3>3.2 RelOperator — 24 种关系算子</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/sql/src/planner/plans/operator.rs:147</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">RelOperator</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    Scan(Scan),                              </span><span style="color: #959077">// 表扫描</span>
+<span style="color: #F8F8F2">    Join(Join),                              </span><span style="color: #959077">// 单一节点，类型由内部 JoinType 决定</span>
+<span style="color: #F8F8F2">    EvalScalar(EvalScalar),                  </span><span style="color: #959077">// 计算列</span>
+<span style="color: #F8F8F2">    Filter(Filter),                          </span><span style="color: #959077">// WHERE / HAVING</span>
+<span style="color: #F8F8F2">    Aggregate(Aggregate),                    </span><span style="color: #959077">// 聚合</span>
+<span style="color: #F8F8F2">    Sort(Sort), Limit(Limit),</span>
+<span style="color: #F8F8F2">    Exchange(Exchange),                      </span><span style="color: #959077">// 分布式数据交换（hash/broadcast/merge）</span>
+<span style="color: #F8F8F2">    UnionAll(UnionAll),</span>
+<span style="color: #F8F8F2">    DummyTableScan(DummyTableScan),          </span><span style="color: #959077">// SELECT 1 这类不读表的语句</span>
+<span style="color: #F8F8F2">    Window(Window), ProjectSet(ProjectSet),</span>
+<span style="color: #F8F8F2">    ConstantTableScan(ConstantTableScan),</span>
+<span style="color: #F8F8F2">    ExpressionScan(ExpressionScan),          </span><span style="color: #959077">// 子查询表达式扫描（hash join build cache）</span>
+<span style="color: #F8F8F2">    CacheScan(CacheScan),</span>
+<span style="color: #F8F8F2">    Udf(Udf), AsyncFunction(AsyncFunction),</span>
+<span style="color: #F8F8F2">    RecursiveCteScan(RecursiveCteScan),</span>
+<span style="color: #F8F8F2">    Mutation(Mutation), CompactBlock(CompactBlock), MutationSource(MutationSource),</span>
+<span style="color: #F8F8F2">    MaterializedCTE(MaterializedCTE), MaterializedCTERef(MaterializedCTERef),</span>
+<span style="color: #F8F8F2">    Sequence(Sequence),                      </span><span style="color: #959077">// 序列化执行依赖</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>注意 <strong><code>Exchange</code></strong> 也是逻辑算子——它在优化器内部就被引入，不是物理化阶段才出现。这让"分布式优化"也能 reuse 同一套规则框架。</p>
+<h3>3.3 OptimizerPipeline — 把不同优化器串起来</h3>
+<div class="mermaid">
+classDiagram
+  class OptimizerPipeline {
+    +context: Arc~OptimizerContext~
+    +stages: Vec~Box dyn Optimizer~
+    +execute() async Result~SExpr~
+    +add(Optimizer)
+    +add_if(cond, Optimizer)
+  }
+  class Optimizer {
+    &lt;&lt;trait&gt;&gt;
+    +optimize(s_expr) Result~SExpr~
+  }
+  class SubqueryDecorrelatorOptimizer
+  class CollectStatisticsOptimizer
+  class RecursiveRuleOptimizer { +rules: ~RuleID }
+  class DPhpyOptimizer
+  class CascadesOptimizer { +memo +cost_model +rule_set }
+  class DistributedOptimizer
+  Optimizer &lt;|-- SubqueryDecorrelatorOptimizer
+  Optimizer &lt;|-- CollectStatisticsOptimizer
+  Optimizer &lt;|-- RecursiveRuleOptimizer
+  Optimizer &lt;|-- DPhpyOptimizer
+  Optimizer &lt;|-- CascadesOptimizer
+  Optimizer &lt;|-- DistributedOptimizer
+  OptimizerPipeline --&gt; Optimizer
+</div>
+<p><code>OptimizerPipeline</code> 是个 builder：每个 stage 都实现一个 <code>Optimizer</code> trait，按 <code>add</code> 顺序依次执行。<code>add_if(cond, ...)</code> 让 settings 决定是否启用某 stage。</p>
+<h3>3.4 Cascades 内部结构</h3>
+<div class="mermaid">
+classDiagram
+  class CascadesOptimizer {
+    +memo: Memo
+    +cost_model: Box dyn CostModel
+    +explore_rule_set: RuleSet
+    +optimize_sync(s_expr) Result~SExpr~
+    +optimize_internal(s_expr)
+  }
+  class Memo {
+    +groups: Vec~Group~
+    +root: Option~GroupIndex~
+  }
+  class Group {
+    +group_index
+    +exprs: Vec~MExpr~
+    +winner: Option~MExpr~
+    +rel_prop / stat_info
+  }
+  class MExpr {
+    +group_index
+    +children: Vec~GroupIndex~
+    +applied_rules: AppliedRules
+  }
+  class TaskManager {
+    +pending: VecDeque~Box dyn Task~
+    +run_until_empty()
+  }
+  class Task {
+    &lt;&lt;trait&gt;&gt;
+    OptimizeGroup
+    OptimizeExpr
+    ExploreGroup
+    ExploreExpr
+    ApplyRule
+  }
+  CascadesOptimizer --&gt; Memo
+  CascadesOptimizer --&gt; TaskManager
+  Memo --&gt; Group
+  Group --&gt; MExpr
+  TaskManager --&gt; Task
+</div>
+<p><code>Memo</code> 把所有等价的 SExpr 折叠到同一个 <code>Group</code>，避免组合爆炸；<code>TaskManager</code> 推动「先 explore，再 optimize」的经典 Cascades 调度。</p>
+<h2>4. 关键流程</h2>
+<h3>4.1 顶层流水线</h3>
+<p><code>optimize_query (optimizer.rs::L≈246)</code> 内部按这个顺序串接（每行都是源代码里的 <code>.add(...)</code>）：</p>
+<div class="mermaid">
+flowchart TB
+  S0[SExpr from Binder]
+  S0 --&gt; A1[SubqueryDecorrelatorOptimizer]
+  A1 --&gt; A2[RuleStatsAggregateOptimizer]
+  A2 --&gt; A3[CollectStatisticsOptimizer]
+  A3 --&gt; A4[RuleNormalizeAggregateOptimizer]
+  A4 --&gt; A5[PullUpFilterOptimizer]
+  A5 --&gt; A6{enable_cse_optimizer?}
+  A6 -- 是 --&gt; A7[CommonSubexpressionOptimizer]
+  A6 -- 否 --&gt; A8
+  A7 --&gt; A8[RecursiveRuleOptimizer\n@DEFAULT_REWRITE_RULES]
+  A8 --&gt; A9[CTEFilterPushdownOptimizer]
+  A9 --&gt; A10[SyncMaterializedCTERefOptimizer]
+  A10 --&gt; A11[RecursiveRuleOptimizer\n@SplitAggregate]
+  A11 --&gt; A12[DPhpyOptimizer\n标记 dphyp_optimized=true]
+  A12 --&gt; A13[EliminateSelfJoinOptimizer]
+  A13 --&gt; A14[SingleToInnerOptimizer]
+  A14 --&gt; A15[DeduplicateJoinConditionOptimizer]
+  A15 --&gt; A16{enable_join_reorder?}
+  A16 -- 是 --&gt; A17[CommuteJoin Rule]
+  A16 -- 否 --&gt; A18
+  A17 --&gt; A18{force_eager_aggregate?}
+  A18 -- 是 --&gt; A19[RuleEagerAggregation]
+  A18 -- 否 --&gt; A20
+  A19 --&gt; A20[CascadesOptimizer]
+  A20 --&gt; A21{planning_agg_index?}
+  A21 -- 否 --&gt; A22[EliminateEvalScalar]
+  A21 -- 是 --&gt; A23
+  A22 --&gt; A23[CleanupUnusedCTEOptimizer]
+  A23 --&gt; OUT[最终 SExpr]
+</div>
+<p><strong>关键设计取舍</strong>：</p>
+<ul>
+<li><strong>解相关在最前面</strong>——一旦消除了相关子查询，下游所有规则都不需要处理「外层引用」的特殊情况。</li>
+<li><strong>统计在第 3 步采集，但要到第 12 步（DPHyp）才真正用</strong>：早采集是因为后续多个规则（CSE、聚合规则、CTE）也要参考估算基数。</li>
+<li><strong>DPHyp 在 Cascades 之前</strong>：DPHyp 对 join 顺序做完最优搜索后，把 <code>dphyp_optimized</code> 这个 flag 写进 <code>OptimizerContext</code>，Cascades 在 <code>optimize_internal</code> 里看到它就<strong>关闭 join enumeration 规则集</strong>（见 <code>cascade.rs::L≈185</code>），只做剩余的物理性质 / 算子选择。</li>
+<li><strong>Cascades 失败回退</strong>：如果 Cascades 因超时或其他原因失败，<code>optimize_sync</code> 会 fallback 到 <code>DistributedOptimizer</code>（或者干脆原 SExpr）（<code>cascade.rs::L≈107</code>）——这是工业系统的 must-have，不能因为优化器内部 bug 让查询直接挂掉。</li>
+</ul>
+<h3>4.2 RBO 规则——push-down/eliminate 范式</h3>
+<p><code>DEFAULT_REWRITE_RULES</code> 在 <code>rule.rs</code> 里有近 40 条，按"先简化 → 后下推 → 再处理 join → 最后扫描层"的顺序：</p>
+<div class="mermaid">
+flowchart TB
+  subgraph Simplify[&quot;简化&quot;]
+    EliminateSort
+    DeduplicateSort
+    EliminateUnion
+    MergeEvalScalar
+    NormalizeScalarFilter
+    FilterNulls
+    EliminateFilter
+    MergeFilter
+  end
+  subgraph PushFilter[&quot;谓词下推&quot;]
+    PushDownFilterUnion
+    PushDownFilterAggregate
+    PushDownFilterWindow
+    PushDownFilterWindowTopN
+    PushDownFilterSort
+    PushDownFilterEvalScalar
+    PushDownFilterJoin
+    PushDownFilterProjectSet
+  end
+  subgraph PushLimit[&quot;LIMIT/Sort 下推&quot;]
+    MergeLimit
+    PushDownLimit
+    PushDownLimitUnion
+    PushDownSortEvalScalar
+    PushDownLimitEvalScalar
+    PushDownLimitSort
+    PushDownLimitWindow
+    PushDownRankLimitAggregate
+    PushDownLimitOuterJoin
+    PushDownLimitScan
+  end
+  subgraph JoinSimp[&quot;Join 简化&quot;]
+    SemiToInnerJoin
+    FoldCountAggregate
+    TryApplyAggIndex
+  end
+  subgraph ScanLayer[&quot;Scan 层下推&quot;]
+    PushDownFilterScan
+    PushDownPrewhere
+    PushDownSortScan
+    PushDownSortFilterScan
+    PushDownLimitFilterScan
+    HierarchicalGroupingSetsToUnion
+    GroupingSetsToUnion
+  end
+  Simplify --&gt; PushFilter --&gt; PushLimit --&gt; JoinSimp --&gt; ScanLayer
+</div>
+<p>注意 <code>PushDownPrewhere</code> 必须在所有其他下推之后——这是 ClickHouse-style 的 prewhere 优化，把高选择度谓词放进 scan 阶段第一遍读，第二遍再读 projection 列。</p>
+<h3>4.3 DPHyp — 多表 join 的动态规划</h3>
+<p>DPHyp（dynamic programming with hypergraph）适合 ≤ ~16 个表的 inner/outer join。算法核心思路：</p>
+<div class="mermaid">
+flowchart LR
+  S[初始 SExpr 含 N 个 Join 节点] --&gt; QG[query_graph.rs\n构造连接超图]
+  QG --&gt; JR[join_relation.rs\n基础关系（叶子表）]
+  JR --&gt; JN[join_node.rs\nDP 子集状态]
+  JN --&gt; DP[dphyp.rs\nDPHyp 主算法\nemit_csg / emit_cmp / emit_csg_cmp]
+  DP --&gt; Pick[挑选最佳 join 顺序\nbuild new SExpr 树]
+  Pick --&gt; OPTSE[加上 dphyp_optimized=true]
+</div>
+<p>源码：</p>
+<ul>
+<li><code>src/query/sql/src/planner/optimizer/optimizers/hyper_dp/dphyp.rs::DPhpyOptimizer (L≈48)</code></li>
+<li><code>query_graph.rs</code> 把 SExpr 中的 Join/Filter 折成超图（边 = 谓词，顶点 = 基础关系）。</li>
+<li><code>join_node.rs</code> 缓存子集 → 当前最优 plan 的 hash map，状态空间是 <code>2^N</code>。</li>
+</ul>
+<p>DPHyp 不重写非 join 节点；它只调整 join 顺序，调整完用 <code>build_unary</code> / <code>build_binary</code> 把新树拼起来。</p>
+<h3>4.4 Cascades — Memo + Task 队列</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant CO as CascadesOptimizer
+  participant M as Memo
+  participant TM as TaskManager
+  participant T as Tasks (Apply/Explore/Optimize)
+
+  CO-&gt;&gt;M: init(s_expr) 把 SExpr 放进 group
+  CO-&gt;&gt;TM: schedule OptimizeGroup(root, required_prop)
+  loop run_until_empty
+    TM-&gt;&gt;T: pop next task
+    alt OptimizeGroup
+      T-&gt;&gt;TM: schedule OptimizeExpr 对 group 内每个 MExpr
+    else OptimizeExpr
+      T-&gt;&gt;TM: schedule ExploreGroup（先看子组）
+      T-&gt;&gt;TM: schedule ApplyRule 对自身适用规则
+    else ExploreGroup
+      T-&gt;&gt;TM: schedule ExploreExpr per MExpr
+    else ApplyRule
+      T-&gt;&gt;M: 把变换后表达式插入 group / 新 group
+      T-&gt;&gt;TM: schedule OptimizeGroup 对新 group
+    end
+  end
+  CO-&gt;&gt;M: 取 root group winner
+  M--&gt;&gt;CO: 最优 SExpr（含 Exchange 等物理算子）
+</div>
+<p>源码：</p>
+<ul>
+<li><code>src/query/sql/src/planner/optimizer/optimizers/cascades/tasks/</code>：5 个 task 类型 + <code>TaskManager</code>。</li>
+<li><code>cascade.rs::L≈173 optimize_internal</code>：根据 <code>enable_cbo</code> 和 <code>dphyp_optimized</code> 切换 <code>RuleSet</code>（<code>StrategyFactory::create_strategy</code>）。</li>
+<li><code>cascade.rs::L≈202 root_required_prop</code>：当启用 <code>enforce_distribution</code> 时，根 group 必须达到 <code>Distribution::Serial</code>，从而在内部塞入合适的 <code>Exchange::Merge</code> 算子。</li>
+<li><code>cascade.rs::L≈130 remove_exchanges_for_serial_sequence</code>：发现 <code>Sequence</code> 算子的左子树本身就是串行时，把内部所有 <code>Exchange</code> 干掉——这是一种"事后"局部清洗。</li>
+</ul>
+<h3>4.5 解相关（Subquery Decorrelator）</h3>
+<div class="mermaid">
+flowchart TB
+  IN[&quot;IN/EXISTS/标量子查询，含 outer 引用&quot;] --&gt; SD[subquery_decorrelator.rs L≈169]
+  SD --&gt;|EXISTS / NOT EXISTS| SJ[Semi/Anti Join]
+  SD --&gt;|IN / NOT IN| MJ[Mark Join]
+  SD --&gt;|Scalar Subquery| LSJ[LeftSingleJoin\n空时返回 NULL]
+  SD --&gt;|相关投影| EVS[EvalScalar 提到外层]
+  SJ --&gt; OK[已无相关引用]
+  MJ --&gt; OK
+  LSJ --&gt; OK
+  EVS --&gt; OK
+</div>
+<p>这一步保证后续所有规则的 <code>RelOperator</code> 树<strong>不含</strong> correlated reference，规则不需要写"如果是相关子查询则跳过"这种特例。</p>
+<h2>5. 性能与优化点</h2>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>在哪里</th>
+<th>效果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>OnceLock 缓存属性</strong></td>
+<td><code>SExpr.rel_prop / stat_info</code></td>
+<td>同一子树跨规则复用，不重算</td>
+</tr>
+<tr>
+<td><strong>applied_rules 位图</strong></td>
+<td><code>SExpr.applied_rules</code> + <code>MExpr.applied_rules</code></td>
+<td>防止规则循环触发，cascades 才能收敛</td>
+</tr>
+<tr>
+<td><strong>DPHyp + Cascades 分工</strong></td>
+<td><code>dphyp_optimized</code> flag</td>
+<td>DPHyp 跑完后 cascades 不再做 join enumeration</td>
+</tr>
+<tr>
+<td><strong>Cascades 超时回退</strong></td>
+<td><code>cascade.rs L≈107</code></td>
+<td>不会因为优化器自身 bug 让查询挂掉</td>
+</tr>
+<tr>
+<td><strong>Cost model 感知集群规模</strong></td>
+<td><code>DefaultCostModel::with_cluster_peers</code> (<code>cascade.rs L≈64-66</code>)</td>
+<td>同一个 SQL 在不同集群尺寸下选择不同物理形态</td>
+</tr>
+<tr>
+<td><strong>SortAndLimitPushDownOptimizer</strong> 在 cascades 后单独跑</td>
+<td><code>cascade.rs L≈100</code></td>
+<td>cascades memo 内不便表达跨算子的 sort/limit 推导，单独跑更简单</td>
+</tr>
+<tr>
+<td><strong>AggIndex 自动适配</strong></td>
+<td><code>RuleID::TryApplyAggIndex</code> 在 DEFAULT_REWRITE_RULES 末尾</td>
+<td>命中物化的聚合索引时直接替换 Aggregate(Scan) → IndexScan</td>
+</tr>
+</tbody>
+</table>
+<div class="mermaid">
+gantt
+  title 一条 6 表 inner-join 优化时间线（示意）
+  dateFormat  X
+  axisFormat  %s
+  section 解相关
+  SubqueryDecorrelator      :a1, 0, 1
+  section 统计采集
+  CollectStatistics         :b1, 1, 2
+  section 规则重写
+  DEFAULT_REWRITE_RULES     :c1, 2, 4
+  CTE pushdown              :c2, 4, 5
+  section 物理 join 顺序
+  DPHyp（最贵）             :d1, 5, 11
+  section 物理性质枚举
+  Cascades                  :e1, 11, 13
+  Sort/Limit pushdown       :e2, 13, 14
+  section 收尾
+  EliminateEvalScalar       :f1, 14, 15
+</div>
+<p>DPHyp 通常是最贵的一段；OLAP 引擎 join 阶数高时（≥ 14 表）经常需要 fall back 到贪心或限制搜索深度——这点 Databend 通过 <code>enable_join_reorder</code> 设置允许用户禁用。</p>
+<h2>6. 与同类系统的对照</h2>
+<table>
+<thead>
+<tr>
+<th>系统</th>
+<th>RBO 框架</th>
+<th>CBO 框架</th>
+<th>Join 重排算法</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ClickHouse</td>
+<td>Step pipeline</td>
+<td>（较弱）</td>
+<td>启发式</td>
+</tr>
+<tr>
+<td>StarRocks</td>
+<td>Cascades</td>
+<td>Cascades</td>
+<td>Cascades + 采样</td>
+</tr>
+<tr>
+<td>Doris</td>
+<td>Cascades</td>
+<td>Cascades</td>
+<td>Cascades</td>
+</tr>
+<tr>
+<td><strong>Databend</strong></td>
+<td><strong>流水线 + RecursiveRuleOptimizer</strong></td>
+<td><strong>Cascades</strong></td>
+<td><strong>DPHyp（先）+ Cascades CommuteJoin（后）</strong></td>
+</tr>
+<tr>
+<td>Spark Catalyst</td>
+<td>TreeNode rewrite</td>
+<td>CBO（基于规则）</td>
+<td>DPSize / DPHyp</td>
+</tr>
+<tr>
+<td>DuckDB</td>
+<td>逻辑/物理双层</td>
+<td>（部分）</td>
+<td>DPHyp</td>
+</tr>
+<tr>
+<td>Calcite</td>
+<td>Volcano/Cascades</td>
+<td>Volcano</td>
+<td>Bushy</td>
+</tr>
+</tbody>
+</table>
+<p>Databend 的"流水线 + DPHyp + Cascades"组合更接近 Spark/DuckDB；与 StarRocks 的纯 Cascades 路线不同。优势是模块边界清晰、问题定位方便；劣势是优化通路较长，重写的「中间产物」在多个 stage 重复构造 SExpr。</p>
+<h2>7. 端到端案例</h2>
+<p><code>SELECT count(*) FROM t WHERE x &gt; 1</code>，优化器段：</p>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Plan as Plan::Query.s_expr
+  participant Opt as optimize_query
+  participant SD as SubqueryDecorrelator
+  participant Stat as CollectStatistics
+  participant RR as RecursiveRuleOptimizer
+  participant DP as DPhpy
+  participant CO as CascadesOptimizer
+  participant PB as PhysicalPlanBuilder
+
+  Plan-&gt;&gt;Opt: SExpr(EvalScalar(Aggregate(Filter(Scan(t)))))
+  Opt-&gt;&gt;SD: 没有子查询，no-op
+  Opt-&gt;&gt;Stat: 给 Scan/Filter/Aggregate 估行数
+  Opt-&gt;&gt;RR: DEFAULT_REWRITE_RULES
+  RR-&gt;&gt;RR: PushDownFilterScan: Filter(Scan(t,x&gt;1))→Scan(t, prewhere=x&gt;1)
+  RR-&gt;&gt;RR: FoldCountAggregate: 没遇到无谓词 count(*)，跳过
+  Opt-&gt;&gt;DP: 单表，no-op
+  Opt-&gt;&gt;CO: 现在的 SExpr 简单，单 group
+  CO-&gt;&gt;CO: ApplyRule: TryApplyAggIndex 检查 t 上是否有 agg index→否
+  CO-&gt;&gt;CO: 物理性质：单节点 Serial→不需要 Exchange
+  CO--&gt;&gt;Opt: SExpr(Aggregate(Scan(t, prewhere=x&gt;1)))
+  Opt--&gt;&gt;PB: 终态 SExpr
+  PB--&gt;&gt;PB: 转 PhysicalPlan: TableScan(t,prewhere)→FinalAggregate(count)
+</div>
+<p>注意细节：</p>
+<ul>
+<li><code>WHERE x &gt; 1</code> 被推进 Scan 算子的 <code>push_downs</code> 字段（不是另起 Filter 算子），这就是 06 文档里 <code>do_read_partitions(push_downs)</code> 真正接收到的东西。</li>
+<li><code>count(*)</code> 没有 GROUP BY，物理形态是单 worker <code>FinalAggregate</code>，不需要 partial/final 分裂。</li>
+<li>因为只有一个表 + 一个聚合，整条流水线绝大多数 stage 都是 no-op；这是 Databend 把"小查询路径"做轻的重要原因。</li>
+</ul>
+<h2>8. 未解之谜</h2>
+<ul>
+<li><strong><code>PullUpFilterOptimizer</code> 的代价</strong>：把 Filter 拉到 Join 之上有时会丢失下推机会；它的触发条件本篇没读懂（<code>pull_up_filter.rs::optimize_sync</code>）。</li>
+<li><strong><code>CommonSubexpressionOptimizer</code></strong>：注释提到 "Currently uses heuristic approach, will be integrated into Cascades optimizer in the future"，说明这是个临时方案；何时会被并入 Cascades？</li>
+<li><strong>AggIndex 与 <code>planning_agg_index</code> 标志位</strong>：在 <code>optimize_query</code> 末尾 <code>EliminateEvalScalar</code> 在 <code>planning_agg_index = true</code> 时会跳过；这个 flag 何时被打开？看起来与 aggregate index 物化路径相关（08 文档可能涉及）。</li>
+<li><strong>CostModel 的具体公式</strong>：<code>DefaultCostModel</code> 有 <code>with_cluster_peers</code> 与 <code>with_degree_of_parallelism</code>，但本篇未看具体的 cost 公式（IO / CPU / 网络权重各是多少）；后续可在 <code>optimizer/cost/</code> 下专门展开。</li>
+<li><strong><code>Sequence</code> 算子和 <code>remove_exchanges_for_serial_sequence</code></strong>：什么场景会构造 Sequence？看起来是 <code>MULTI</code> insert / DDL 流水？需要在 10 文档里跨进 mutation 路径再核实。</li>
+</ul>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

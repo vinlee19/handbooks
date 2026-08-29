@@ -1,0 +1,154 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" font-family="ui-sans-serif, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="12">
+  <defs>
+    <marker id="arrC" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrCg" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#16a34a"/>
+    </marker>
+    <marker id="arrCb" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#dc2626"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="720" fill="#f8fafc"/>
+  <text x="600" y="32" text-anchor="middle" font-size="20" font-weight="800" fill="#0f172a">Airflow 3.x 物理部署图 · 经典 Celery + Redis 形态</text>
+  <text x="600" y="52" text-anchor="middle" font-size="11" fill="#475569">虚拟机 / Docker 节点，CeleryExecutor 通过 Broker 队列分发任务</text>
+
+  <!-- Control Node -->
+  <g>
+    <rect x="40" y="80" width="380" height="280" rx="12" fill="#ffffff" stroke="#334155" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="60" y="102" font-weight="700" font-size="13">Control Node (host: ctl-01)</text>
+
+    <rect x="60" y="118" width="160" height="70" rx="8" fill="#e2e8f0" stroke="#475569"/>
+    <text x="140" y="138" text-anchor="middle" font-weight="700">apiserver</text>
+    <text x="140" y="154" text-anchor="middle" font-size="10" fill="#475569">FastAPI :8080</text>
+    <text x="140" y="170" text-anchor="middle" font-size="10" fill="#475569">Public + Execution</text>
+
+    <rect x="240" y="118" width="160" height="70" rx="8" fill="#dbeafe" stroke="#2563eb"/>
+    <text x="320" y="138" text-anchor="middle" font-weight="700" fill="#1e3a8a">scheduler</text>
+    <text x="320" y="154" text-anchor="middle" font-size="10" fill="#1e40af">SchedulerJobRunner</text>
+    <text x="320" y="170" text-anchor="middle" font-size="10" fill="#1e40af">可多实例 HA</text>
+
+    <rect x="60" y="200" width="160" height="70" rx="8" fill="#ede9fe" stroke="#7c3aed"/>
+    <text x="140" y="220" text-anchor="middle" font-weight="700" fill="#5b21b6">dag-processor</text>
+    <text x="140" y="236" text-anchor="middle" font-size="10" fill="#4c1d95">DagFileProcessorManager</text>
+    <text x="140" y="252" text-anchor="middle" font-size="10" fill="#4c1d95">+ N 解析子进程</text>
+
+    <rect x="240" y="200" width="160" height="70" rx="8" fill="#ffedd5" stroke="#ea580c"/>
+    <text x="320" y="220" text-anchor="middle" font-weight="700" fill="#9a3412">triggerer</text>
+    <text x="320" y="236" text-anchor="middle" font-size="10" fill="#7c2d12">asyncio event loop</text>
+    <text x="320" y="252" text-anchor="middle" font-size="10" fill="#7c2d12">defer/resume</text>
+
+    <rect x="60" y="282" width="340" height="62" rx="8" fill="#f1f5f9" stroke="#94a3b8"/>
+    <text x="230" y="302" text-anchor="middle" font-weight="700">systemd unit / docker-compose</text>
+    <text x="230" y="320" text-anchor="middle" font-size="10" fill="#475569">airflow-apiserver.service / airflow-scheduler.service / ...</text>
+    <text x="230" y="334" text-anchor="middle" font-size="10" fill="#475569">日志：journalctl 或本机 /var/log/airflow/</text>
+  </g>
+
+  <!-- DB & Broker Node -->
+  <g>
+    <rect x="450" y="80" width="280" height="280" rx="12" fill="#ffffff" stroke="#334155" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="470" y="102" font-weight="700" font-size="13">Data Node (host: db-01)</text>
+
+    <rect x="470" y="118" width="240" height="100" rx="8" fill="#fee2e2" stroke="#dc2626" stroke-width="2"/>
+    <text x="590" y="140" text-anchor="middle" font-weight="700" fill="#991b1b">PostgreSQL 15</text>
+    <text x="590" y="160" text-anchor="middle" font-size="10" fill="#7f1d1d">Metadata DB</text>
+    <text x="590" y="176" text-anchor="middle" font-size="10" fill="#7f1d1d">17 张核心表 + 100+ 迁移</text>
+    <text x="590" y="192" text-anchor="middle" font-size="10" fill="#7f1d1d">支持行锁 SKIP LOCKED</text>
+    <text x="590" y="208" text-anchor="middle" font-size="10" fill="#7f1d1d">主备 + WAL 流复制</text>
+
+    <rect x="470" y="232" width="240" height="100" rx="8" fill="#fee2e2" stroke="#dc2626" stroke-width="2"/>
+    <text x="590" y="254" text-anchor="middle" font-weight="700" fill="#991b1b">Redis (Broker)</text>
+    <text x="590" y="272" text-anchor="middle" font-size="10" fill="#7f1d1d">Celery 任务队列</text>
+    <text x="590" y="286" text-anchor="middle" font-size="10" fill="#7f1d1d">默认：default 队列</text>
+    <text x="590" y="300" text-anchor="middle" font-size="10" fill="#7f1d1d">可按优先级 / Pool 分队列</text>
+    <text x="590" y="316" text-anchor="middle" font-size="10" fill="#7f1d1d">可选用 RabbitMQ 替代</text>
+  </g>
+
+  <!-- Worker Node 1 -->
+  <g>
+    <rect x="760" y="80" width="200" height="180" rx="12" fill="#ffffff" stroke="#334155" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="780" y="102" font-weight="700" font-size="12">Worker Node (host: wkr-01)</text>
+    <rect x="780" y="118" width="160" height="120" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+    <text x="860" y="138" text-anchor="middle" font-weight="700" fill="#14532d">celery-worker</text>
+    <text x="860" y="156" text-anchor="middle" font-size="10" fill="#166534">prefork: 8 子进程</text>
+    <text x="860" y="174" text-anchor="middle" font-size="10" fill="#166534">每个子进程 fork 出</text>
+    <text x="860" y="188" text-anchor="middle" font-size="10" fill="#166534">supervisor + task-runner</text>
+    <text x="860" y="206" text-anchor="middle" font-size="10" fill="#16a34a" font-weight="700">不连 DB</text>
+    <text x="860" y="222" text-anchor="middle" font-size="10" fill="#16a34a" font-weight="700">仅访问 Execution API</text>
+  </g>
+
+  <!-- Worker Node 2 -->
+  <g>
+    <rect x="980" y="80" width="200" height="180" rx="12" fill="#ffffff" stroke="#334155" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="1000" y="102" font-weight="700" font-size="12">Worker Node (host: wkr-02)</text>
+    <rect x="1000" y="118" width="160" height="120" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+    <text x="1080" y="138" text-anchor="middle" font-weight="700" fill="#14532d">celery-worker</text>
+    <text x="1080" y="156" text-anchor="middle" font-size="10" fill="#166534">prefork: 8</text>
+    <text x="1080" y="174" text-anchor="middle" font-size="10" fill="#166534">label: queue=gpu</text>
+    <text x="1080" y="200" text-anchor="middle" font-size="10" fill="#166534">可按队列特化</text>
+    <text x="1080" y="218" text-anchor="middle" font-size="10" fill="#166534">如：GPU、高内存</text>
+  </g>
+
+  <!-- Worker Node 3 -->
+  <g>
+    <rect x="760" y="280" width="420" height="120" rx="12" fill="#ffffff" stroke="#334155" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="780" y="302" font-weight="700" font-size="12">Worker Node (host: wkr-03)</text>
+    <rect x="780" y="316" width="380" height="74" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+    <text x="970" y="336" text-anchor="middle" font-weight="700" fill="#14532d">celery-worker · queue=etl</text>
+    <text x="970" y="352" text-anchor="middle" font-size="10" fill="#166534">水平扩缩容靠 systemd 多实例或 docker swarm replicas</text>
+    <text x="970" y="368" text-anchor="middle" font-size="10" fill="#166534">日志写到本机 /opt/airflow/logs/，远端复制到 S3</text>
+  </g>
+
+  <!-- Shared filesystem / DAG bundle -->
+  <g>
+    <rect x="40" y="420" width="380" height="100" rx="12" fill="#fef9c3" stroke="#ca8a04" stroke-width="2"/>
+    <text x="230" y="442" text-anchor="middle" font-weight="700" fill="#713f12">DAG Bundle 源</text>
+    <text x="230" y="460" text-anchor="middle" font-size="10" fill="#854d0e">本地：NFS / shared FS · Git：远端 repo · S3：对象存储</text>
+    <text x="230" y="478" text-anchor="middle" font-size="10" fill="#854d0e">DagProcessor 自动同步 + 版本快照</text>
+    <text x="230" y="496" text-anchor="middle" font-size="10" fill="#854d0e">Worker 启动任务前也需要拉取 Bundle (init 阶段)</text>
+  </g>
+
+  <!-- Remote log -->
+  <g>
+    <rect x="450" y="420" width="280" height="100" rx="12" fill="#fdf4ff" stroke="#94a3b8"/>
+    <text x="590" y="442" text-anchor="middle" font-weight="700">日志后端</text>
+    <text x="590" y="460" text-anchor="middle" font-size="10" fill="#475569">S3 / GCS / Azure Blob</text>
+    <text x="590" y="476" text-anchor="middle" font-size="10" fill="#475569">由 shared/logging 模块写入</text>
+    <text x="590" y="492" text-anchor="middle" font-size="10" fill="#475569">UI 通过 apiserver 远端读取</text>
+  </g>
+
+  <!-- Connections (lines) -->
+  <line x1="220" y1="153" x2="450" y2="168" stroke="#dc2626" stroke-width="1.5" marker-end="url(#arrCb)"/>
+  <text x="290" y="148" font-size="10" fill="#dc2626">DB</text>
+  <line x1="400" y1="235" x2="450" y2="200" stroke="#dc2626" stroke-width="1.5" marker-end="url(#arrCb)"/>
+  <line x1="400" y1="235" x2="470" y2="270" stroke="#dc2626" stroke-width="1.5" marker-end="url(#arrCb)"/>
+  <text x="430" y="200" font-size="10" fill="#dc2626">DB</text>
+  <line x1="320" y1="270" x2="710" y2="190" stroke="#475569" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="510" y="180" font-size="10" fill="#475569" font-style="italic">Scheduler push 到 Broker</text>
+  <line x1="710" y1="282" x2="780" y2="178" stroke="#475569" stroke-width="1.5" stroke-dasharray="3 3" marker-end="url(#arrC)"/>
+  <line x1="710" y1="282" x2="1000" y2="178" stroke="#475569" stroke-width="1.5" stroke-dasharray="3 3" marker-end="url(#arrC)"/>
+  <line x1="710" y1="282" x2="880" y2="316" stroke="#475569" stroke-width="1.5" stroke-dasharray="3 3" marker-end="url(#arrC)"/>
+  <text x="720" y="266" font-size="10" fill="#475569" font-style="italic">Worker 拉取任务</text>
+
+  <line x1="780" y1="180" x2="220" y2="153" stroke="#16a34a" stroke-width="2" marker-end="url(#arrCg)"/>
+  <line x1="1000" y1="180" x2="220" y2="153" stroke="#16a34a" stroke-width="2" marker-end="url(#arrCg)"/>
+  <line x1="880" y1="318" x2="220" y2="160" stroke="#16a34a" stroke-width="2" marker-end="url(#arrCg)"/>
+  <text x="510" y="100" font-size="11" fill="#16a34a" font-weight="700">Worker → Execution API (JWT, 不连 DB)</text>
+
+  <line x1="140" y1="270" x2="230" y2="420" stroke="#475569" stroke-width="1.5" marker-end="url(#arrC)"/>
+  <text x="170" y="380" font-size="10" fill="#475569">DFP 同步 Bundle</text>
+  <line x1="860" y1="240" x2="590" y2="420" stroke="#475569" stroke-width="1" stroke-dasharray="3 3" marker-end="url(#arrC)"/>
+  <text x="700" y="395" font-size="10" fill="#475569" font-style="italic">Worker 写日志</text>
+
+  <!-- Sidecar note -->
+  <g transform="translate(40,560)">
+    <rect width="1120" height="140" rx="10" fill="#ecfeff" stroke="#0891b2"/>
+    <text x="14" y="22" font-size="12" font-weight="700" fill="#155e75">部署形态对比要点</text>
+    <text x="14" y="42" font-size="11" fill="#164e63">• <tspan font-weight="700">K8s + KubernetesExecutor</tspan>：每 TI 一个 Pod，弹性最好，启动开销略大（拉镜像、init 同步 Bundle）。适合任务密度低、隔离要求高的场景。</text>
+    <text x="14" y="60" font-size="11" fill="#164e63">• <tspan font-weight="700">Celery + Redis</tspan>：Worker 常驻、prefork 模型，启动开销最小、吞吐最高。适合任务密度高、外部资源已经分离的场景。</text>
+    <text x="14" y="78" font-size="11" fill="#164e63">• <tspan font-weight="700">LocalExecutor</tspan>：单机线程池/进程池，仅开发测试或最小规模生产用。</text>
+    <text x="14" y="96" font-size="11" fill="#164e63">• <tspan font-weight="700">Multi-Executor</tspan>：Airflow 3.x 支持同时配置多个 Executor，按 `executor_config` 路由（如默认走 Celery、GPU 任务走 K8s）。</text>
+    <text x="14" y="118" font-size="11" fill="#164e63" font-style="italic">无论哪种形态：DB 只由 Scheduler / DFP / API Server 直连；Worker / Triggerer 一律走 Execution API。</text>
+  </g>
+</svg>

@@ -1,0 +1,161 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 620" font-family="ui-sans-serif, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="12">
+  <defs>
+    <marker id="arr3" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arr3r" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#dc2626"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="620" fill="#f8fafc"/>
+  <text x="600" y="34" text-anchor="middle" font-size="20" font-weight="800" fill="#0f172a">Airflow 2.x → 3.x 架构演进对照</text>
+
+  <!-- divider -->
+  <line x1="600" y1="60" x2="600" y2="600" stroke="#94a3b8" stroke-dasharray="4 4"/>
+
+  <!-- 2.x title -->
+  <text x="300" y="80" text-anchor="middle" font-size="16" font-weight="700" fill="#64748b">Airflow 2.x</text>
+  <text x="300" y="98" text-anchor="middle" font-size="11" fill="#64748b">Webserver + Worker 直连 DB</text>
+
+  <!-- 3.x title -->
+  <text x="900" y="80" text-anchor="middle" font-size="16" font-weight="700" fill="#1e40af">Airflow 3.x (current main)</text>
+  <text x="900" y="98" text-anchor="middle" font-size="11" fill="#1e40af">Execution API 隔离 + Task SDK + DFP 独立</text>
+
+  <!-- ============ 2.x side ============ -->
+  <!-- Webserver -->
+  <g>
+    <rect x="100" y="120" width="160" height="50" rx="8" fill="#e2e8f0" stroke="#64748b"/>
+    <text x="180" y="142" text-anchor="middle" font-weight="700">Webserver (Flask-AppBuilder)</text>
+    <text x="180" y="158" text-anchor="middle" font-size="10" fill="#475569">UI + REST API + Auth</text>
+  </g>
+  <!-- Scheduler 2.x (parses DAGs) -->
+  <g>
+    <rect x="100" y="200" width="160" height="70" rx="8" fill="#dbeafe" stroke="#2563eb"/>
+    <text x="180" y="220" text-anchor="middle" font-weight="700">Scheduler</text>
+    <text x="180" y="238" text-anchor="middle" font-size="10">+ DAG File Processor</text>
+    <text x="180" y="252" text-anchor="middle" font-size="10" fill="#dc2626">(可执行用户代码)</text>
+    <text x="180" y="266" text-anchor="middle" font-size="10">DagRun / TI 创建</text>
+  </g>
+  <!-- Worker 2.x -->
+  <g>
+    <rect x="340" y="200" width="160" height="70" rx="8" fill="#dcfce7" stroke="#16a34a"/>
+    <text x="420" y="220" text-anchor="middle" font-weight="700">Worker</text>
+    <text x="420" y="238" text-anchor="middle" font-size="10">CeleryExecutor /</text>
+    <text x="420" y="252" text-anchor="middle" font-size="10">KubernetesExecutor</text>
+    <text x="420" y="266" text-anchor="middle" font-size="10" fill="#dc2626">直接连接 metadata DB</text>
+  </g>
+  <!-- DB 2.x -->
+  <g>
+    <rect x="220" y="340" width="160" height="50" rx="8" fill="#fee2e2" stroke="#dc2626"/>
+    <text x="300" y="362" text-anchor="middle" font-weight="700" fill="#991b1b">Metadata DB</text>
+    <text x="300" y="378" text-anchor="middle" font-size="10" fill="#991b1b">PostgreSQL / MySQL</text>
+  </g>
+  <!-- Triggerer (optional) -->
+  <g>
+    <rect x="100" y="430" width="160" height="50" rx="8" fill="#ffedd5" stroke="#ea580c"/>
+    <text x="180" y="452" text-anchor="middle" font-weight="700" fill="#9a3412">Triggerer (可选)</text>
+    <text x="180" y="468" text-anchor="middle" font-size="10" fill="#9a3412">Asyncio defer/resume</text>
+  </g>
+
+  <!-- arrows 2.x: Worker → DB (问题点) -->
+  <line x1="420" y1="270" x2="380" y2="340" stroke="#dc2626" stroke-width="2" stroke-dasharray="5 3" marker-end="url(#arr3r)"/>
+  <text x="430" y="320" font-size="10" fill="#dc2626" font-weight="700">DB 凭据下发</text>
+  <text x="430" y="334" font-size="10" fill="#dc2626" font-weight="700">用户代码可碰元数据</text>
+
+  <line x1="180" y1="270" x2="260" y2="340" stroke="#475569" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <line x1="180" y1="170" x2="180" y2="200" stroke="#475569" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <line x1="260" y1="235" x2="340" y2="235" stroke="#475569" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <line x1="180" y1="430" x2="240" y2="390" stroke="#475569" stroke-width="1.5" marker-end="url(#arr3)"/>
+
+  <!-- 2.x bottom box -->
+  <g transform="translate(80,520)">
+    <rect width="440" height="80" rx="8" fill="#fff7ed" stroke="#ea580c"/>
+    <text x="14" y="20" font-size="12" font-weight="700" fill="#9a3412">2.x 关键问题</text>
+    <text x="14" y="38" font-size="11" fill="#7c2d12">• Worker / Scheduler / Triggerer 全部直连 DB，多租户隔离困难</text>
+    <text x="14" y="54" font-size="11" fill="#7c2d12">• Scheduler 解析 DAG → 可能在控制平面执行用户代码</text>
+    <text x="14" y="70" font-size="11" fill="#7c2d12">• Webserver Flask-AppBuilder 与 DAG 作者 API 耦合</text>
+  </g>
+
+  <!-- ============ 3.x side ============ -->
+  <!-- API Server -->
+  <g>
+    <rect x="700" y="120" width="160" height="60" rx="8" fill="#e2e8f0" stroke="#475569"/>
+    <text x="780" y="142" text-anchor="middle" font-weight="700">API Server (FastAPI)</text>
+    <text x="780" y="158" text-anchor="middle" font-size="10" fill="#475569">Public REST + Execution API</text>
+    <text x="780" y="172" text-anchor="middle" font-size="10" fill="#475569">JWT (Cadwyn 版本控制)</text>
+  </g>
+  <!-- UI (React) -->
+  <g>
+    <rect x="900" y="120" width="200" height="60" rx="8" fill="#f1f5f9" stroke="#94a3b8"/>
+    <text x="1000" y="142" text-anchor="middle" font-weight="700">React UI</text>
+    <text x="1000" y="158" text-anchor="middle" font-size="10" fill="#475569">Vite + Chakra + TanStack Query</text>
+    <text x="1000" y="172" text-anchor="middle" font-size="10" fill="#475569">OpenAPI 生成客户端</text>
+  </g>
+  <!-- Scheduler 3.x -->
+  <g>
+    <rect x="700" y="210" width="170" height="60" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+    <text x="785" y="232" text-anchor="middle" font-weight="700">Scheduler</text>
+    <text x="785" y="248" text-anchor="middle" font-size="10" fill="#1e40af">仅读 SerializedDagModel</text>
+    <text x="785" y="262" text-anchor="middle" font-size="10" fill="#16a34a" font-weight="700">从不执行用户代码 ✓</text>
+  </g>
+  <!-- DAG Processor 3.x -->
+  <g>
+    <rect x="900" y="210" width="180" height="60" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+    <text x="990" y="232" text-anchor="middle" font-weight="700" fill="#5b21b6">DAG Processor (独立)</text>
+    <text x="990" y="248" text-anchor="middle" font-size="10" fill="#4c1d95">解析 Bundle → SerializedDag</text>
+    <text x="990" y="262" text-anchor="middle" font-size="10" fill="#4c1d95">AIP-43 进程隔离</text>
+  </g>
+  <!-- Worker 3.x (Supervisor + Task) -->
+  <g>
+    <rect x="700" y="300" width="380" height="86" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+    <text x="890" y="320" text-anchor="middle" font-weight="700" fill="#14532d">Worker (双进程)</text>
+    <rect x="715" y="332" width="170" height="44" rx="6" fill="#ffffff" stroke="#16a34a"/>
+    <text x="800" y="350" text-anchor="middle" font-size="11" font-weight="700">Supervisor</text>
+    <text x="800" y="364" text-anchor="middle" font-size="9">持 JWT，代理 API</text>
+    <rect x="900" y="332" width="170" height="44" rx="6" fill="#fef9c3" stroke="#ca8a04"/>
+    <text x="985" y="350" text-anchor="middle" font-size="11" font-weight="700">Task Runner (用户代码)</text>
+    <text x="985" y="364" text-anchor="middle" font-size="9">仅通过 msgpack 与 Supervisor 通信</text>
+  </g>
+  <!-- Triggerer 3.x -->
+  <g>
+    <rect x="700" y="412" width="170" height="60" rx="8" fill="#ffedd5" stroke="#ea580c" stroke-width="2"/>
+    <text x="785" y="434" text-anchor="middle" font-weight="700" fill="#9a3412">Triggerer</text>
+    <text x="785" y="450" text-anchor="middle" font-size="10" fill="#9a3412">asyncio + greenback</text>
+    <text x="785" y="464" text-anchor="middle" font-size="10" fill="#9a3412">defer/resume 已成熟</text>
+  </g>
+  <!-- DB 3.x -->
+  <g>
+    <rect x="900" y="412" width="180" height="60" rx="8" fill="#fee2e2" stroke="#dc2626" stroke-width="2"/>
+    <text x="990" y="434" text-anchor="middle" font-weight="700" fill="#991b1b">Metadata DB</text>
+    <text x="990" y="450" text-anchor="middle" font-size="10" fill="#991b1b">只有 Scheduler / DFP /</text>
+    <text x="990" y="464" text-anchor="middle" font-size="10" fill="#991b1b">API Server 直连</text>
+  </g>
+
+  <!-- arrows 3.x -->
+  <!-- DFP → DB -->
+  <line x1="990" y1="270" x2="990" y2="412" stroke="#475569" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <text x="996" y="345" font-size="10" fill="#475569">SerializedDag</text>
+  <!-- Scheduler → DB -->
+  <line x1="785" y1="270" x2="950" y2="412" stroke="#475569" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <!-- API Server → DB -->
+  <line x1="780" y1="180" x2="960" y2="412" stroke="#475569" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <!-- Worker → API Server (NOT DB!) -->
+  <line x1="800" y1="332" x2="780" y2="180" stroke="#16a34a" stroke-width="2.5" marker-end="url(#arr3)"/>
+  <text x="640" y="270" font-size="11" fill="#16a34a" font-weight="700">Execution API (JWT)</text>
+  <text x="640" y="284" font-size="10" fill="#16a34a">XCom / Var / Conn</text>
+  <!-- Triggerer → API Server -->
+  <line x1="785" y1="412" x2="780" y2="180" stroke="#16a34a" stroke-width="2" stroke-dasharray="3 2" marker-end="url(#arr3)"/>
+  <!-- UI → API Server -->
+  <line x1="1000" y1="180" x2="860" y2="180" stroke="#475569" stroke-width="1.5" marker-end="url(#arr3)"/>
+  <!-- Supervisor → Task Runner via msgpack -->
+  <line x1="885" y1="354" x2="900" y2="354" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="2 2"/>
+
+  <!-- 3.x bottom box -->
+  <g transform="translate(680,520)">
+    <rect width="440" height="80" rx="8" fill="#ecfeff" stroke="#0891b2"/>
+    <text x="14" y="20" font-size="12" font-weight="700" fill="#155e75">3.x 关键改进</text>
+    <text x="14" y="38" font-size="11" fill="#164e63">• Worker 仅通过 Execution API + JWT (`ti:self`) 与控制平面通信，零 DB 凭据</text>
+    <text x="14" y="54" font-size="11" fill="#164e63">• DAG Processor 完全独立 → 用户代码绝不在 Scheduler 上下文执行</text>
+    <text x="14" y="70" font-size="11" fill="#164e63">• 双进程 Worker：Supervisor 持 token，Task Runner 跑用户代码、无凭据</text>
+  </g>
+</svg>

@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>10 · 扩展：Stream / UDF / Iceberg / Delta · Databend 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#ff6b6b}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">☁️ <span>Databend 源码深度解析</span></span><nav class="nav"><a href="00-meta.html">元信息与阅读指南</a><a href="01-overview.html">总览：三层架构与设计取舍</a><a href="02-meta-service.html">Meta Service：客户端层 + 外部 OpenRaft 状态机</a><a href="03-sql-frontend.html">SQL 前端：词法 / 语法 / 绑定</a><a href="04-planner-optimizer.html">Planner / Optimizer：从 SExpr 到最优计划</a><a href="05-pipeline-execution.html">Pipeline 执行：Push-based + Event 状态机</a><a href="06-fuse-storage.html">FUSE 存储引擎：Snapshot / Segment / Block</a><a href="07-io-and-cache.html">IO 与多级缓存：OpenDAL Layer 栈 + CacheManager</a><a href="08-indexes-and-search.html">索引与搜索：Bloom / Inverted / Vector / Range / Page / Spatial</a><a href="09-cluster-and-exchange.html">集群与 Exchange：节点发现 + Flight Shuffle</a><a href="10-extensions.html" class=on>扩展：Stream / UDF / Iceberg / Delta</a><a href="99-diagrams.html">Mermaid 图源归档</a></nav></div></header>
+<main class="wrap">
+<h1>10 · 扩展：Stream / UDF / Iceberg / Delta</h1>
+<blockquote>
+<p>基于 commit <code>fe693bb677</code>。本篇覆盖 Databend「FUSE 之外」的几条主线：流式增量（Stream）、外部表格式（Iceberg / Delta）、外部 UDF（Arrow Flight + Script Runtime）。这些都是把统一引擎和外部世界缝起来的胶水。</p>
+</blockquote>
+<h2>1. 解决了什么问题</h2>
+<p>OLAP 引擎只有"自家表"是不够的，三类外部需求会跟来：</p>
+<ol>
+<li><strong>CDC / 增量</strong>：上游业务库连续写入，下游 BI / agent 需要"看新增的那部分"，不是每次都重扫全表。</li>
+<li><strong>外部表格式</strong>：用户已有 Iceberg / Delta 表（其它引擎写出来的），想直接 SQL 查，不能强迫迁移到 FUSE。</li>
+<li><strong>可编程 UDF</strong>：常见标量/聚合不够，agent / 业务逻辑需要 Python / Rust UDF；不能让 UDF 在引擎进程里跑（崩了拖死引擎）。</li>
+</ol>
+<p>直接做的反例：</p>
+<table>
+<thead>
+<tr>
+<th>反例</th>
+<th>后果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>每次拷贝外部 Iceberg 数据进 FUSE</td>
+<td>数据双份；维护成本爆炸</td>
+</tr>
+<tr>
+<td>Stream 用上游订阅触发器</td>
+<td>事务可见性混乱；语义难定义</td>
+</tr>
+<tr>
+<td>UDF 用 dlopen 进同一进程</td>
+<td>安全 / 稳定 / 资源不可控</td>
+</tr>
+<tr>
+<td>把 Python UDF 用 PyO3 嵌入</td>
+<td>GIL；崩溃即整个 query 节点挂</td>
+</tr>
+</tbody>
+</table>
+<p>Databend 的取舍：</p>
+<ul>
+<li><strong>Stream 复用 FUSE 的 snapshot 链</strong>——Stream 表实际上是一个"指向源表 + 持有 offset"的 view，读出来的是两个 snapshot 之间的差。</li>
+<li><strong>Iceberg / Delta 各起一个 Catalog</strong>，沿用 Databend 的 <code>Catalog</code> trait；表的 <code>read_data</code> 直接走它们各自的库（<code>iceberg-rust</code>、<code>deltalake-rs</code>）。</li>
+<li><strong>UDF 走 Arrow Flight</strong>：Databend 是 client，外部 UDF Server 在另一个进程/容器里；Pipeline 用 <code>TransformUdfServer</code> 把 DataBlock 切成 batch、并发发给 endpoint。</li>
+</ul>
+<h2>2. 在 Databend 中的位置</h2>
+<div class="mermaid">
+flowchart TB
+  subgraph Catalog[&quot;catalog 抽象 (databend-common-catalog)&quot;]
+    CTM[CatalogManager]
+  end
+  subgraph Default[&quot;默认 Catalog (FUSE)&quot;]
+    FT[FuseTable]
+  end
+  subgraph Iceberg[&quot;Iceberg Catalog (storages/iceberg)&quot;]
+    IC[IcebergCatalog]
+    IT[IcebergTable]
+    IDB[IcebergDatabase]
+  end
+  subgraph Hive[&quot;Hive (HiveCreator)&quot;]
+    HC[HiveCatalog]
+  end
+  subgraph Delta[&quot;storages/delta (factory 注册)&quot;]
+    DT[DeltaTable]
+    DTS[DeltaTableSource]
+  end
+  subgraph Stream[&quot;storages/stream&quot;]
+    ST[StreamTable]
+    STF[stream_status_table_func]
+  end
+  subgraph UDF[&quot;UDF 三条路径&quot;]
+    UMgr[UdfMgr (元数据)]
+    UFlight[TransformUdfServer\n(Arrow Flight)]
+    UScript[script_udf_support\n(Pool&lt;Runtime&gt;)]
+    UPhys[physical_plans/physical_udf.rs]
+  end
+
+  CTM --&gt; FT
+  CTM --&gt; IC --&gt; IT
+  CTM --&gt; HC
+  ST --&gt; FT
+  DT -. 由 storages/factory 注册 .-&gt; CTM
+  UMgr -. 元数据 .-&gt; CTM
+  UPhys --&gt; UFlight
+  UPhys --&gt; UScript
+</div>
+<p>源码：</p>
+<table>
+<thead>
+<tr>
+<th>模块</th>
+<th>路径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>StreamTable</td>
+<td><code>src/query/storages/stream/src/stream_table.rs::StreamTable (L≈65)</code></td>
+</tr>
+<tr>
+<td>stream 状态表函数</td>
+<td><code>src/query/storages/stream/src/stream_status_table_func.rs</code></td>
+</tr>
+<tr>
+<td>IcebergTable</td>
+<td><code>src/query/storages/iceberg/src/table.rs::IcebergTable (L≈85)</code></td>
+</tr>
+<tr>
+<td>IcebergCatalog</td>
+<td><code>src/query/storages/iceberg/src/catalog.rs</code></td>
+</tr>
+<tr>
+<td>IcebergDatabase</td>
+<td><code>src/query/storages/iceberg/src/database.rs</code></td>
+</tr>
+<tr>
+<td>Iceberg cache</td>
+<td><code>src/query/storages/iceberg/src/cache.rs</code></td>
+</tr>
+<tr>
+<td>DeltaTable</td>
+<td><code>src/query/storages/delta/src/table.rs::DeltaTable (L≈67)</code></td>
+</tr>
+<tr>
+<td>DeltaTableSource</td>
+<td><code>src/query/storages/delta/src/table_source.rs::DeltaTableSource (L≈46)</code></td>
+</tr>
+<tr>
+<td>Delta arrow 兼容层</td>
+<td><code>src/query/storages/delta/src/arrow56_conversion.rs</code></td>
+</tr>
+<tr>
+<td>HiveCreator</td>
+<td>在 <code>databend-common-storages-hive</code> 里（<code>global_services.rs</code> 注册）</td>
+</tr>
+<tr>
+<td>UDF 物理算子</td>
+<td><code>src/query/service/src/physical_plans/physical_udf.rs::Udf (L≈48)</code></td>
+</tr>
+<tr>
+<td>UDF Server transform</td>
+<td><code>src/query/service/src/pipelines/processors/transforms/transform_udf_server.rs::TransformUdfServer (L≈44)</code></td>
+</tr>
+<tr>
+<td>Script UDF</td>
+<td><code>src/query/script_udf_support/src/{transform_udf_script,udaf_script,runtime_pool}.rs</code></td>
+</tr>
+<tr>
+<td>UDF 元数据管理</td>
+<td><code>src/query/management/src/udf/udf_mgr.rs::UdfMgr (L≈38)</code></td>
+</tr>
+</tbody>
+</table>
+<h2>3. 关键数据结构</h2>
+<h3>3.1 Stream — FUSE 之上的增量视图</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/storages/stream/src/stream_table.rs:65</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">StreamTable</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    info: </span><span style="color: #A6E22E">TableInfo</span><span style="color: #F8F8F2">,                          </span><span style="color: #959077">// 自身表信息</span>
+<span style="color: #F8F8F2">    max_batch_size: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">u64</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    source_table: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">dyn</span><span style="color: #F8F8F2"> Table</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,     </span><span style="color: #959077">// 缓存：底层 FuseTable</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">StreamStatus</span><span style="color: #F8F8F2"> { MayHaveData, NoData } </span><span style="color: #959077">// L≈60</span>
+</code></pre></div>
+
+<div class="mermaid">
+classDiagram
+  class StreamTable {
+    +info: TableInfo
+    +max_batch_size
+    +source_table: Option~Arc dyn Table~
+    +source_table(ctx) FuseTable
+    +navigate_within_batch_limit(...)
+    +offset() u64       # 上次读到的 snapshot 序号
+    +source_table_id() u64
+  }
+  class FuseTable {
+    +changes_desc: Option~ChangesDesc~
+    +do_read_changes_partitions(...)
+    +check_changes_valid(...)
+  }
+  class ChangesDesc {
+    +location: snapshot 起点
+    +mode: &#x27;append_only&#x27; / &#x27;standard&#x27;
+  }
+  StreamTable --&gt; FuseTable : source_table
+  FuseTable --&gt; ChangesDesc : changes 模式开关
+</div>
+<p>要点：</p>
+<ul>
+<li>StreamTable 自身<strong>不存数据</strong>；它持有「源表 id + offset 起点」。</li>
+<li>读取时通过 <code>source_table()</code> 拿到底层 <code>FuseTable</code>，再让 FuseTable 在 <code>changes_desc</code> 模式下走 <code>do_read_changes_partitions</code>（06 文档已点出）。</li>
+<li>Stream 本身的"消费"通过修改 <code>offset</code> 推进——这部分语义在 <code>commit_table_meta</code> 时与底层 FUSE 一并 CAS 更新（详见 02 文档）。</li>
+<li><code>StreamStatus::MayHaveData / NoData</code> 让 <code>SHOW STREAMS</code> 等 SQL 知道当前有没有新数据，免去扫表确认。</li>
+</ul>
+<h3>3.2 Iceberg — 沿用 Databend Catalog trait</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/storages/iceberg/src/table.rs:85</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">IcebergTable</span><span style="color: #F8F8F2"> { </span><span style="color: #959077">/* iceberg::table::Table 句柄 + Databend TableInfo */</span><span style="color: #F8F8F2"> }</span>
+</code></pre></div>
+
+<div class="mermaid">
+classDiagram
+  class IcebergCatalog
+  class IcebergDatabase
+  class IcebergTable {
+    +get_table_info() TableInfo
+    +read_partitions / read_data
+    +append_data / commit_insertion
+  }
+  class IcebergPartition
+  class IcebergPredicate {
+    +把 push_downs 翻译成 iceberg-rust 的过滤
+  }
+  class IcebergCache
+  Catalog &lt;|-- IcebergCatalog
+  Database &lt;|-- IcebergDatabase
+  Table &lt;|-- IcebergTable
+  IcebergCatalog --&gt; IcebergDatabase
+  IcebergDatabase --&gt; IcebergTable
+  IcebergTable --&gt; IcebergPartition
+  IcebergTable --&gt; IcebergPredicate
+  IcebergCatalog --&gt; IcebergCache
+</div>
+<p>为什么不像 FUSE 那样三层（snapshot/segment/block）：因为 Iceberg 自己就有一套 metadata.json + manifest list + manifest 的三层；Databend 把"裁剪"代理给 <code>iceberg-rust</code>，自己只负责把结果转成 <code>Partitions</code> 喂给 Pipeline。</p>
+<h3>3.3 Delta — 借助 deltalake-rs</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/storages/delta/src/table.rs:67-74</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">DeltaTable</span><span style="color: #F8F8F2"> { </span><span style="color: #959077">/* deltalake::DeltaTable 句柄 */</span><span style="color: #F8F8F2"> }</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">DeltaTableMeta</span><span style="color: #F8F8F2"> { </span><span style="color: #959077">/* schema/options */</span><span style="color: #F8F8F2"> }</span>
+
+<span style="color: #959077">// src/query/storages/delta/src/table_source.rs:46</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">DeltaTableSource</span><span style="color: #F8F8F2"> { </span><span style="color: #959077">/* Pipeline 中的 source processor */</span><span style="color: #F8F8F2"> }</span>
+</code></pre></div>
+
+<p><code>arrow56_conversion.rs</code> 是关键的胶水：deltalake-rs 默认依赖一个老 Arrow 版本，Databend 内部使用更新的 Arrow；这层转换把 RecordBatch 的 schema 与字段做版本对齐。</p>
+<h3>3.4 外部 UDF：Arrow Flight + Endpoint Pool</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/service/src/pipelines/processors/transforms/transform_udf_server.rs:44</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">TransformUdfServer</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    ctx: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">QueryContext</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    funcs: Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">UdfFunctionDesc</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    connect_timeout: </span><span style="color: #66D9EF">u64</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    request_batch_rows: </span><span style="color: #66D9EF">usize</span><span style="color: #F8F8F2">,           </span><span style="color: #959077">// 把 block 切成更小的请求</span>
+<span style="color: #F8F8F2">    semaphore: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Semaphore</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,           </span><span style="color: #959077">// 全局并发上限</span>
+<span style="color: #F8F8F2">    endpoints: </span><span style="color: #A6E22E">BTreeMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String, Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Endpoint</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">, </span><span style="color: #959077">// server_addr → Flight Endpoint</span>
+<span style="color: #F8F8F2">    retry_times: </span><span style="color: #66D9EF">usize</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<div class="mermaid">
+classDiagram
+  class TransformUdfServer {
+    +funcs
+    +endpoints: BTreeMap
+    +semaphore: Arc Semaphore
+    +request_batch_rows
+    +retry_times
+    +transform_inner(ctx, block) DataBlock
+  }
+  class UDFFlightClient {
+    +build_endpoint(addr,connect_timeout,request_timeout,user_agent)
+    +do_exchange(stream)
+  }
+  class UdfFunctionDesc {
+    +name
+    +udf_type: UDFType
+    +arg_types / return_type
+  }
+  TransformUdfServer --&gt; UDFFlightClient
+  TransformUdfServer --&gt; UdfFunctionDesc
+</div>
+<p>设计要点：</p>
+<ul>
+<li><strong>Arrow Flight do_exchange</strong>：把 DataBlock 转 RecordBatch 流式发给 Server，Server 计算后回流；列存零拷贝。</li>
+<li><strong>request_batch_rows 切小块</strong>：一个大的 DataBlock 切成多个小请求，提升并发与失败粒度。</li>
+<li><strong>Semaphore 全局上限</strong>：多个 query 同时跑 UDF 时不至于打爆 endpoint。</li>
+<li><strong>endpoints 按 server_addr 复用</strong>：跨多个 UDF 函数若指向同一 Server，共用 endpoint 连接池。</li>
+<li><strong>retry_times</strong> + 连接超时：网络波动时自动重试。</li>
+</ul>
+<h3>3.5 Script UDF — 同进程 Pool<Runtime></h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/script_udf_support/src/runtime_pool.rs（节选）</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">trait</span><span style="color: #F8F8F2"> RuntimeBuilder</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">T</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">type</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">Error</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">build</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self) -&gt; Result</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">T, Self::Error</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">Pool</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">R, B: </span><span style="color: #A6E22E">RuntimeBuilder</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">R</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> builder: </span><span style="color: #A6E22E">B</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    runtimes: </span><span style="color: #A6E22E">Mutex</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">R</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #66D9EF">impl</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">R, B: </span><span style="color: #A6E22E">RuntimeBuilder</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">R</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2"> Pool</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">R, B</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">call</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">T, F, E</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self, op: </span><span style="color: #A6E22E">F</span><span style="color: #F8F8F2">) -&gt; Result</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">T, E</span><span style="color: #FF4689">&gt;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">where</span><span style="color: #F8F8F2"> F: FnOnce(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">R) -&gt; Result</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">T, E</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">, E: From</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">B::Error</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> { </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">. }</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<div class="mermaid">
+classDiagram
+  class Pool~R,B~ {
+    +builder: B
+    +runtimes: Mutex Vec~R~
+    +call(op) Result
+  }
+  class TransformUdfScript {
+    +pool: Pool&lt;JsRuntime, ...&gt;
+  }
+  class UdafScript {
+    +pool: Pool&lt;...&gt;
+  }
+  class UdfAggState {
+    +Arc dyn Array
+  }
+  Pool --&gt; TransformUdfScript
+  Pool --&gt; UdafScript
+  UdafScript --&gt; UdfAggState : 聚合中间态
+</div>
+<p>特点：</p>
+<ul>
+<li><strong>进程内 runtime</strong>（如 wasm/js/python embedded），用 Pool 复用，避免每个 batch 启动开销。</li>
+<li><strong>stub 实现</strong>：<code>transform_udf_script_stub.rs</code> / <code>udaf_script_stub.rs</code> 在编译没有 <code>script-udf</code> feature 时直接报错——保证 OSS 与 EE 二进制的一致行为。</li>
+<li><strong>UDAF 中间态是 <code>Arc&lt;dyn Array&gt;</code></strong>：跨 partition 累计的部分聚合直接以 Arrow Array 在内存里传递，方便 partial+final 模型。</li>
+</ul>
+<h2>4. 关键流程</h2>
+<h3>4.1 Stream 的"读增量"</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Q as SELECT * FROM stream_t
+  participant Cat as CatalogManager
+  participant ST as StreamTable
+  participant FT as FuseTable
+  participant Read as do_read_changes_partitions
+
+  Q-&gt;&gt;Cat: get_table(&quot;default&quot;,&quot;stream_t&quot;)
+  Cat--&gt;&gt;Q: StreamTable
+  Q-&gt;&gt;ST: source_table() / offset()
+  ST-&gt;&gt;FT: load source FuseTable + verify table_id 未变
+  ST-&gt;&gt;FT: check_changes_valid(offset)
+  Q-&gt;&gt;FT: read_partitions(push_downs, change_type=Insert)
+  FT-&gt;&gt;Read: do_read_changes_partitions(snapshot 起点 -&gt; 当前)
+  Read-&gt;&gt;Read: 沿 prev_snapshot_id 找区间，diff 出新 block + tombstone
+  Read--&gt;&gt;Q: Partitions（增量 BlockMeta 集）
+  Q-&gt;&gt;Q: 跑常规 read_data + Pipeline
+</div>
+<p><strong>增量等价于 snapshot 链上的"区间 diff"</strong>：从 stream offset 处的 snapshot 开始，沿 <code>prev_snapshot_id</code> 反向走到当前最新；中间出现的新 block 就是 INSERT，删掉的对应 DELETE。结合表上的 <code>change_tracking</code> 选项（详见 06 文档 §8 未解之谜），可以拿到行级 <code>_change_type</code>。</p>
+<h3>4.2 Iceberg 的"借力"读</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Q as SELECT * FROM iceberg.db.t WHERE x&gt;1
+  participant IC as IcebergCatalog
+  participant IT as IcebergTable
+  participant IR as iceberg-rust scan API
+  participant Pred as IcebergPredicate
+  participant OD as OpenDAL
+
+  Q-&gt;&gt;IC: get_table
+  IC--&gt;&gt;Q: IcebergTable（绑 iceberg-rust Table 句柄）
+  Q-&gt;&gt;IT: read_partitions(push_downs)
+  IT-&gt;&gt;Pred: 把 Databend Expr 转成 iceberg-rust 谓词
+  IT-&gt;&gt;IR: scan(filter=...)
+  IR-&gt;&gt;OD: 读 metadata.json + manifest list + manifest
+  IR--&gt;&gt;IT: 输出 FileScanTasks
+  IT-&gt;&gt;IT: 包成 IcebergPartition 列表
+  IT--&gt;&gt;Q: Partitions
+  Q-&gt;&gt;OD: 并发读 parquet
+</div>
+<p><code>IcebergCache</code>（<code>iceberg/src/cache.rs</code>）单独缓存 Iceberg metadata（与 07 文档介绍的 <code>IcebergTableCache</code> 是不同层次的两份）。</p>
+<h3>4.3 Delta 的"读路径"</h3>
+<p><code>DeltaTableSource (table_source.rs:46)</code> 是 Pipeline 中的 source processor，内部直接调 <code>deltalake::DeltaTable::open + scan</code>，输出 <code>RecordBatch</code> 流，再用 <code>arrow56_conversion</code> 把列类型 normalize 到 Databend 期望的 schema。</p>
+<h3>4.4 UDF：物理算子 → Pipeline → 外部 Server</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Q as SELECT my_udf(x) FROM t
+  participant Bind as Binder
+  participant UMgr as UdfMgr
+  participant Meta as meta-service
+  participant Opt as Optimizer
+  participant PB as PipelineBuilder
+  participant T as TransformUdfServer
+  participant Sem as Semaphore
+  participant FC as UDFFlightClient
+  participant Server as 外部 UDF Server
+
+  Bind-&gt;&gt;UMgr: 解析函数名 my_udf
+  UMgr-&gt;&gt;Meta: 查 UDF 定义
+  Meta--&gt;&gt;UMgr: UserDefinedFunction { type=UDFServer { addr } }
+  UMgr--&gt;&gt;Bind: UdfFunctionDesc
+  Opt-&gt;&gt;Opt: SExpr 上有 RelOperator::Udf
+  PB-&gt;&gt;PB: physical_plan_builder 注入 PhysicalPlan::Udf
+  PB-&gt;&gt;T: build_pipeline 创建 TransformUdfServer
+  T-&gt;&gt;T: init_endpoints + init_semaphore
+  Q-&gt;&gt;T: 上游 DataBlock
+  T-&gt;&gt;T: 把 block 切成 request_batch_rows 大小
+  par 并发批次
+    T-&gt;&gt;Sem: acquire permit
+    T-&gt;&gt;FC: do_exchange → Server
+    Server--&gt;&gt;T: RecordBatch
+    T-&gt;&gt;Sem: release permit
+  and
+    T-&gt;&gt;Sem: acquire permit ...
+  end
+  T-&gt;&gt;T: 合回大 DataBlock
+  T--&gt;&gt;Q: 下游
+</div>
+<p>注意：</p>
+<ul>
+<li><strong>UDF 的元数据持久化在 meta-service</strong>（<code>UdfMgr</code> → <code>UserDefinedFunction</code> 类型，在 <code>META_CHANGE_LOG v160</code> 加 <code>update_on</code> 字段，详见 02 文档）。</li>
+<li><strong>UDF Server 部署独立</strong>：可以是 Python/Wasm/任意语言，只要实现 Arrow Flight <code>do_exchange</code>。崩溃不会拖死 Databend 进程。</li>
+<li><strong>Script UDF（同进程）走另一条路径</strong>：<code>TransformUdfScript</code> 不发网络，调本地 Pool<Runtime>。</li>
+</ul>
+<h3>4.5 Script UDF 的同进程执行</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Up as 上游 DataBlock
+  participant Tr as TransformUdfScript
+  participant P as Pool&lt;Runtime&gt;
+  participant R as 已构建的 Runtime
+
+  Up-&gt;&gt;Tr: block (Vec&lt;Column&gt;)
+  Tr-&gt;&gt;P: call(op)
+  P-&gt;&gt;P: pop or builder.build()
+  P--&gt;&gt;Tr: borrow Runtime
+  Tr-&gt;&gt;R: invoke(funcs, args)
+  R--&gt;&gt;Tr: result column
+  Tr-&gt;&gt;P: 回收 Runtime
+  Tr--&gt;&gt;Up: 输出 block
+</div>
+<p>Pool 用 <code>Mutex&lt;Vec&lt;R&gt;&gt;</code> 复用；如果 OSS 模式且 feature <code>script-udf</code> 没开，stub 文件直接 return error，避免编译跨大半个 EE 模块。</p>
+<h2>5. 性能与优化点</h2>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>在哪里</th>
+<th>效果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Stream 复用 FUSE 不可变 snapshot</strong></td>
+<td><code>do_read_changes_partitions</code></td>
+<td>增量等于"snapshot 区间 diff"，零额外存储</td>
+</tr>
+<tr>
+<td><strong>Iceberg/Delta 沿用 Catalog trait</strong></td>
+<td><code>IcebergCatalog</code> / <code>factory</code></td>
+<td>Pipeline 端不需要为外部表特殊化；优化器规则自动适用</td>
+</tr>
+<tr>
+<td><strong>UDF 走 Arrow Flight 列存</strong></td>
+<td><code>TransformUdfServer</code></td>
+<td>不反复 row → struct 反序列化</td>
+</tr>
+<tr>
+<td><strong>UDF Server endpoint 池</strong></td>
+<td><code>endpoints: BTreeMap</code></td>
+<td>同 Server 多函数共用 keep-alive</td>
+</tr>
+<tr>
+<td><strong>UDF 全局并发 Semaphore</strong></td>
+<td><code>external_server_request_max_threads</code> setting</td>
+<td>限流，防雪崩</td>
+</tr>
+<tr>
+<td><strong>request_batch_rows 切片</strong></td>
+<td><code>external_server_request_batch_rows</code> setting</td>
+<td>大 block 切小 → 并发 + 失败粒度细</td>
+</tr>
+<tr>
+<td><strong>Script UDF Pool<Runtime></strong></td>
+<td><code>runtime_pool.rs</code></td>
+<td>复用进程内运行时（避免重复初始化）</td>
+</tr>
+<tr>
+<td><strong>stub 模式</strong></td>
+<td><code>*_stub.rs</code></td>
+<td>OSS 二进制不必引入大依赖</td>
+</tr>
+<tr>
+<td><strong>arrow56_conversion</strong></td>
+<td><code>delta/src/arrow56_conversion.rs</code></td>
+<td>解决 deltalake-rs 与 Databend 内部 Arrow 版本差异</td>
+</tr>
+</tbody>
+</table>
+<h2>6. 与同类系统的对照</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Spark</th>
+<th>Trino</th>
+<th>StarRocks</th>
+<th><strong>Databend</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>增量/CDC</td>
+<td>Structured Streaming</td>
+<td>通过外部 connector</td>
+<td>Routine Load + binlog</td>
+<td><strong>Stream 表（snapshot 区间 diff）</strong></td>
+</tr>
+<tr>
+<td>Iceberg</td>
+<td>内置</td>
+<td>内置 connector</td>
+<td>内置 connector</td>
+<td><strong>IcebergCatalog（iceberg-rust）</strong></td>
+</tr>
+<tr>
+<td>Delta</td>
+<td>内置</td>
+<td>内置 connector</td>
+<td>部分</td>
+<td><strong>DeltaTable（deltalake-rs）</strong></td>
+</tr>
+<tr>
+<td>UDF</td>
+<td>JVM in-proc / PySpark</td>
+<td>gRPC (新版) / in-proc</td>
+<td>受限</td>
+<td><strong>Arrow Flight UDF Server + 内嵌 script</strong></td>
+</tr>
+<tr>
+<td>沙箱</td>
+<td>无（in-proc）</td>
+<td>无</td>
+<td>无</td>
+<td><strong>外部进程 + Flight，崩溃不影响主进程</strong></td>
+</tr>
+</tbody>
+</table>
+<p>UDF 这块特别值得对照：业界许多引擎让用户在 query 进程里跑 Python（PyO3 / PySpark / pl/Python），代价是 GIL 与崩溃风险。Databend 把 UDF 推到外部 Arrow Flight Server，设计上更接近 ClickHouse 的 executable UDF，但用列存协议替代了行式管道。</p>
+<h2>7. 端到端案例</h2>
+<p><code>SELECT my_udf(x) FROM stream_t WHERE x &gt; 1</code>：</p>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Cli as bendsql
+  participant Co as Coordinator
+  participant ST as StreamTable
+  participant FT as FuseTable (源表)
+  participant Pipe as Pipeline
+  participant T as TransformUdfServer
+  participant US as UDF Server
+
+  Cli-&gt;&gt;Co: SQL
+  Co-&gt;&gt;ST: get_table stream_t
+  Co-&gt;&gt;ST: source_table() → FuseTable + offset
+  Co-&gt;&gt;FT: read_partitions(change_type=Insert, push_downs.x&gt;1)
+  FT--&gt;&gt;Co: 增量 Partitions
+  Co-&gt;&gt;Pipe: 构建 ScanSource → FilterTransform → TransformUdfServer → Sink
+  Pipe-&gt;&gt;T: DataBlock
+  T-&gt;&gt;T: 切 batch + acquire semaphore
+  par
+    T-&gt;&gt;US: do_exchange RecordBatch[x]
+    US--&gt;&gt;T: RecordBatch[my_udf(x)]
+  and
+    T-&gt;&gt;US: ...
+  end
+  T--&gt;&gt;Pipe: 输出 DataBlock
+  Pipe--&gt;&gt;Cli: 结果
+</div>
+<p>注意：</p>
+<ul>
+<li><strong>WHERE 谓词依然在 FuseTable 阶段裁剪</strong>——Stream 只是替换了 Partitions 来源，不影响 push-down 逻辑。</li>
+<li><strong>UDF 落点在 Filter 之后</strong>：先把无关行剔掉再发给 UDF Server，节省网络。</li>
+<li><strong>每个增量批次都消耗 stream 的 offset 推进</strong>——commit 阶段（如果是 INSERT INTO ... SELECT FROM stream_t）会把新 offset 与目标表 commit 一起 CAS 写 meta（详见 02/06 文档）。</li>
+</ul>
+<h2>8. 未解之谜</h2>
+<ul>
+<li><strong>Stream offset 推进的精确时机</strong>：上面案例说"消费推进 offset"，但实际是「显式 CONSUME」语句还是「INSERT INTO target SELECT FROM stream」隐式触发？需要在 binder 端跟踪 <code>Statement::ConsumeStream</code>（如果存在）。</li>
+<li><strong><code>change_tracking</code> 与 <code>_change_type</code></strong>：FUSE 表上要开启 change tracking 才能获得行级变更类型（insert/delete/update）；本仓库内 <code>OPT_KEY_CHANGE_TRACKING</code> 的写入路径与读取展开未深读，留给后续版本再展开。</li>
+<li><strong>Iceberg / Delta 写入路径</strong>：本篇侧重读；Iceberg 的 <code>append.rs</code> 与 Delta 的 commit 路径 (<code>deltalake::DeltaOps</code>) 用法如何映射到 Databend 的 <code>commit_insertion</code>，需要再读代码。</li>
+<li><strong>UDF Server 鉴权</strong>：endpoint 是 plain gRPC，没看到 mTLS / token 在 client 侧 enforce；可能在外部 sandbox 服务自己做。</li>
+<li><strong>「Sandbox UDF + Agent」</strong>：README 强调 agent-ready，但本仓库内 agent 编排没有专属代码——它实际上<strong>就是「SQL + 外部 UDF Server」的别名</strong>，加上 Branching（FUSE Time-Travel）。这与用户原始假设里的"Python sandbox 子进程"不一致，本系列 01 文档已经标注。</li>
+<li><strong>HiveCreator</strong> 与 <code>databend-common-storages-hive</code> 不在本仓库 <code>src/query/storages/</code> 下；它在 <code>common/</code> 路径还是 EE 模块？<code>global_services.rs::L≈132</code> 直接 <code>use databend_common_storages_hive::HiveCreator</code>，但本系列没去找定义。如果用户实际跑 Hive 表，建议直接定位该 crate。</li>
+</ul>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

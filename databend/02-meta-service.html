@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>02 · Meta Service：客户端层 + 外部 OpenRaft 状态机 · Databend 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#ff6b6b}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">☁️ <span>Databend 源码深度解析</span></span><nav class="nav"><a href="00-meta.html">元信息与阅读指南</a><a href="01-overview.html">总览：三层架构与设计取舍</a><a href="02-meta-service.html" class=on>Meta Service：客户端层 + 外部 OpenRaft 状态机</a><a href="03-sql-frontend.html">SQL 前端：词法 / 语法 / 绑定</a><a href="04-planner-optimizer.html">Planner / Optimizer：从 SExpr 到最优计划</a><a href="05-pipeline-execution.html">Pipeline 执行：Push-based + Event 状态机</a><a href="06-fuse-storage.html">FUSE 存储引擎：Snapshot / Segment / Block</a><a href="07-io-and-cache.html">IO 与多级缓存：OpenDAL Layer 栈 + CacheManager</a><a href="08-indexes-and-search.html">索引与搜索：Bloom / Inverted / Vector / Range / Page / Spatial</a><a href="09-cluster-and-exchange.html">集群与 Exchange：节点发现 + Flight Shuffle</a><a href="10-extensions.html">扩展：Stream / UDF / Iceberg / Delta</a><a href="99-diagrams.html">Mermaid 图源归档</a></nav></div></header>
+<main class="wrap">
+<h1>02 · Meta Service：客户端层 + 外部 OpenRaft 状态机</h1>
+<blockquote>
+<p>基于 commit <code>fe693bb677</code>（本仓库）+ <code>databend-meta</code> main（<code>/tmp/databend-meta</code>，浅克隆）。本篇横跨两个仓库：本仓库内只剩 client/types/proto，<strong>核心 raft 实现在 v1.2.874 之后迁出</strong>到独立的 <code>databend-meta</code>。</p>
+</blockquote>
+<h2>1. 解决了什么问题</h2>
+<p>存算分离后，每个 query 节点都是无状态的临时计算。"哪些表存在、字段是什么、谁有权限、当前指向的 snapshot 在哪里"——这些必须有一个<strong>外部强一致 KV</strong> 来托管。Databend 选择的是「<strong>在 KV 之上分层</strong>」：</p>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>谁来管</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>传输</strong></td>
+<td>gRPC：<code>watch / kv_read_v1 / install_snapshot_v1</code>（兼容老接口）</td>
+</tr>
+<tr>
+<td><strong>协议</strong></td>
+<td><code>KvApi</code>（通用 K/V 抽象）+ <code>SchemaApi</code>（数据库/表/索引/...）</td>
+</tr>
+<tr>
+<td><strong>类型</strong></td>
+<td>Rust 类型 <code>TableMeta / DatabaseMeta / IndexMeta / ...</code>（在 client 端用）</td>
+</tr>
+<tr>
+<td><strong>序列化</strong></td>
+<td>protobuf + <code>META_CHANGE_LOG</code> 版本表</td>
+</tr>
+<tr>
+<td><strong>共识</strong></td>
+<td>OpenRaft，写日志 + 状态机 + 快照（外部仓库）</td>
+</tr>
+<tr>
+<td><strong>存储</strong></td>
+<td><code>raft_log_v004</code> (WAL) + <code>sm_v003</code> (内存层级 KV，定期落 snapshot)</td>
+</tr>
+</tbody>
+</table>
+<p>直接用 etcd / Zookeeper 的反例：</p>
+<table>
+<thead>
+<tr>
+<th>反例</th>
+<th>后果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>直接拿 etcd 当 backend，把所有 schema JSON 塞进一个 key</td>
+<td>watch 风暴 + 写放大；schema 演进无法版本化</td>
+</tr>
+<tr>
+<td>用 ZK，把元数据塞 znode</td>
+<td>序列化层不可演进；ZK 的 snapshot 模型不适合大 KV</td>
+</tr>
+<tr>
+<td>自己用 Raft+RocksDB 写</td>
+<td>重复造轮子；状态机演进缺少版本控制工具链</td>
+</tr>
+</tbody>
+</table>
+<p>Databend 的取舍：<strong>自研 meta 服务</strong>，但底层 raft 用 OpenRaft（同一团队），<strong>类型/protobuf/版本管理留在 query 仓库</strong>——这样 query / meta 升级解耦：query 端只需读懂 protobuf 版本，server 端只需把字节按 raft 复制。</p>
+<h2>2. 在 Databend 中的位置</h2>
+<div class="mermaid">
+flowchart LR
+  subgraph Q[&quot;databend (本仓库)&quot;]
+    direction TB
+    APP[meta/app\nRust 类型]
+    PROTOS[meta/protos\nprotobuf 定义]
+    PCONV[meta/proto-conv\n版本表 + FromToProto]
+    API[meta/api\nKvApi/SchemaApi 接口]
+    STORE[meta/store\nMetaStore client]
+    BINS[meta/binaries\nmetactl / metabench / metaverifier]
+    QSVC[query 服务\n通过 MetaStore 调 RPC]
+    QSVC --&gt; STORE
+    STORE --&gt; API
+    API --&gt; PCONV
+    PCONV --&gt; PROTOS
+    PCONV --&gt; APP
+  end
+  subgraph M[&quot;databend-meta (外部仓库)&quot;]
+    direction TB
+    SVC[server/service\nMetaNode / raft_service]
+    RFT[server/raft-store\nsm_v003 + raft_log_v004]
+    SLD[server/sled-store\n旧版 sled KV]
+    TYP[server/types]
+    BASE[server/base]
+    CLI[client/{client,kvapi,types,base}]
+    PRT[common/proto]
+    SVC --&gt; RFT
+    RFT --&gt; SLD
+    SVC --&gt; TYP
+    SVC --&gt; BASE
+    SVC --&gt; PRT
+  end
+  STORE -. gRPC .-&gt; SVC
+</div>
+<p><strong>关键事实</strong>：本仓库 <code>src/meta/app/</code> 与 <code>src/meta/protos/</code> 维护"被序列化的实体类型"；外部 <code>databend-meta/crates/common/proto/</code> 只维护"raft 服务自身需要的低层类型"（log/snapshot 等）。两者通过 gRPC 在网络上对接。</p>
+<h2>3. 关键数据结构</h2>
+<h3>3.1 客户端类型（本仓库 src/meta/app/）</h3>
+<div class="mermaid">
+classDiagram
+  class TableMeta {
+    +schema: TableSchema
+    +engine / options
+    +cluster_key
+    +storage_params
+    +column_mask_policy
+    +constraints
+    +created_on / updated_on
+    +statistics
+  }
+  class DatabaseMeta { +engine +options +created_on }
+  class CatalogMeta { +catalog_option (Iceberg/Hive/Default) }
+  class IndexMeta { +index_type (Aggregating) +query +sync_creation +updated_on }
+  class TableCopiedFileInfo { +etag +content_length +last_modified }
+  class LeastVisibleTime { +time }
+  class Lock { +tenant +id +acquired_on }
+  class DataMaskMeta { +args +body }
+  class RowAccessPolicyMeta { +args +body }
+  class Ownership / Grant
+  class UserDefinedFunction
+  TableMeta --&gt; DataMaskMeta : column_mask_policy 引用
+  TableMeta --&gt; RowAccessPolicyMeta : security column map
+  CatalogMeta --&gt; DatabaseMeta : 容器
+  DatabaseMeta --&gt; TableMeta : 容器
+</div>
+<p>源码：</p>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>文件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TableMeta</code></td>
+<td><code>src/meta/app/src/schema/table.rs</code></td>
+</tr>
+<tr>
+<td><code>DatabaseMeta</code></td>
+<td><code>src/meta/app/src/schema/database.rs</code></td>
+</tr>
+<tr>
+<td><code>CatalogMeta</code></td>
+<td><code>src/meta/app/src/schema/catalog.rs</code></td>
+</tr>
+<tr>
+<td><code>IndexMeta</code></td>
+<td><code>src/meta/app/src/schema/index.rs</code></td>
+</tr>
+<tr>
+<td><code>Lock</code></td>
+<td><code>src/meta/app/src/schema/lock.rs</code></td>
+</tr>
+<tr>
+<td><code>LeastVisibleTime</code></td>
+<td><code>src/meta/app/src/schema/least_visible_time.rs</code></td>
+</tr>
+<tr>
+<td><code>DataMaskMeta</code></td>
+<td><code>src/meta/app/src/data_mask/</code></td>
+</tr>
+<tr>
+<td><code>RowAccessPolicy*</code></td>
+<td><code>src/meta/app/src/row_access_policy/</code></td>
+</tr>
+<tr>
+<td><code>Principal/User/Role/UDF</code></td>
+<td><code>src/meta/app/src/principal/</code></td>
+</tr>
+<tr>
+<td><code>StorageParams</code> 等</td>
+<td><code>src/meta/app/src/storage/</code></td>
+</tr>
+<tr>
+<td><code>Tenant / TenantKey</code></td>
+<td><code>src/meta/app/src/tenant/</code></td>
+</tr>
+</tbody>
+</table>
+<h3>3.2 META_CHANGE_LOG — 唯一可信演进表</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/meta/proto-conv/src/util.rs:31</span>
+<span style="color: #66D9EF">const</span><span style="color: #F8F8F2"> META_CHANGE_LOG: </span><span style="color: #66D9EF">&amp;</span><span style="color: #F8F8F2">[(</span><span style="color: #66D9EF">u64</span><span style="color: #F8F8F2">, </span><span style="color: #FF4689">&amp;</span><span style="color: #66D9EF">str</span><span style="color: #F8F8F2">)] </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">[</span>
+<span style="color: #F8F8F2">    (</span><span style="color: #AE81FF">1</span><span style="color: #F8F8F2">,   </span><span style="color: #E6DB74">&quot;----------: Initial&quot;</span><span style="color: #F8F8F2">),</span>
+<span style="color: #F8F8F2">    (</span><span style="color: #AE81FF">2</span><span style="color: #F8F8F2">,   </span><span style="color: #E6DB74">&quot;2022-07-13: Add: share.proto&quot;</span><span style="color: #F8F8F2">),</span>
+<span style="color: #F8F8F2">    </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.</span>
+<span style="color: #F8F8F2">    (</span><span style="color: #AE81FF">170</span><span style="color: #F8F8F2">, </span><span style="color: #E6DB74">&quot;2026-03-25: Add: TableTag&quot;</span><span style="color: #F8F8F2">),</span>
+<span style="color: #F8F8F2">    (</span><span style="color: #AE81FF">171</span><span style="color: #F8F8F2">, </span><span style="color: #E6DB74">&quot;2026-04-02: Update: ... add encoding and encoding_error_mode&quot;</span><span style="color: #F8F8F2">),</span>
+<span style="color: #F8F8F2">    (</span><span style="color: #AE81FF">172</span><span style="color: #F8F8F2">, </span><span style="color: #E6DB74">&quot;2026-04-09: Update: ... add trim_space&quot;</span><span style="color: #F8F8F2">),</span>
+<span style="color: #F8F8F2">    (</span><span style="color: #AE81FF">173</span><span style="color: #F8F8F2">, </span><span style="color: #E6DB74">&quot;2026-04-16: Update: file_format.proto/CsvFileFormatParams add quote_style&quot;</span><span style="color: #F8F8F2">),</span>
+<span style="color: #F8F8F2">];</span>
+
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">const</span><span style="color: #F8F8F2"> VER: </span><span style="color: #66D9EF">u64</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> META_CHANGE_LOG.last().unwrap().</span><span style="color: #AE81FF">0</span><span style="color: #F8F8F2">;   </span><span style="color: #959077">// = 173 (commit fe693bb677)</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">const</span><span style="color: #F8F8F2"> MIN_READER_VER: </span><span style="color: #66D9EF">u64</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> </span><span style="color: #AE81FF">24</span><span style="color: #F8F8F2">;                        </span><span style="color: #959077">// 老 reader 至少要支持 v24</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">const</span><span style="color: #F8F8F2"> MIN_MSG_VER: </span><span style="color: #66D9EF">u64</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> </span><span style="color: #AE81FF">1</span><span style="color: #F8F8F2">;                            </span><span style="color: #959077">// 新 reader 能读最老到 v1</span>
+</code></pre></div>
+
+<div class="mermaid">
+flowchart LR
+  W[Writer 写出 protobuf bytes] --&gt; ME[bytes 内嵌 ver=VER, min_reader=MIN_READER_VER]
+  R1[Reader v=N\nN &gt;= ver.min_reader] --&gt; OK1[能读]
+  R2[Reader v=N\nN &lt; min_reader] --&gt; FAIL[直接失败 — 上线时强制升级 reader]
+  ME --&gt; R1
+  ME --&gt; R2
+</div>
+<p><strong>MIN_READER_VER 是滚动升级的安全线</strong>：写新格式前，运维必须先把所有 reader 升到 ≥ 24。每加一个版本都必须挂一个 <code>tests/it/vNNN_*.rs</code> 测试，verify 旧字节能在新代码下还原（注释 L≈205-209 在源码里强制提醒开发者）。</p>
+<h3>3.3 KvApi 与 SchemaApi</h3>
+<div class="mermaid">
+classDiagram
+  class KvApi {
+    &lt;&lt;trait&gt;&gt;
+    +get_kv(key) Option~SeqV~
+    +mget_kv(keys) ...
+    +list_kv(prefix) Stream
+    +upsert_kv(req) UpsertReply
+    +transaction(TxnRequest) TxnReply
+    +watch(WatchRequest) Stream
+  }
+  class SchemaApi {
+    &lt;&lt;trait&gt;&gt;
+    +create_database / drop_database / get_database / list_databases
+    +create_table / drop_table / commit_table_meta
+    +create_index / drop_index / list_indexes
+    +get_table_copied_file_info
+    +get_lock_revisions / acquire_lock / extend_lock_revision
+    +set_row_access_policy / unset_row_access_policy
+    +set_data_mask / unset_data_mask
+    +update_table_statistics
+    +update_least_visible_time
+  }
+  class MetaStore {
+    &lt;&lt;enum&gt;&gt;
+    Local(LocalRaftStore)
+    Remote(MetaGrpcClient)
+  }
+  KvApi &lt;|.. MetaStore
+  SchemaApi &lt;|.. SchemaApiImpl
+  SchemaApiImpl --&gt; KvApi : 在 KV 上拼装高层操作
+</div>
+<p>源码：</p>
+<ul>
+<li><code>KvApi</code>: <code>src/meta/api/src/kv/...</code></li>
+<li><code>SchemaApi</code>: <code>src/meta/api/src/api_impl/schema_api.rs::SchemaApi (L≈127)</code> —— 一个非常大的 trait（70+ 方法）。</li>
+<li><code>MetaStore</code>: <code>src/meta/store/src/lib.rs</code> + <code>local.rs</code>，本仓库代码硬性禁用 embedded（详见 01 文档与 <code>entry.rs L≈89</code>）。</li>
+</ul>
+<h3>3.4 外部仓库的 MetaNode</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// /tmp/databend-meta/crates/server/service/src/meta_node/meta_node.rs:140</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">MetaNode</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">SP: </span><span style="color: #A6E22E">SpawnApi</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> raft_store: </span><span style="color: #A6E22E">RaftStore</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">SP</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,             </span><span style="color: #959077">// log + state machine</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> dispatcher_handle: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">DispatcherHandle</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> raft: </span><span style="color: #A6E22E">MetaRaft</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">SP</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,                    </span><span style="color: #959077">// = Raft&lt;TypeConfig, MetaRaftStateMachine&lt;SP&gt;&gt;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> runtime_config: </span><span style="color: #A6E22E">RuntimeConfig</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> running_tx: </span><span style="color: #A6E22E">watch</span><span style="color: #F8F8F2">::Sender</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">()</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> running_rx: </span><span style="color: #A6E22E">watch</span><span style="color: #F8F8F2">::Receiver</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">()</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> join_handles: </span><span style="color: #A6E22E">Mutex</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">JoinHandle</span><span style="color: #FF4689">&lt;..</span><span style="color: #F8F8F2">.</span><span style="color: #FF4689">&gt;&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> joined_tasks: </span><span style="color: #A6E22E">AtomicI32</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">type</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">MetaRaft</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">SP</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> Raft</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">TypeConfig, MetaRaftStateMachine</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">SP</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">;</span>
+</code></pre></div>
+
+<div class="mermaid">
+flowchart TB
+  subgraph MetaNode
+    direction TB
+    R[OpenRaft Raft\nleader/follower 流程]
+    LOG[raft_log_v004\nWAL on-disk]
+    SM[sm_v003 (LeveledStore + KV)]
+    DISP[DispatcherHandle\nrequest 多路复用]
+    SVC[gRPC Service]
+  end
+  Client[Query node 经 gRPC 写入] --&gt; SVC --&gt; DISP --&gt; R
+  R -- AppendEntries --&gt; Peer1[Follower MetaNode]
+  R -- AppendEntries --&gt; Peer2[Follower MetaNode]
+  R -- 已 committed log --&gt; SM
+  SM -- 周期 --&gt; Snap[on-disk snapshot]
+  R -- read --&gt; SM
+</div>
+<p>OpenRaft 的 <code>Config</code> 由 <code>MetaNode::new_raft_config (meta_node.rs::L≈176)</code> 构造，关键字段：</p>
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>来源</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cluster_name</code></td>
+<td><code>RaftConfig.cluster_name</code></td>
+</tr>
+<tr>
+<td><code>heartbeat_interval</code> / <code>election_timeout_min/max</code></td>
+<td><code>RaftConfig</code></td>
+</tr>
+<tr>
+<td><code>snapshot_policy = LogsSinceLast(snapshot_logs_since_last)</code></td>
+<td>多少日志触发一次快照</td>
+</tr>
+<tr>
+<td><code>max_in_snapshot_log_to_keep</code></td>
+<td>快照后保留的日志条数</td>
+</tr>
+<tr>
+<td><code>snapshot_max_chunk_size</code></td>
+<td>安装快照分片大小</td>
+</tr>
+<tr>
+<td><code>allow_log_reversion: true</code></td>
+<td>测试场景下允许 leader 回滚 follower 日志</td>
+</tr>
+</tbody>
+</table>
+<h3>3.5 状态机 sm_v003 与日志 raft_log_v004</h3>
+<div class="mermaid">
+flowchart TB
+  subgraph SMv3[&quot;sm_v003&quot;]
+    LD[LeveledStore\n多级 KV：Level0=可写, Level1+=只读 base]
+    APPLIER[applier/]
+    COMP[immutable_compactor + compactor_acquirer]
+    SNAP[snapshot_loader / snapshot_store_v003]
+    KVAPI[sm_v003_kv_api.rs]
+  end
+  subgraph LOGv4[&quot;raft_log_v004&quot;]
+    WAL[WAL 写流：log_store_meta + io_phase + io_desc]
+    CB[callback (append/commit)]
+    UTIL[importer / codec_wrapper]
+  end
+  R[OpenRaft] --&gt; WAL
+  R --&gt; APPLIER
+  APPLIER --&gt; LD
+  COMP --&gt; LD
+  SNAP --&gt; LD
+  KVAPI --&gt; LD
+</div>
+<p>设计要点：</p>
+<ul>
+<li><strong>LeveledStore</strong> 像 LSM 的多层：<strong>L0 可写</strong>用于接收新 apply 的变更；<strong>Lₙ (n≥1) 只读</strong>作为基线 KV。新 leader 不需要重放整段日志，只需"L0 + 基线"即代表当前状态。</li>
+<li><strong>Compactor</strong> 把 L0 周期性合并到 Lₙ，再做一次 snapshot 上传。</li>
+<li><strong>raft_log_v004</strong> 是 WAL 文件版日志，<strong>不依赖 sled</strong>——这是从早期 sled-store 演进的成果（sled-store 仍然在 <code>crates/server/sled-store/</code> 作为旧版兼容）。</li>
+<li><strong><code>SpawnApi</code> 泛型参数 SP</strong>：让测试可以注入自己的 task 调度器，方便确定性测试。</li>
+</ul>
+<h2>4. 关键流程</h2>
+<h3>4.1 Query → Meta：一次读</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Q as Query node
+  participant Cli as MetaGrpcClient
+  participant Net as gRPC
+  participant Svc as MetaService (Leader)
+  participant RR as RaftLeader
+  participant SM as sm_v003
+
+  Q-&gt;&gt;Cli: SchemaApi.get_table(&quot;default&quot;,&quot;t&quot;)
+  Cli-&gt;&gt;Cli: 拼 key 前缀 / 选择 endpoint
+  Cli-&gt;&gt;Net: kv_read_v1(GetReq)
+  Net-&gt;&gt;Svc: 收请求
+  Svc-&gt;&gt;RR: ensure_leader / read_index（线性化读保障）
+  RR-&gt;&gt;SM: read(&quot;__fd_table_by_id/...&quot;)
+  SM--&gt;&gt;Svc: SeqV&lt;TableMeta bytes&gt;
+  Svc--&gt;&gt;Net: KvReply
+  Net--&gt;&gt;Cli: bytes
+  Cli-&gt;&gt;Cli: proto-conv decode → TableMeta（按 ver）
+  Cli--&gt;&gt;Q: TableMeta
+</div>
+<p>注意 <code>read_index</code>/<code>linearizable read</code> 通过 OpenRaft 内部协议实现；客户端不需要知道。</p>
+<h3>4.2 Query → Meta：一次写（commit table snapshot）</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Q as Query (CommitSink)
+  participant Cli as MetaGrpcClient
+  participant L as Leader MetaNode
+  participant F1 as Follower
+  participant F2 as Follower
+  participant SM as sm_v003
+
+  Q-&gt;&gt;Cli: SchemaApi.update_table_meta(prev_seq, new_meta)
+  Cli-&gt;&gt;L: TxnRequest { compare prev_seq == X, then put new_meta }
+  L-&gt;&gt;L: 包成 raft entry, 写 WAL
+  L-&gt;&gt;F1: AppendEntries
+  L-&gt;&gt;F2: AppendEntries
+  F1--&gt;&gt;L: ack
+  F2--&gt;&gt;L: ack
+  L-&gt;&gt;SM: apply（CAS：seq 一致才成功）
+  alt CAS 成功
+    SM--&gt;&gt;L: TxnReply { success=true, new_seq }
+    L--&gt;&gt;Cli: ok
+    Cli--&gt;&gt;Q: 成功
+  else seq 不一致
+    SM--&gt;&gt;L: TxnReply { success=false }
+    L--&gt;&gt;Cli: TableVersionMismatched
+    Cli--&gt;&gt;Q: 失败 → set_backoff 重试（详见 06 文档）
+  end
+</div>
+<p>整条路径里：</p>
+<ul>
+<li><strong>CAS 保证强一致</strong>：<code>prev_table_seq</code> 是 query 的"乐观锁"。</li>
+<li><strong>Raft 保证多副本</strong>：commit 不返回直到大多数副本确认。</li>
+<li><strong>写完 SM 才回包</strong>：避免半成功。</li>
+</ul>
+<h3>4.3 滚动升级 / 版本兼容</h3>
+<div class="mermaid">
+flowchart LR
+  subgraph Cluster[&quot;query 集群（v1.2.x）&quot;]
+    Q1[Query 节点 1]
+    Q2[Query 节点 2]
+  end
+  subgraph Meta[&quot;databend-meta 集群&quot;]
+    M1[Meta 1]
+    M2[Meta 2]
+    M3[Meta 3]
+  end
+  Q1 --(VER=173)--&gt;M1
+  Q2 --(VER=170)--&gt;M1
+  M1 --&gt; CHK{字节内嵌的 ver in MIN_READER_VER..=VER ?}
+  CHK -- 是 --&gt; OK[正常读]
+  CHK -- 否 --&gt; FAIL[要求升级 query]
+</div>
+<ul>
+<li>任何一条 protobuf 字节都内嵌 <code>ver</code> 与 <code>min_reader_ver</code>；不同版本的 query 都能从 meta 拿同一份字节，按各自 reader 解码。</li>
+<li><strong>真实滚动顺序</strong>：先升 meta，再升 query；而当前 commit 的 <code>MIN_READER_VER = 24</code> 意味着升级到 v173 写出的字节，最老的 query 必须 ≥ v24（这是历史断面，老 query 老 meta 早已不兼容，文档不需要管）。</li>
+</ul>
+<h3>4.4 metactl 的角色</h3>
+<div class="mermaid">
+flowchart TB
+  CLI[databend-metactl] --&gt; SUB{子命令}
+  SUB -- status --&gt; ST[GET Raft 状态\n（leader/term/last_log）]
+  SUB -- export --&gt; EXP[导出整个状态机为 JSON 行]
+  SUB -- import --&gt; IMP[根据 JSON 重建一个新集群\n（仅同 DataVersion 内）]
+  SUB -- lua-script --&gt; LS[在 meta 上跑 Lua 表达式（管理用途）]
+</div>
+<p>源码：<code>src/meta/binaries/metactl/main.rs</code>。注意 export/import 不允许跨 DataVersion——这条规则在外部仓库的 README 与本仓库 <code>src/meta/README.md</code> 都有强调。</p>
+<h3>4.5 数据版本（DataVersion）与磁盘演进</h3>
+<table>
+<thead>
+<tr>
+<th>DataVersion</th>
+<th>引入版本</th>
+<th>Min Compatible With</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>V0</td>
+<td>早期</td>
+<td>—</td>
+</tr>
+<tr>
+<td>V001</td>
+<td>1.1.40</td>
+<td>V0</td>
+</tr>
+<tr>
+<td>V002</td>
+<td>1.2.53</td>
+<td>V001</td>
+</tr>
+<tr>
+<td>V003</td>
+<td>1.2.547</td>
+<td>V002（snapshot 改为 rotbl 格式）</td>
+</tr>
+<tr>
+<td>V004</td>
+<td>1.2.655</td>
+<td>V002（log 改为 WAL 格式 = <code>raft_log_v004</code>）</td>
+</tr>
+</tbody>
+</table>
+<div class="mermaid">
+flowchart LR
+  V0 --&gt; V001 --&gt; V002 --&gt; V003 --&gt; V004
+  V003 -. compatible .-&gt; V002
+  V004 -. compatible .-&gt; V002
+</div>
+<p>启动时 <code>databend-meta</code> 自动 upgrade on-disk DataVersion；中途崩溃可以从中断处恢复——这部分逻辑在外部 <code>crates/server/raft-store/src/ondisk/</code> 中；本篇不深挖。</p>
+<h2>5. 性能与优化点</h2>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>在哪里</th>
+<th>效果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong><code>MIN_READER_VER</code> 限制 query 老化</strong></td>
+<td><code>proto-conv/src/util.rs L≈220</code></td>
+<td>上线前必须升 client，上线后老 query 不会偷读新格式</td>
+</tr>
+<tr>
+<td><strong>多级 LeveledStore</strong></td>
+<td><code>sm_v003/leveled_store/</code></td>
+<td>leader 快速恢复，不重放整段 raft log</td>
+</tr>
+<tr>
+<td><strong>WAL 日志（v004）替代 sled</strong></td>
+<td><code>raft_log_v004/</code></td>
+<td>sled 的尾延迟与压缩抖动被去掉</td>
+</tr>
+<tr>
+<td><strong><code>kv_read_v1</code> 流式读</strong></td>
+<td>meta server 1.2.163+</td>
+<td>list_kv 大前缀不再一次性内存膨胀</td>
+</tr>
+<tr>
+<td><strong><code>install_snapshot_v1</code></strong></td>
+<td>server 1.2.212+</td>
+<td>安装快照分片化</td>
+</tr>
+<tr>
+<td><strong><code>MetaStoreProvider</code> + 复用连接</strong></td>
+<td><code>src/meta/store/src/lib.rs</code> + <code>databend-common-meta-store</code></td>
+<td>多 query 共享同一个 gRPC 连接池</td>
+</tr>
+<tr>
+<td><strong>CAS 写</strong>（<code>prev_seq</code> 比较）</td>
+<td><code>KvApi::transaction</code></td>
+<td>写冲突不需要悲观锁</td>
+</tr>
+<tr>
+<td><strong>Watch API</strong></td>
+<td><code>KvApi::watch</code></td>
+<td>长连接订阅元数据变更（如 cluster 节点上下线）</td>
+</tr>
+<tr>
+<td><strong>Linearizable read</strong></td>
+<td>OpenRaft <code>read_index</code></td>
+<td>读到 leader 上最新已 committed 数据</td>
+</tr>
+<tr>
+<td><strong>OpenRaft 异步 apply</strong></td>
+<td>OpenRaft 内部</td>
+<td>log replication 与 SM apply 解耦，避免 leader 卡 IO</td>
+</tr>
+</tbody>
+</table>
+<h2>6. 与同类系统的对照</h2>
+<table>
+<thead>
+<tr>
+<th>系统</th>
+<th>元数据载体</th>
+<th>共识</th>
+<th>客户端协议</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hive Metastore</td>
+<td>RDBMS（Postgres/MySQL）</td>
+<td>数据库自身</td>
+<td>Thrift</td>
+</tr>
+<tr>
+<td>Iceberg REST Catalog</td>
+<td>任意（取决于 backend）</td>
+<td>后端决定</td>
+<td>HTTP REST</td>
+</tr>
+<tr>
+<td>Snowflake</td>
+<td>厂商内部</td>
+<td>私有</td>
+<td>私有</td>
+</tr>
+<tr>
+<td>ClickHouse Keeper</td>
+<td>ClickHouse Keeper</td>
+<td>ZAB-like</td>
+<td>RAFT(ZK 协议)</td>
+</tr>
+<tr>
+<td>StarRocks FE</td>
+<td>BDB-JE / FE 自身</td>
+<td>Paxos-ish</td>
+<td>gRPC</td>
+</tr>
+<tr>
+<td><strong>Databend Meta</strong></td>
+<td><strong>OpenRaft + sm_v003 (LeveledStore) + raft_log_v004 (WAL)</strong></td>
+<td><strong>Raft (OpenRaft)</strong></td>
+<td><strong>gRPC + protobuf</strong>（含 watch/stream API）</td>
+</tr>
+<tr>
+<td>etcd</td>
+<td>etcd raft + boltdb</td>
+<td>Raft</td>
+<td>gRPC + protobuf</td>
+</tr>
+</tbody>
+</table>
+<p>Databend Meta 的核心差异是<strong>所有元数据类型与 protobuf 用版本号链表演进</strong>——这套 META_CHANGE_LOG 工具链让上百个 schema 变更能可控滚动升级。</p>
+<h2>7. 端到端案例</h2>
+<p><code>SELECT count(*) FROM t WHERE x &gt; 1</code> 涉及到 meta 的部分：</p>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Bind as Binder
+  participant Cat as CatalogManager
+  participant Cli as MetaGrpcClient
+  participant Meta as Meta Leader
+  participant SM as sm_v003
+
+  Bind-&gt;&gt;Cat: get_table(&quot;default&quot;,&quot;t&quot;)
+  Cat-&gt;&gt;Cli: SchemaApi.get_table_by_name(tenant, db, t)
+  Cli-&gt;&gt;Meta: kv_read_v1(GetReq[__fd_table_id_by_name/...])
+  Meta-&gt;&gt;SM: read
+  SM--&gt;&gt;Meta: SeqV { seq, value=table_id }
+  Cli-&gt;&gt;Meta: kv_read_v1(GetReq[__fd_table_meta/&lt;table_id&gt;])
+  Meta-&gt;&gt;SM: read
+  SM--&gt;&gt;Meta: SeqV { seq, value=TableMeta protobuf bytes(ver=N) }
+  Cli-&gt;&gt;Cli: proto-conv decode → TableMeta
+  Cli--&gt;&gt;Cat: TableMeta（含 OPT_KEY_SNAPSHOT_LOCATION）
+  Cat--&gt;&gt;Bind: TableInfo
+  Note over Bind: 后续走 06 文档的 FUSE 路径，meta 不再参与
+</div>
+<p>对于一次写（INSERT/COPY/MERGE）：</p>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant CS as FuseTable.commit
+  participant Cli as MetaGrpcClient
+  participant L as Meta Leader
+  participant Q as Raft 队列
+  participant SM as sm_v003
+
+  CS-&gt;&gt;Cli: update_table_meta(prev_seq, new_meta)
+  Cli-&gt;&gt;L: TxnRequest { Compare prev_seq, Then Put new TableMeta }
+  L-&gt;&gt;Q: append entry
+  Q-&gt;&gt;L: 多数派 ack
+  L-&gt;&gt;SM: apply
+  SM--&gt;&gt;L: ok / 失败
+  L--&gt;&gt;Cli: TxnReply
+  Cli--&gt;&gt;CS: ok 或 set_backoff 重试
+</div>
+<p>注意：写路径里 query 不直接管 raft；它只关心「TxnReply 是否成功」。所有强一致 + 多副本由 OpenRaft 在 server 侧提供。</p>
+<h2>8. 未解之谜</h2>
+<ul>
+<li><strong>gRPC service 的实际 proto 定义</strong>：本仓库没有，外部仓库在 <code>databend-meta/crates/common/proto/</code>。两端的 <code>MetaGrpcClient</code> 与 <code>RaftService</code> 通过哪几个 RPC（<code>forward / kv_api / kv_read_v1 / install_snapshot_v1 / append / vote / watch</code>）连接？没有逐一展开。</li>
+<li><strong><code>DispatcherHandle</code></strong> 在 MetaNode 中是个黑盒：负责把 client 请求多路复用到内部 actor，是 OpenRaft <code>Raft</code> 句柄之外的另一条路径。值得单独读。</li>
+<li><strong><code>SpawnApi</code> 泛型</strong> 让 MetaNode 高度可测试，但生产 SP 实例叫什么？看起来是 <code>DatabendRuntime</code>（出现在 <code>src/meta/runtime/</code>）。</li>
+<li><strong><code>Lock</code> 类型</strong>（<code>src/meta/app/src/schema/lock.rs</code>）：与 06 文档中 commit 的乐观 CAS 是配合还是替代关系？lock 似乎是 ad-hoc 的"互斥粒度"，但具体是哪些 DDL 在用？需读 <code>LockManager</code>（query 侧）。</li>
+<li><strong><code>SnapshotRef</code> v163 / v168</strong>：META_CHANGE_LOG v163 加入又在 v168 删除——这种回滚意味着曾尝试把 snapshot 直接放进 meta，又改回了对象存储。背景信息没有写在源码里。</li>
+<li><strong>跨仓库行号偏移</strong>：<code>/tmp/databend-meta</code> 是浅克隆，<strong>未钉死 commit</strong>；如果 main 分支后续重构，本篇 <code>meta_node.rs::L≈140</code> 等行号会失效，函数/类型名会保留。</li>
+</ul>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

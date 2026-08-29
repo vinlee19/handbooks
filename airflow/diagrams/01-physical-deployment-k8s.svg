@@ -1,0 +1,179 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" font-family="ui-sans-serif, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="12">
+  <defs>
+    <marker id="arrK" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrKg" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#16a34a"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="760" fill="#f8fafc"/>
+  <text x="600" y="32" text-anchor="middle" font-size="20" font-weight="800" fill="#0f172a">Airflow 3.x 物理部署图 · Kubernetes + KubernetesExecutor</text>
+  <text x="600" y="52" text-anchor="middle" font-size="11" fill="#475569">每个 Airflow 组件对应一个 Deployment / StatefulSet；任务以独立 Pod 形态拉起</text>
+
+  <!-- Kubernetes Cluster outer box -->
+  <rect x="20" y="70" width="1160" height="600" rx="14" fill="#ffffff" stroke="#334155" stroke-width="2" stroke-dasharray="8 4"/>
+  <text x="40" y="92" font-weight="700" font-size="13" fill="#0f172a">Kubernetes Cluster</text>
+  <text x="40" y="108" font-size="10" fill="#64748b">namespace: airflow</text>
+
+  <!-- Ingress -->
+  <g>
+    <rect x="60" y="130" width="200" height="58" rx="8" fill="#f1f5f9" stroke="#475569"/>
+    <text x="160" y="152" text-anchor="middle" font-weight="700">Ingress / LoadBalancer</text>
+    <text x="160" y="170" text-anchor="middle" font-size="10" fill="#475569">airflow.example.com</text>
+    <text x="160" y="184" text-anchor="middle" font-size="10" fill="#475569">TLS 终止</text>
+  </g>
+
+  <!-- API Server (Deployment) -->
+  <g>
+    <rect x="320" y="120" width="300" height="100" rx="10" fill="#e2e8f0" stroke="#475569" stroke-width="2"/>
+    <text x="470" y="142" text-anchor="middle" font-weight="700">Deployment: airflow-apiserver</text>
+    <rect x="335" y="152" width="125" height="56" rx="5" fill="#ffffff" stroke="#64748b"/>
+    <text x="397" y="170" text-anchor="middle" font-size="11" font-weight="700">Pod 1</text>
+    <text x="397" y="184" text-anchor="middle" font-size="9" fill="#475569">FastAPI + uvicorn</text>
+    <text x="397" y="196" text-anchor="middle" font-size="9" fill="#475569">Public + Execution API</text>
+    <rect x="480" y="152" width="125" height="56" rx="5" fill="#ffffff" stroke="#64748b"/>
+    <text x="542" y="170" text-anchor="middle" font-size="11" font-weight="700">Pod N (HPA)</text>
+    <text x="542" y="184" text-anchor="middle" font-size="9" fill="#475569">同上</text>
+  </g>
+
+  <!-- React UI Static (served by apiserver or separate Service) -->
+  <g>
+    <rect x="640" y="130" width="240" height="58" rx="8" fill="#f1f5f9" stroke="#94a3b8"/>
+    <text x="760" y="152" text-anchor="middle" font-weight="700">Service: airflow-ui-static</text>
+    <text x="760" y="170" text-anchor="middle" font-size="10" fill="#475569">React 静态资源 (Vite 构建)</text>
+    <text x="760" y="184" text-anchor="middle" font-size="10" fill="#475569">由 apiserver 复用 mount</text>
+  </g>
+
+  <!-- Scheduler StatefulSet (multi-replica HA) -->
+  <g>
+    <rect x="60" y="250" width="300" height="120" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+    <text x="210" y="272" text-anchor="middle" font-weight="700" fill="#1e3a8a">StatefulSet: airflow-scheduler</text>
+    <text x="210" y="288" text-anchor="middle" font-size="10" fill="#1e40af">HA：可 2~3 副本 + 行锁竞争</text>
+    <rect x="75" y="298" width="130" height="60" rx="5" fill="#ffffff" stroke="#2563eb"/>
+    <text x="140" y="316" text-anchor="middle" font-size="11" font-weight="700">scheduler-0</text>
+    <text x="140" y="330" text-anchor="middle" font-size="9" fill="#1e40af">SchedulerJobRunner</text>
+    <text x="140" y="344" text-anchor="middle" font-size="9" fill="#1e40af">_do_scheduling()</text>
+    <rect x="215" y="298" width="130" height="60" rx="5" fill="#ffffff" stroke="#2563eb"/>
+    <text x="280" y="316" text-anchor="middle" font-size="11" font-weight="700">scheduler-1</text>
+    <text x="280" y="330" text-anchor="middle" font-size="9" fill="#1e40af">同上（SKIP LOCKED）</text>
+  </g>
+
+  <!-- DAG Processor -->
+  <g>
+    <rect x="380" y="250" width="280" height="120" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+    <text x="520" y="272" text-anchor="middle" font-weight="700" fill="#5b21b6">Deployment: airflow-dag-processor</text>
+    <text x="520" y="288" text-anchor="middle" font-size="10" fill="#4c1d95">可多副本，各自负责不同 Bundle</text>
+    <rect x="395" y="298" width="120" height="60" rx="5" fill="#ffffff" stroke="#7c3aed"/>
+    <text x="455" y="316" text-anchor="middle" font-size="11" font-weight="700">dfp-0</text>
+    <text x="455" y="330" text-anchor="middle" font-size="9" fill="#5b21b6">Manager</text>
+    <text x="455" y="344" text-anchor="middle" font-size="9" fill="#5b21b6">+ child subprocs</text>
+    <rect x="525" y="298" width="120" height="60" rx="5" fill="#ffffff" stroke="#7c3aed"/>
+    <text x="585" y="316" text-anchor="middle" font-size="11" font-weight="700">dfp-1</text>
+    <text x="585" y="330" text-anchor="middle" font-size="9" fill="#5b21b6">Bundle B</text>
+  </g>
+
+  <!-- Triggerer -->
+  <g>
+    <rect x="680" y="250" width="280" height="120" rx="10" fill="#ffedd5" stroke="#ea580c" stroke-width="2"/>
+    <text x="820" y="272" text-anchor="middle" font-weight="700" fill="#9a3412">StatefulSet: airflow-triggerer</text>
+    <text x="820" y="288" text-anchor="middle" font-size="10" fill="#7c2d12">asyncio event loop · 高并发 Trigger</text>
+    <rect x="695" y="298" width="120" height="60" rx="5" fill="#ffffff" stroke="#ea580c"/>
+    <text x="755" y="316" text-anchor="middle" font-size="11" font-weight="700">triggerer-0</text>
+    <text x="755" y="330" text-anchor="middle" font-size="9" fill="#9a3412">可承载</text>
+    <text x="755" y="344" text-anchor="middle" font-size="9" fill="#9a3412">100~1000 trigger</text>
+    <rect x="825" y="298" width="120" height="60" rx="5" fill="#ffffff" stroke="#ea580c"/>
+    <text x="885" y="316" text-anchor="middle" font-size="11" font-weight="700">triggerer-1</text>
+    <text x="885" y="330" text-anchor="middle" font-size="9" fill="#9a3412">分片</text>
+  </g>
+
+  <!-- Task Pods (per-task) -->
+  <g>
+    <rect x="980" y="250" width="190" height="380" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+    <text x="1075" y="272" text-anchor="middle" font-weight="700" fill="#14532d">Task Pods (动态)</text>
+    <text x="1075" y="288" text-anchor="middle" font-size="10" fill="#166534">KubernetesExecutor 每 TI 拉起一个 Pod</text>
+    <g>
+      <rect x="995" y="300" width="160" height="64" rx="5" fill="#ffffff" stroke="#16a34a"/>
+      <text x="1075" y="318" text-anchor="middle" font-size="11" font-weight="700">task-pod-abc123</text>
+      <text x="1075" y="334" text-anchor="middle" font-size="9" fill="#166534">Container: supervisor</text>
+      <text x="1075" y="346" text-anchor="middle" font-size="9" fill="#166534">Container: task-runner</text>
+      <text x="1075" y="358" text-anchor="middle" font-size="9" fill="#ca8a04">(用户代码 + Provider)</text>
+    </g>
+    <g>
+      <rect x="995" y="378" width="160" height="64" rx="5" fill="#ffffff" stroke="#16a34a"/>
+      <text x="1075" y="396" text-anchor="middle" font-size="11" font-weight="700">task-pod-def456</text>
+      <text x="1075" y="412" text-anchor="middle" font-size="9" fill="#166534">init: dag-bundle-sync</text>
+      <text x="1075" y="424" text-anchor="middle" font-size="9" fill="#166534">main: supervisor + runner</text>
+    </g>
+    <g>
+      <rect x="995" y="456" width="160" height="64" rx="5" fill="#ffffff" stroke="#16a34a"/>
+      <text x="1075" y="474" text-anchor="middle" font-size="11" font-weight="700">task-pod-ghi789</text>
+      <text x="1075" y="492" text-anchor="middle" font-size="9" fill="#166534">SA: airflow-worker</text>
+      <text x="1075" y="504" text-anchor="middle" font-size="9" fill="#166534">JWT 注入 env</text>
+    </g>
+    <text x="1075" y="556" text-anchor="middle" font-size="10" fill="#166534" font-style="italic">完成后 Pod 自动 Terminated</text>
+    <text x="1075" y="572" text-anchor="middle" font-size="10" fill="#166534" font-style="italic">watcher 上报状态</text>
+    <text x="1075" y="600" text-anchor="middle" font-size="10" fill="#166534">⚠ 不连数据库</text>
+    <text x="1075" y="616" text-anchor="middle" font-size="10" fill="#166534">仅 Execution API</text>
+  </g>
+
+  <!-- PostgreSQL -->
+  <g>
+    <rect x="60" y="430" width="280" height="100" rx="10" fill="#fee2e2" stroke="#dc2626" stroke-width="2"/>
+    <text x="200" y="452" text-anchor="middle" font-weight="700" fill="#991b1b">StatefulSet: postgresql</text>
+    <text x="200" y="468" text-anchor="middle" font-size="10" fill="#7f1d1d">PVC（持久化）</text>
+    <rect x="80" y="478" width="240" height="42" rx="5" fill="#ffffff" stroke="#dc2626"/>
+    <text x="200" y="494" text-anchor="middle" font-size="10" font-weight="700">postgres-0 (Primary)</text>
+    <text x="200" y="510" text-anchor="middle" font-size="9" fill="#7f1d1d">17 张核心表 · 100+ Alembic 迁移</text>
+  </g>
+
+  <!-- Redis (broker, optional, can skip in K8s) -->
+  <g>
+    <rect x="360" y="430" width="200" height="100" rx="10" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+    <text x="460" y="452" text-anchor="middle" font-weight="700" fill="#991b1b">(可选) Redis</text>
+    <text x="460" y="468" text-anchor="middle" font-size="10" fill="#7f1d1d">用于 Result Backend / 缓存</text>
+    <text x="460" y="484" text-anchor="middle" font-size="10" fill="#7f1d1d">K8sExecutor 通常不需 Broker</text>
+  </g>
+
+  <!-- ConfigMap & Secret -->
+  <g>
+    <rect x="580" y="430" width="220" height="100" rx="10" fill="#f5f3ff" stroke="#94a3b8"/>
+    <text x="690" y="452" text-anchor="middle" font-weight="700">ConfigMap / Secret</text>
+    <text x="690" y="468" text-anchor="middle" font-size="10" fill="#475569">airflow.cfg / env vars</text>
+    <text x="690" y="484" text-anchor="middle" font-size="10" fill="#475569">JWT secret (HMAC)</text>
+    <text x="690" y="500" text-anchor="middle" font-size="10" fill="#475569">DB connection string</text>
+  </g>
+
+  <!-- PVC for logs (shared) -->
+  <g>
+    <rect x="820" y="430" width="140" height="100" rx="10" fill="#fdf4ff" stroke="#94a3b8"/>
+    <text x="890" y="452" text-anchor="middle" font-weight="700">PVC / S3</text>
+    <text x="890" y="468" text-anchor="middle" font-size="10" fill="#475569">远端日志</text>
+    <text x="890" y="484" text-anchor="middle" font-size="10" fill="#475569">XCom backend</text>
+    <text x="890" y="500" text-anchor="middle" font-size="10" fill="#475569">Bundle 缓存</text>
+  </g>
+
+  <!-- arrows -->
+  <line x1="260" y1="160" x2="320" y2="160" stroke="#334155" stroke-width="1.5" marker-end="url(#arrK)"/>
+  <line x1="160" y1="370" x2="160" y2="430" stroke="#334155" stroke-width="1.5" marker-end="url(#arrK)"/>
+  <text x="168" y="404" font-size="9" fill="#334155">DB</text>
+  <line x1="520" y1="370" x2="220" y2="430" stroke="#334155" stroke-width="1.5" marker-end="url(#arrK)"/>
+  <line x1="820" y1="370" x2="280" y2="430" stroke="#334155" stroke-width="1.5" marker-end="url(#arrK)"/>
+  <line x1="470" y1="220" x2="200" y2="430" stroke="#334155" stroke-width="1" stroke-dasharray="3 3"/>
+  <text x="280" y="350" font-size="9" fill="#334155" font-style="italic">apiserver 也连 DB</text>
+
+  <!-- Task Pod → API Server (green = JWT) -->
+  <line x1="980" y1="316" x2="620" y2="170" stroke="#16a34a" stroke-width="2" marker-end="url(#arrKg)"/>
+  <text x="640" y="200" font-size="10" fill="#16a34a" font-weight="700">Execution API + JWT</text>
+
+  <!-- Scheduler creates pods via API -->
+  <line x1="360" y1="310" x2="980" y2="316" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="3 3" marker-end="url(#arrK)"/>
+  <text x="640" y="304" font-size="10" fill="#1e40af" font-style="italic">K8s API: 创建 Pod (executor watcher)</text>
+
+  <!-- Bottom note -->
+  <g transform="translate(40,690)">
+    <rect width="1120" height="50" rx="8" fill="#ecfeff" stroke="#0891b2"/>
+    <text x="14" y="20" font-size="11" font-weight="700" fill="#155e75">网络与权限关键点</text>
+    <text x="14" y="38" font-size="11" fill="#164e63">• Task Pod 的 ServiceAccount 仅赋予最小权限：能调用 Execution API，但 NetworkPolicy 禁止它连 PostgreSQL。JWT 由 apiserver 颁发，scope=`ti:self`，TTL 短，自动续期。</text>
+  </g>
+</svg>

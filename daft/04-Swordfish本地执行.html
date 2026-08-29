@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>04 · Swordfish 本地执行 · Daft 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#a3e635}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">🐡 <span>Daft 源码深度解析</span></span><nav class="nav"><a href="index.html">总览</a><a href="00-总览.html">Daft 总览:从 `df.collect()` 到 Arrow Buffer</a><a href="01-核心类型与多模态.html">核心类型与多模态:Series / RecordBatch / MicroPartition / Image</a><a href="02-表达式DSL与函数.html">表达式 DSL 与函数:三阶段列解析、`Expr` 枚举、`FunctionRegistry`</a><a href="03-逻辑计划与优化器.html">逻辑计划与优化器</a><a href="04-Swordfish本地执行.html" class=on>Swordfish 本地执行</a><a href="05-分布式执行.html">分布式执行</a><a href="06-IO与扫描下推.html">IO 与扫描下推</a><a href="07-SQL与Python桥.html">SQL 与 Python 桥</a></nav></div></header>
+<main class="wrap">
+<h1>04 · Swordfish 本地执行</h1>
+<blockquote>
+<p>基准 commit: <code>fa0d066204eae630962af7b22a5ab559ecd454fb</code> (v0.7.10-13)
+文档版本: v0.3.0-dev0 / Rust 2024
+阅读前置: <a href="./03-逻辑计划与优化器.html">03 逻辑计划与优化器</a> · <a href="./06-IO与扫描下推.html">06 IO 与扫描下推</a></p>
+</blockquote>
+<hr />
+<h2>1. 解决了什么问题</h2>
+<p><strong>Swordfish</strong> 是 Daft 的本地执行器代号(crate <code>daft-local-execution</code>)。它要解决:</p>
+<ol>
+<li><strong>morsel-driven 并行</strong>:把单个查询拆成大量 ~10万行 的小 chunk(MicroPartition),让 N 个 CPU worker 同时干活,不要被一个慢算子卡住整个 pipeline。</li>
+<li><strong>背压</strong>:慢 sink(写文件)不能让 fast source(顺序扫 Parquet)爆内存。</li>
+<li><strong>算子异质性</strong>:UDF、HashJoin build、Sort、Limit 各自有不同的并发上限和 morsel 大小偏好——执行器要配合。</li>
+<li><strong>任务/通道混合模型</strong>:既不是 pure push(Volcano-style 倒拉),也不是 pure pull(Snowflake-style 推送)。Daft 用「<strong><code>tokio::select!</code> 事件循环 + bounded channel + JoinSet</strong>」的混合模型,由每个算子节点自管 worker 池。</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>模型</th>
+<th>优点</th>
+<th>缺点</th>
+<th>代表</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pull (Volcano)</td>
+<td>简单、流式</td>
+<td>函数调用开销大;并行难</td>
+<td>DuckDB 旧版</td>
+</tr>
+<tr>
+<td>Push (Vectorized push)</td>
+<td>缓存友好</td>
+<td>推到爆内存,需要显式背压</td>
+<td>Polars、Photon</td>
+</tr>
+<tr>
+<td>Push + control flow</td>
+<td>可暂停</td>
+<td>复杂</td>
+<td>DuckDB 新 pipeline</td>
+</tr>
+<tr>
+<td><strong>Morsel-driven + tokio actor</strong></td>
+<td>算子级并行/异步 IO 直接复用</td>
+<td>调度更复杂</td>
+<td><strong>Daft Swordfish</strong></td>
+</tr>
+</tbody>
+</table>
+<div class="mermaid">
+flowchart LR
+    Q[LogicalPlan 优化后] --&gt;|translate| LP[LocalPhysicalPlan]
+    LP --&gt;|build_pipeline| PIPE[Pipeline 节点树]
+    PIPE --&gt;|run_execution_loop| RUN[多 worker 同时跑]
+    RUN --&gt;|MicroPartition 流| OUT[Python collect / write]
+
+    style PIPE fill:#fff2cc
+    style RUN fill:#dae8fc
+</div>
+<hr />
+<h2>2. 整体设计</h2>
+<h3>2.1 模块拓扑</h3>
+<div class="mermaid">
+flowchart TD
+    subgraph daft-local-plan
+        LPP[LocalPhysicalPlan enum&lt;br/&gt;plan.rs:62]
+        TR[translate.rs&lt;br/&gt;logical → local]
+    end
+    subgraph daft-local-execution
+        run[run.rs&lt;br/&gt;NativeExecutor / run_execution_loop]
+        pipe[pipeline.rs&lt;br/&gt;PipelineNode trait + next_event]
+        srcs[&quot;sources/&lt;br/&gt;Source trait + SourceNode&quot;]
+        ints[&quot;intermediate_ops/&lt;br/&gt;IntermediateOperator trait&quot;]
+        ssinks[&quot;streaming_sink/&lt;br/&gt;StreamingSink trait&quot;]
+        sinks[&quot;sinks/&lt;br/&gt;BlockingSink (Aggregate/Sort/...)&quot;]
+        bm[batch_manager.rs&lt;br/&gt;BatchManager]
+        db[dynamic_batching/&lt;br/&gt;BatchingStrategy]
+        chan[channel.rs&lt;br/&gt;tokio mpsc 包装]
+        rs[runtime_stats/&lt;br/&gt;每算子度量]
+        rmgr[resource_manager.rs&lt;br/&gt;UDF resource 跟踪]
+    end
+    subgraph daft-writers
+        wr[PhysicalWriter + CommitWrite]
+    end
+
+    LPP --&gt; TR
+    TR --&gt; pipe
+    pipe --&gt; srcs
+    pipe --&gt; ints
+    pipe --&gt; ssinks
+    pipe --&gt; sinks
+    pipe --&gt; bm
+    bm --&gt; db
+    pipe --&gt; chan
+    pipe --&gt; rs
+    ints --&gt; rmgr
+    sinks --&gt; wr
+    run --&gt; pipe
+
+    style pipe fill:#fff2cc
+    style bm fill:#dae8fc
+    style db fill:#dae8fc
+</div>
+<h3>2.2 算子家族类图</h3>
+<div class="mermaid">
+classDiagram
+    class PipelineNode {
+        &lt;&lt;trait&gt;&gt;
+        +children() Vec
+        +start(maintain_order, runtime) Receiver~PipelineMessage~
+        +propagate_morsel_size_requirement(...)
+        +node_id() usize
+    }
+
+    class Source {
+        &lt;&lt;trait&gt;&gt;
+        +get_data(maintain_order, stats, chunk_size) SourceStream
+        +schema() &amp;SchemaRef
+    }
+
+    class IntermediateOperator {
+        &lt;&lt;trait&gt;&gt;
+        +execute(MP, state, stats, spawner, input_id) IntermediateOpExecuteResult
+        +make_state() State
+        +max_concurrency() usize
+        +morsel_size_requirement() Option~MorselSizeRequirement~
+        +batching_strategy() BatchingStrategy
+    }
+
+    class StreamingSink {
+        &lt;&lt;trait&gt;&gt;
+        +execute(MP, state, ...) StreamingSinkExecuteResult
+        +finalize(states, spawner) StreamingSinkFinalizeResult
+        +make_state() State
+        +max_concurrency() usize
+    }
+
+    class BlockingSink {
+        &lt;&lt;trait&gt;&gt;
+        +sink(MP) Result
+        +finalize() Vec~MicroPartition~
+    }
+
+    PipelineNode &lt;|.. SourceNode
+    PipelineNode &lt;|.. IntermediateNode
+    PipelineNode &lt;|.. StreamingSinkNode
+    PipelineNode &lt;|.. BlockingSinkNode
+    SourceNode o-- Source
+    IntermediateNode o-- IntermediateOperator
+    StreamingSinkNode o-- StreamingSink
+    BlockingSinkNode o-- BlockingSink
+</div>
+<p>源码定位:</p>
+<ul>
+<li><code>src/daft-local-plan/src/plan.rs:62</code> — <code>pub enum LocalPhysicalPlan</code>(40+ 变体)</li>
+<li><code>src/daft-local-execution/src/pipeline.rs:224</code> — <code>pub(crate) trait PipelineNode</code></li>
+<li><code>src/daft-local-execution/src/sources/source.rs:140</code> — <code>pub trait Source</code></li>
+<li><code>src/daft-local-execution/src/intermediate_ops/intermediate_op.rs:41</code> — <code>pub(crate) trait IntermediateOperator</code></li>
+<li><code>src/daft-local-execution/src/streaming_sink/base.rs:50</code> — <code>pub(crate) trait StreamingSink</code></li>
+<li><code>src/daft-local-execution/src/sinks/blocking_sink.rs</code> — <code>pub(crate) trait BlockingSink</code></li>
+</ul>
+<h3>2.3 Pipeline 物理拓扑</h3>
+<div class="mermaid">
+flowchart LR
+    subgraph &quot;Pipeline (单查询)&quot;
+        S[SourceNode&lt;br/&gt;Parquet ScanTask] --&gt;|chan_0&lt;br/&gt;bounded| F[IntermediateNode&lt;br/&gt;Filter]
+        F --&gt;|chan_1| P[IntermediateNode&lt;br/&gt;Project]
+        P --&gt;|chan_2| AGG_BUILD[BlockingSink&lt;br/&gt;HashAggregate Build]
+        AGG_BUILD --&gt;|finalize| AGG_PROBE[StreamingSink&lt;br/&gt;HashAggregate Output]
+        AGG_PROBE --&gt;|chan_3| LIM[StreamingSink&lt;br/&gt;Limit]
+        LIM --&gt;|chan_4| WRITE[BlockingSink&lt;br/&gt;PhysicalWrite]
+        WRITE --&gt;|finalize| COMMIT[BlockingSink&lt;br/&gt;CommitWrite]
+    end
+
+    classDef src fill:#d5e8d4
+    classDef int fill:#dae8fc
+    classDef sink fill:#fff2cc
+    class S src
+    class F,P,AGG_PROBE,LIM int
+    class AGG_BUILD,WRITE,COMMIT sink
+</div>
+<p>每条边都是一个 <code>bounded mpsc channel</code>(<code>channel.rs</code>),容量决定背压力度——下游慢,上游 <code>send().await</code> 自然挂起。</p>
+<hr />
+<h2>3. 关键数据结构</h2>
+<h3>3.1 <code>PipelineMessage</code> 与 <code>PipelineEvent</code></h3>
+<p><code>src/daft-local-execution/src/pipeline.rs:83</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">PipelineMessage</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    Morsel { input_id: </span><span style="color: #A6E22E">InputId</span><span style="color: #F8F8F2">, partition: </span><span style="color: #A6E22E">MicroPartition</span><span style="color: #F8F8F2"> },</span>
+<span style="color: #F8F8F2">    FlightPartitionRef { input_id: </span><span style="color: #A6E22E">InputId</span><span style="color: #F8F8F2">, partition_ref: </span><span style="color: #A6E22E">FlightPartitionRef</span><span style="color: #F8F8F2"> },</span>
+<span style="color: #F8F8F2">    Flush(InputId),</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #959077">// pipeline.rs:98</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">PipelineEvent</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">TaskResult</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    TaskCompleted(TaskResult),</span>
+<span style="color: #F8F8F2">    Morsel { input_id: </span><span style="color: #A6E22E">InputId</span><span style="color: #F8F8F2">, partition: </span><span style="color: #A6E22E">MicroPartition</span><span style="color: #F8F8F2"> },</span>
+<span style="color: #F8F8F2">    FlightPartitionRef,</span>
+<span style="color: #F8F8F2">    Flush(InputId),</span>
+<span style="color: #F8F8F2">    InputClosed,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<ul>
+<li><code>PipelineMessage</code> 在通道里流动(数据/控制信号);</li>
+<li><code>PipelineEvent</code> 是节点事件循环 <code>next_event</code>(<code>pipeline.rs:111</code>)的统一返回类型——它把 <em>上游来的消息</em> 和 <em>本地 worker 完成</em> 这两类异步事件归一化。</li>
+</ul>
+<h3>3.2 <code>MorselSizeRequirement</code>:三档 morsel 大小</h3>
+<p><code>pipeline.rs:151</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">MorselSizeRequirement</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    Strict(NonZeroUsize),               </span><span style="color: #959077">// 严格固定大小,必须凑齐</span>
+<span style="color: #F8F8F2">    Flexible(</span><span style="color: #66D9EF">usize</span><span style="color: #F8F8F2">, NonZeroUsize),     </span><span style="color: #959077">// 区间 [lower, upper]</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><code>MorselSizeRequirement::combine_requirements</code>(<code>pipeline.rs:179-214</code>)给出"算子链如何协商 morsel 大小":</p>
+<table>
+<thead>
+<tr>
+<th>当前要求</th>
+<th>下游要求</th>
+<th>合并结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>None</code></td>
+<td><code>Strict(s)</code></td>
+<td><code>Flexible(0, s)</code></td>
+</tr>
+<tr>
+<td><code>None</code></td>
+<td><code>Flexible(_, u)</code></td>
+<td><code>Flexible(0, u)</code></td>
+</tr>
+<tr>
+<td><code>Strict(s)</code></td>
+<td>任意</td>
+<td><code>Strict(s)</code>(本节点优先)</td>
+</tr>
+<tr>
+<td><code>Flexible(l, u)</code></td>
+<td><code>Strict(s)</code></td>
+<td><code>Flexible(min(l,s), min(u,s))</code></td>
+</tr>
+<tr>
+<td><code>Flexible(l, u)</code></td>
+<td><code>Flexible(l', u')</code></td>
+<td>区间交集;若不重叠 → 退回下游要求</td>
+</tr>
+</tbody>
+</table>
+<p>默认值在 <code>pipeline.rs:167-176</code>:<code>Flexible(0, default_morsel_size)</code>,从 <code>DaftExecutionConfig.default_morsel_size</code>(典型值 128KiB 行数等价)读出。</p>
+<h3>3.3 <code>IntermediateOperator</code> —— 通用算子接口</h3>
+<p><code>intermediate_op.rs:41-69</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) </span><span style="color: #66D9EF">trait</span><span style="color: #F8F8F2"> IntermediateOperator: Send </span><span style="color: #FF4689">+</span><span style="color: #F8F8F2"> Sync {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">type</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">State</span><span style="color: #F8F8F2">: Send </span><span style="color: #FF4689">+</span><span style="color: #F8F8F2"> Sync </span><span style="color: #FF4689">+</span><span style="color: #F8F8F2"> Unpin;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">type</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">Stats</span><span style="color: #F8F8F2">: </span><span style="color: #A6E22E">RuntimeStats</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> DefaultRuntimeStats;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">type</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">BatchingStrategy</span><span style="color: #F8F8F2">: </span><span style="color: #A6E22E">BatchingStrategy</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">+</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">&#39;</span><span style="color: #F8F8F2">static;</span>
+
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">execute</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self, input: </span><span style="color: #A6E22E">MicroPartition</span><span style="color: #F8F8F2">, state: </span><span style="color: #A6E22E">Self</span><span style="color: #F8F8F2">::State,</span>
+<span style="color: #F8F8F2">               runtime_stats: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Self::Stats</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">, task_spawner: </span><span style="color: #66D9EF">&amp;</span><span style="color: #A6E22E">ExecutionTaskSpawner</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">               input_id: </span><span style="color: #A6E22E">InputId</span><span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">IntermediateOpExecuteResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Self</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">make_state</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self) -&gt; </span><span style="color: #A6E22E">Self</span><span style="color: #F8F8F2">::State;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">max_concurrency</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self) -&gt; </span><span style="color: #66D9EF">usize</span><span style="color: #F8F8F2"> { get_compute_pool_num_threads() }</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">morsel_size_requirement</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self) -&gt; Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">MorselSizeRequirement</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> { None }</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">batching_strategy</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self) -&gt; </span><span style="color: #A6E22E">DaftResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Self::BatchingStrategy</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<ul>
+<li><strong><code>State</code></strong> 是每个 worker 自己持有的可变状态(如 hash table 累积)。</li>
+<li><strong><code>max_concurrency</code></strong> 控制 worker 池上限——CPU 算子默认 <code>compute_pool_num_threads</code>,但 UDF / VLLM 等可能需要单实例模型,会重写为 1 或更小。</li>
+<li><strong><code>morsel_size_requirement</code></strong> 与 <strong><code>batching_strategy</code></strong> 配合 <code>BatchManager</code> 决定如何把上游的 chunks 拼成本算子需要的 batch 大小。</li>
+</ul>
+<h3>3.4 <code>StreamingSinkOutput</code> 与 <code>StreamingSinkFinalizeOutput</code></h3>
+<p><code>streaming_sink/base.rs:32-43</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">StreamingSinkOutput</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    NeedMoreInput(Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">MicroPartition</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">),  </span><span style="color: #959077">// 已可吐部分输出,但仍要更多输入</span>
+<span style="color: #F8F8F2">    Finished(Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">MicroPartition</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">),       </span><span style="color: #959077">// 提前完结(如 Limit 满了)</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">StreamingSinkFinalizeOutput</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Op</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    HasMoreOutput { states: Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Op::State</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">, output: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">MicroPartition</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> },</span>
+<span style="color: #F8F8F2">    Finished(Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">MicroPartition</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">),</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><code>Limit</code> 是典型 streaming sink:每来一个 morsel,它检查累积行数,<strong>未到 limit</strong>就 <code>NeedMoreInput(Some(passthrough))</code>,<strong>到 limit</strong> 就 <code>Finished(Some(trimmed))</code>,后续 morsel 直接被反向闸断。</p>
+<h3>3.5 <code>BatchManager</code> 与 <code>BatchingStrategy</code></h3>
+<p><code>src/daft-local-execution/src/batch_manager.rs</code> 是缓冲器:每个 <code>IntermediateOperator</code> 上游来的 morsel 先进 <code>BatchManager</code>,凑齐 strategy 期望的大小后再 dispatch 给 worker。</p>
+<p>策略枚举(<code>dynamic_batching/</code>):</p>
+<table>
+<thead>
+<tr>
+<th>策略</th>
+<th>文件</th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>StaticStrategy</code></td>
+<td><code>static_strategy.rs</code></td>
+<td>固定 morsel 大小</td>
+</tr>
+<tr>
+<td><code>DynStrategy</code></td>
+<td><code>dyn_strategy.rs</code></td>
+<td>跟随上下游协商动态调整</td>
+</tr>
+<tr>
+<td><code>LatencyConstrainedStrategy</code></td>
+<td><code>latency_constrained_strategy.rs</code></td>
+<td>不超过 timeout 就吐(用于 streaming write)</td>
+</tr>
+</tbody>
+</table>
+<div class="mermaid">
+stateDiagram-v2
+    [*] --&gt; Empty
+    Empty --&gt; Buffering: 收到 morsel
+    Buffering --&gt; Buffering: morsel 累计 &lt; lower
+    Buffering --&gt; ReadyToDispatch: 累计 ≥ lower
+    ReadyToDispatch --&gt; Dispatched: dispatch_ready_batches
+    Dispatched --&gt; Buffering: 还有更多输入
+    Buffering --&gt; Flushing: 收到 Flush(input_id) 信号
+    Flushing --&gt; Drained: drain 残余
+    Drained --&gt; [*]
+</div>
+<hr />
+<h2>4. 关键源码走读</h2>
+<h3>4.1 <code>translate.rs</code> —— Logical → Local</h3>
+<p><code>src/daft-local-plan/src/translate.rs:21</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">translate</span><span style="color: #F8F8F2">(plan: </span><span style="color: #66D9EF">&amp;</span><span style="color: #A6E22E">LogicalPlanRef</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">                 psets: </span><span style="color: #66D9EF">&amp;</span><span style="color: #A6E22E">HashMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String, Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">MicroPartitionRef</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">)</span>
+<span style="color: #F8F8F2">    -&gt; </span><span style="color: #A6E22E">DaftResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">(LocalPhysicalPlanRef, HashMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">SourceId, Input</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">)</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> source_counter </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> SourceIdCounter::default();</span>
+<span style="color: #F8F8F2">    translate_helper(plan, </span><span style="color: #FF4689">&amp;</span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> source_counter, psets)</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><code>translate_helper</code>(<code>translate.rs:29</code>)是大 match,<strong>每个 <code>LogicalPlan</code> 变体对应一个 <code>LocalPhysicalPlan</code> 变体</strong>(28 ↔ 40+,因为有些逻辑算子拆成 build+probe 两阶段):</p>
+<table>
+<thead>
+<tr>
+<th>LogicalPlan</th>
+<th>LocalPhysicalPlan</th>
+<th>备注</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Source</code></td>
+<td><code>InMemoryScan</code> / <code>PhysicalScan</code> / <code>GlobScan</code> / <code>PlaceholderScan</code></td>
+<td>按 <code>SourceInfo</code> 分派</td>
+</tr>
+<tr>
+<td><code>Filter</code></td>
+<td><code>Filter</code></td>
+<td>1:1</td>
+</tr>
+<tr>
+<td><code>Project</code></td>
+<td><code>Project</code></td>
+<td>1:1</td>
+</tr>
+<tr>
+<td><code>UDFProject</code></td>
+<td><code>UDFProject</code> 或 <code>DistributedActorPoolProject</code>(python feature)</td>
+<td>看是否远端执行</td>
+</tr>
+<tr>
+<td><code>Aggregate</code></td>
+<td><code>UnGroupedAggregate</code> 或 <code>HashAggregate</code></td>
+<td>看 GROUP BY</td>
+</tr>
+<tr>
+<td><code>Distinct</code></td>
+<td><code>Dedup</code></td>
+<td>改名</td>
+</tr>
+<tr>
+<td><code>Join</code></td>
+<td><code>HashJoin</code> / <code>SortMergeJoin</code> / <code>CrossJoin</code></td>
+<td>看 strategy</td>
+</tr>
+<tr>
+<td><code>Sort</code></td>
+<td><code>Sort</code> 或 <code>TopN</code>(若上面有 Limit)</td>
+<td>TopN 优化</td>
+</tr>
+<tr>
+<td><code>Sink</code></td>
+<td><code>PhysicalWrite</code> + <code>CommitWrite</code></td>
+<td>拆 2 阶段</td>
+</tr>
+<tr>
+<td><code>Window</code></td>
+<td>4 个 <code>WindowXXX</code></td>
+<td>按 <code>WindowSpec</code> 拆</td>
+</tr>
+<tr>
+<td><code>Repartition</code></td>
+<td><code>RepartitionWrite</code></td>
+<td>仅 Flotilla</td>
+</tr>
+<tr>
+<td><code>Shuffle</code></td>
+<td><code>ShuffleRead</code></td>
+<td>仅 Flotilla</td>
+</tr>
+</tbody>
+</table>
+<p><code>Shard</code> 在 lowering 阶段必须已被 <code>MaterializeScans</code>/<code>ShardScans</code> 折叠进 <code>Source</code>,否则报 <code>InternalError</code>(<code>translate.rs:99-102</code>)。</p>
+<h3>4.2 <code>next_event</code> —— <code>tokio::select!</code> 事件循环</h3>
+<p><code>pipeline.rs:111-146</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) </span><span style="color: #66D9EF">async</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">next_event</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">TaskResult: Send </span><span style="color: #FF4689">+</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">&#39;</span><span style="color: #F8F8F2">static</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">(</span>
+<span style="color: #F8F8F2">    task_set: </span><span style="color: #66D9EF">&amp;</span><span style="color: #A6E22E">mut</span><span style="color: #F8F8F2"> OrderingAwareJoinSet</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">DaftResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">TaskResult</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    max_concurrency: </span><span style="color: #66D9EF">usize</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    receiver: </span><span style="color: #66D9EF">&amp;</span><span style="color: #A6E22E">mut</span><span style="color: #F8F8F2"> Receiver</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">PipelineMessage</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    input_closed: </span><span style="color: #66D9EF">&amp;</span><span style="color: #A6E22E">mut</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">bool</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">DaftResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">PipelineEvent</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">TaskResult</span><span style="color: #FF4689">&gt;&gt;&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">if</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">*</span><span style="color: #F8F8F2">input_closed </span><span style="color: #FF4689">&amp;&amp;</span><span style="color: #F8F8F2"> task_set.is_empty() { </span><span style="color: #66D9EF">return</span><span style="color: #F8F8F2"> Ok(None); }</span>
+<span style="color: #F8F8F2">    tokio::select</span><span style="color: #FF4689">!</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">        msg </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> receiver.recv(),</span>
+<span style="color: #F8F8F2">              </span><span style="color: #66D9EF">if</span><span style="color: #F8F8F2"> task_set.len() </span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2"> max_concurrency </span><span style="color: #FF4689">&amp;&amp;</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">!*</span><span style="color: #F8F8F2">input_closed </span><span style="color: #FF4689">=&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">            </span><span style="color: #959077">// 上游来 morsel / Flush / 关闭</span>
+<span style="color: #F8F8F2">            </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.</span>
+<span style="color: #F8F8F2">        }</span>
+<span style="color: #F8F8F2">        Some(task_result) </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> task_set.join_next(),</span>
+<span style="color: #F8F8F2">              </span><span style="color: #66D9EF">if</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">!</span><span style="color: #F8F8F2">task_set.is_empty() </span><span style="color: #FF4689">=&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">            </span><span style="color: #959077">// 本节点的 worker 跑完了</span>
+<span style="color: #F8F8F2">            </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.</span>
+<span style="color: #F8F8F2">        }</span>
+<span style="color: #F8F8F2">    }</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<div class="mermaid">
+flowchart TD
+    Start([next_event 循环])
+    Check{input_closed AND&lt;br/&gt;task_set 空?}
+    Done([返回 None,关闭节点])
+    Sel{tokio::select!&lt;br/&gt;哪个 future ready?}
+    Cap{worker 数 &amp;lt; max_concurrency?}
+    NewIn[receiver.recv → Morsel/Flush/InputClosed]
+    Wait[等]
+    TaskDone[task_set.join_next → TaskCompleted]
+
+    Start --&gt; Check
+    Check --&gt;|是| Done
+    Check --&gt;|否| Sel
+    Sel --&gt; Cap
+    Cap --&gt;|是 + receiver 有消息| NewIn
+    Cap --&gt;|否| Wait
+    Sel --&gt; TaskDone
+    NewIn --&gt; Start
+    TaskDone --&gt; Start
+
+    classDef event fill:#fff2cc
+    class NewIn,TaskDone event
+</div>
+<p><strong>两个 guard</strong> 是关键:<code>if task_set.len() &lt; max_concurrency</code> 防止超并发(否则上游灌入会 OOM);<code>if !task_set.is_empty()</code> 在没有进行中任务时不去调 <code>join_next()</code>(否则会立即返回 <code>None</code> 把循环误终止)。</p>
+<h3>4.3 <code>IntermediateNode</code> 一次完整执行</h3>
+<div class="mermaid">
+sequenceDiagram
+    participant Up as 上游 Sender
+    participant Recv as channel&lt;br/&gt;bounded(N)
+    participant Loop as next_event 循环
+    participant BM as BatchManager
+    participant TS as JoinSet (max_concurrency 个 worker)
+    participant Op as IntermediateOperator
+    participant Down as 下游 Sender
+
+    Up-&gt;&gt;Recv: send(Morsel)
+    Recv-&gt;&gt;Loop: receiver.recv() ready
+    Loop-&gt;&gt;BM: add_morsel
+    Loop-&gt;&gt;BM: dispatch_ready_batches
+    alt 凑够 batch
+        BM-&gt;&gt;TS: spawn worker(Op::execute(input, state))
+    else 不够
+        Loop-&gt;&gt;Loop: 等下一条消息
+    end
+    Op--&gt;&gt;TS: (new_state, MicroPartition)
+    TS--&gt;&gt;Loop: task_set.join_next() ready
+    Loop-&gt;&gt;Down: output_sender.send(Morsel)
+    Loop-&gt;&gt;BM: 把 state 还回去 (operator_states.push)
+
+    Up-&gt;&gt;Recv: send(Flush)
+    Recv-&gt;&gt;Loop: receiver.recv() ready
+    Loop-&gt;&gt;BM: drain 残余
+    Loop-&gt;&gt;Down: send(Flush)
+</div>
+<p><code>ExecutionContext::dispatch_ready_batches</code>(<code>intermediate_op.rs:116-141</code>)是核心:从 <code>operator_states</code> 池里取一个空闲 state,从 <code>batch_manager</code> 取一个 batch,在 <code>task_set</code> 上 spawn。worker 完成后把 state 还回池里、result 转发到下游。</p>
+<h3>4.4 <code>run.rs</code> —— <code>NativeExecutor::run</code></h3>
+<p><code>src/daft-local-execution/src/run.rs:413-490</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">run</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> self, local_physical_plan: </span><span style="color: #66D9EF">&amp;</span><span style="color: #A6E22E">LocalPhysicalPlanRef</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">           exec_cfg: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">DaftExecutionConfig</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">, </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.) -&gt; </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">. {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// 1. 把 LocalPhysicalPlan 编译成 Pipeline 节点树</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> (pipeline, input_senders) </span><span style="color: #FF4689">=</span>
+<span style="color: #F8F8F2">        translate_physical_plan_to_pipeline(local_physical_plan, </span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">exec_cfg, </span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">ctx)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// 2. 启动 stats manager(每节点的 RuntimeStats)</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> stats_manager </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> RuntimeStatsManager::try_new(handle, </span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">pipeline, </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// 3. 创建 enqueue channel,run_execution_loop 从这里取输入</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> (enqueue_input_tx, enqueue_input_rx) </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> create_channel::</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">EnqueueInputMessage</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">(</span><span style="color: #AE81FF">1</span><span style="color: #F8F8F2">);</span>
+
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// 4. 在全局 runtime 上 spawn 顶层执行任务</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> task </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> run_execution_loop(cancel, stats_manager, enqueue_input_rx,</span>
+<span style="color: #F8F8F2">                                  input_senders, pipeline, maintain_order);</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> task_handle </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> RuntimeTask::new(handle, task);</span>
+<span style="color: #F8F8F2">    </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<blockquote>
+<p>单个 <code>NativeExecutor</code> 实例 hold <code>HashMap&lt;u64, PlanState&gt;</code>——同一指纹(plan + context)的查询复用 pipeline,避免 PyO3 调用 <code>daft.collect()</code> N 次时反复建图。</p>
+</blockquote>
+<h3>4.5 <code>StreamingSink::finalize</code> —— 两阶段写</h3>
+<p><code>PhysicalWrite</code> + <code>CommitWrite</code> 把"写文件"和"提交 catalog"拆开:</p>
+<div class="mermaid">
+sequenceDiagram
+    participant U as 上游(Project)
+    participant W as PhysicalWrite (BlockingSink)
+    participant FS as 文件系统/对象存储
+    participant C as CommitWrite (BlockingSink)
+    participant Cat as Iceberg/Hudi/Lance Catalog
+
+    loop 每个 morsel
+        U-&gt;&gt;W: sink(MP)
+        W-&gt;&gt;FS: write part-{uuid}.parquet
+    end
+    U-&gt;&gt;W: Flush
+    W-&gt;&gt;W: finalize → 收集所有 file metadata
+    W-&gt;&gt;C: 把 metadata 当输入往下流
+    C-&gt;&gt;C: sink(metadata MP) × N
+    C-&gt;&gt;C: finalize → 一次性 commit
+    C-&gt;&gt;Cat: catalog.commit(file_list)
+    Cat--&gt;&gt;C: ok
+    C--&gt;&gt;外部: 完成
+</div>
+<p>中间用 <code>daft-checkpoint</code> 三态(Staged → Checkpointed → Committed,见 <a href="./06-IO与扫描下推.html">06 § 6.2</a>)保证写失败可回滚。</p>
+<hr />
+<h2>5. 怎么优化的:四个工程要点</h2>
+<h3>5.1 动态批次自适应</h3>
+<p><code>dynamic_batching/dyn_strategy.rs</code> 实现的策略观察:</p>
+<ul>
+<li>上游来的 morsel 是不是太小?——<strong>累积</strong>直到达到 <code>lower</code> 才 dispatch,合并小 batch 减少 overhead;</li>
+<li>算子做完 batch 是不是太慢?——<strong>拆分</strong>下次 batch 大小,避免单次任务占满 worker。</li>
+</ul>
+<div class="mermaid">
+flowchart LR
+    subgraph 输入序列
+        A1[1k 行] --&gt; A2[1k 行] --&gt; A3[1k 行] --&gt; A4[10k 行] --&gt; A5[100k 行]
+    end
+    subgraph 静态固定 64k
+        S1[等待 6 次 → 合并成 64k] -.-&gt; S2[100k → 拆为 64k+36k]
+    end
+    subgraph 动态自适应
+        D1[3k 直接 pass&lt;br/&gt;(若 strategy 允许 low=0)] -.-&gt; D2[10k pass] -.-&gt; D3[100k 单独 pass&lt;br/&gt;(已大于 max,拆成 32k×3 + 4k)]
+    end
+</div>
+<h3>5.2 HashJoin 两阶段时序</h3>
+<p><code>HashJoin</code> 在 lowering 时分裂为 build + probe(<code>plan.rs:2089</code> 的 <code>HashJoin</code> 变体在 pipeline 构建阶段被切成两个 PipelineNode):</p>
+<div class="mermaid">
+sequenceDiagram
+    participant LeftSrc as Source (build side)
+    participant Build as HashJoin Build (BlockingSink)
+    participant RightSrc as Source (probe side)
+    participant Probe as HashJoin Probe (IntermediateOp)
+    participant Down as 下游
+
+    par 并行
+        LeftSrc-&gt;&gt;Build: morsel × N
+        and
+        RightSrc-&gt;&gt;Probe: morsel × M (暂存 / spin wait)
+    end
+    LeftSrc-&gt;&gt;Build: Flush
+    Build-&gt;&gt;Build: finalize → 构造完整 hashtable
+    Build-&gt;&gt;Probe: 把 hashtable 注入 state
+    loop probe morsel
+        Probe-&gt;&gt;Probe: lookup hashtable + 输出 join 结果
+        Probe-&gt;&gt;Down: morsel
+    end
+</div>
+<p>构建的 <code>Probeable</code> / <code>IndexHash</code> 见 <a href="./01-核心类型与多模态.html">01 § 3.2</a>。</p>
+<h3>5.3 SortSink 全攒齐 vs streaming sink 内存曲线</h3>
+<p><code>Sort</code>(<code>sinks/sort.rs</code>)是 <code>BlockingSink</code>——必须把所有输入攒齐才能开始排序、再往下流;<code>Limit</code>/<code>Sample</code>(<code>streaming_sink/</code>)则可以边来边吐。</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>内存(MB)
+   │
+SORT │        ┌───────────────┐
+     │        │  攒齐 N 行     │
+     │        │  在 finalize    │
+     │        │  排序 → 全吐  │
+     │     ┌──┘                └──┐
+     │     │                      │
+LIMIT│  ┌──┘   ┌───────────────────┘
+     │  │      │  累计 100 行后
+     │  │      │  Finished        ↓ 长尾归零
+     └──┴──────┴────────────────────── 时间
+</code></pre></div>
+
+<h3>5.4 CommitWrite 状态机</h3>
+<div class="mermaid">
+stateDiagram-v2
+    [*] --&gt; Staged: 第一个 morsel 到达
+    Staged --&gt; Staged: 持续 stage_files
+    Staged --&gt; Checkpointed: PhysicalWrite finalize&lt;br/&gt;(checkpoint() 调用)
+    Checkpointed --&gt; Committed: CommitWrite finalize&lt;br/&gt;(catalog.commit 成功)
+    Committed --&gt; [*]
+
+    Staged --&gt; Failed: 写失败
+    Checkpointed --&gt; Failed: catalog commit 失败
+    Failed --&gt; [*]: retry 时从 Staged 重新执行
+</div>
+<p><code>CheckpointStatus</code> 三态在 <code>src/daft-checkpoint/src/types.rs:11</code>(详见 <a href="./06-IO与扫描下推.html">06 § 6.2</a>)。</p>
+<hr />
+<h2>6. 端到端案例</h2>
+<h3>6.1 <code>read_parquet → filter → groupby → write_parquet</code> 在 4 worker 上</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">df</span> <span style="color: #FF4689">=</span> <span style="color: #F8F8F2">(daft</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">read_parquet(</span><span style="color: #E6DB74">&quot;s3://b/year=2024/*&quot;</span><span style="color: #F8F8F2">)</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">where(</span><span style="color: #E6DB74">&quot;amount &gt; 0&quot;</span><span style="color: #F8F8F2">)</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">groupby(</span><span style="color: #E6DB74">&quot;user_id&quot;</span><span style="color: #F8F8F2">)</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">agg(col(</span><span style="color: #E6DB74">&quot;amount&quot;</span><span style="color: #F8F8F2">)</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">sum())</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">write_parquet(</span><span style="color: #E6DB74">&quot;s3://b/output/&quot;</span><span style="color: #F8F8F2">,</span> <span style="color: #F8F8F2">checkpoint</span><span style="color: #FF4689">=</span><span style="color: #F8F8F2">ckpt))</span>
+</code></pre></div>
+
+<p>逻辑→物理 lowering 后的 pipeline:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>PhysicalScan → Filter → HashAgg(Build) → HashAgg(Output)
+                                            → PhysicalWrite → CommitWrite
+</code></pre></div>
+
+<div class="mermaid">
+gantt
+    dateFormat  s
+    axisFormat  %Ss
+    title 4 worker 时间线(每 worker 一行)
+    section worker0
+    Source(scan task 0)        :s0_0, 0, 5
+    Filter(morsel)             :s0_1, after s0_0, 1
+    HashAgg.execute(build state):s0_2, after s0_1, 2
+    HashAgg.execute             :s0_3, after s0_2, 1
+    Write part-0                :s0_4, after s0_3, 3
+    section worker1
+    Source(scan task 1)        :s1_0, 0, 4
+    Filter                     :s1_1, after s1_0, 1
+    HashAgg.execute(build)     :s1_2, after s1_1, 2
+    HashAgg.execute            :s1_3, after s1_2, 1
+    Write part-1               :s1_4, after s1_3, 2
+    section worker2
+    Source(scan task 2)        :s2_0, 1, 5
+    Filter                     :s2_1, after s2_0, 1
+    HashAgg.execute(build)     :s2_2, after s2_1, 2
+    HashAgg.execute            :s2_3, after s2_2, 1
+    Write part-2               :s2_4, after s2_3, 3
+    section worker3
+    Source(scan task 3)        :s3_0, 1, 6
+    Filter                     :s3_1, after s3_0, 1
+    HashAgg.execute(build)     :s3_2, after s3_1, 2
+    HashAgg.execute            :s3_3, after s3_2, 1
+    Write part-3               :s3_4, after s3_3, 2
+</div>
+<blockquote>
+<p>HashAgg Build 阶段:4 个 worker 各自维护一个 <code>Probeable</code>,Flush 后由 Output 阶段把 4 个 hash table merge 起来再吐 group。Daft 当前默认是单线程 merge(<code>HashAgg::finalize</code> 中);CPU-bound 时可考虑改成 partial+final 两层(见 <a href="./03-逻辑计划与优化器.html">03 § 5.3</a>)。</p>
+</blockquote>
+<h3>6.2 4 worker 一帧一帧的快照</h3>
+<p><strong>T = 0s</strong> —— pipeline 启动,4 个 SourceNode worker 同时 <code>tokio::spawn</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">worker0  worker1  worker2  worker3</span>
+<span style="color: #FF4689">[</span><span style="color: #F8F8F2">scan</span><span style="color: #FF4689">]</span><span style="color: #F8F8F2">   </span><span style="color: #FF4689">[</span><span style="color: #F8F8F2">scan</span><span style="color: #FF4689">]</span><span style="color: #F8F8F2">   </span><span style="color: #FF4689">[</span><span style="color: #F8F8F2">scan</span><span style="color: #FF4689">]</span><span style="color: #F8F8F2">   </span><span style="color: #FF4689">[</span><span style="color: #F8F8F2">scan</span><span style="color: #FF4689">]</span>
+<span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">        </span><span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">        </span><span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">        </span><span style="color: #ED007E; background-color: #1E0010">│</span>
+<span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">↓</span><span style="color: #F8F8F2">        </span><span style="color: #ED007E; background-color: #1E0010">↓</span><span style="color: #F8F8F2">        </span><span style="color: #ED007E; background-color: #1E0010">↓</span><span style="color: #F8F8F2">        </span><span style="color: #ED007E; background-color: #1E0010">↓</span>
+<span style="color: #F8F8F2">chan(</span><span style="color: #66D9EF">filter</span><span style="color: #F8F8F2">) bounded</span>
+</code></pre></div>
+
+<p><strong>T = 2s</strong> —— Source 开始吐 morsel,Filter 算子下 4 个 worker 并行筛选:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>filter.task_set.len() == 4 (满)  ← receiver.recv guard 阻塞
+                                    上游 Source 的 send().await 挂起 ← 背压
+</code></pre></div>
+
+<p><strong>T = 4s</strong> —— 部分 Filter 完成,morsel 流入 HashAgg.Build,Source 继续灌:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">Source </span><span style="color: #ED007E; background-color: #1E0010">──</span><span style="color: #FF4689">[</span><span style="color: #F8F8F2">m</span><span style="color: #FF4689">]</span><span style="color: #ED007E; background-color: #1E0010">──</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">Filter</span><span style="color: #F8F8F2"> </span><span style="color: #ED007E; background-color: #1E0010">──</span><span style="color: #FF4689">[</span><span style="color: #F8F8F2">m</span><span style="color: #FF4689">]</span><span style="color: #ED007E; background-color: #1E0010">──</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> HashAgg.Build (累积 hashtable,无下游输出)</span>
+</code></pre></div>
+
+<p><strong>T = 8s</strong> —— 所有 Source 都吐完 → Filter 收到 <code>Flush</code> → HashAgg.Build 收到 <code>Flush</code> → finalize:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>HashAgg.Build.finalize → 4 个 hashtable merge → 吐到 HashAgg.Output
+HashAgg.Output → PhysicalWrite (4 worker 并行写文件)
+</code></pre></div>
+
+<p><strong>T = 12s</strong> —— PhysicalWrite finalize,把 file metadata 序列化成 MicroPartition → CommitWrite:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>CommitWrite.sink × 4 → finalize → 1 次 catalog commit
+</code></pre></div>
+
+<hr />
+<h2>7. 与同类项目对照</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Daft Swordfish</th>
+<th>DuckDB</th>
+<th>Polars</th>
+<th>Photon (Spark)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>模型</td>
+<td>morsel-driven + tokio actor</td>
+<td>morsel-driven + thread pool</td>
+<td>streaming + push</td>
+<td>vectorized push</td>
+</tr>
+<tr>
+<td>调度核心</td>
+<td><code>tokio::select!</code> + <code>JoinSet</code></td>
+<td>task scheduler (C++)</td>
+<td>rayon</td>
+<td>thread pool</td>
+</tr>
+<tr>
+<td>算子 trait</td>
+<td><code>Source</code>/<code>Intermediate</code>/<code>StreamingSink</code>/<code>BlockingSink</code></td>
+<td>physical operators</td>
+<td>LogicalPlan + executor</td>
+<td>physical</td>
+</tr>
+<tr>
+<td>背压</td>
+<td>bounded mpsc channel</td>
+<td>task queue depth</td>
+<td>buffer chunks</td>
+<td>shuffle 阶段</td>
+</tr>
+<tr>
+<td>动态 batch</td>
+<td><code>BatchingStrategy</code> 三种</td>
+<td>固定 vector size</td>
+<td>固定 chunk size</td>
+<td>tile size</td>
+</tr>
+<tr>
+<td>异步 IO 集成</td>
+<td>原生 tokio</td>
+<td>同步,IO 单独线程</td>
+<td>tokio + executor</td>
+<td>RPC pool</td>
+</tr>
+<tr>
+<td>State 管理</td>
+<td>per-worker State,池化复用</td>
+<td>thread-local</td>
+<td>rayon par_iter</td>
+<td>per-task</td>
+</tr>
+<tr>
+<td>两阶段写</td>
+<td><code>PhysicalWrite + CommitWrite</code> 显式</td>
+<td>单算子</td>
+<td>单算子</td>
+<td>DataFrameV2</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>8. 未解之谜</h2>
+<ol>
+<li><strong><code>OrderingAwareJoinSet</code></strong>:<code>intermediate_op.rs:90</code> 用了这个 <code>common_runtime</code> 类型,顾名思义是"保序版 JoinSet",但内部如何在乱序完成的 worker 之间维持 <code>maintain_order</code> 时的输入顺序?(待精读 <code>src/common/runtime/src/lib.rs</code>)</li>
+<li><strong><code>MorselSizeRequirement::combine_requirements</code> 的不重叠分支</strong>:<code>Flexible(l, u)</code> × <code>Flexible(l', u')</code> 不重叠时回退到 <em>下游</em> 要求(<code>pipeline.rs:206-208</code>),但 docstring 没解释为什么不是上游 / 双方平均。可能是因为下游是"消费侧",不能让它饿死。</li>
+<li><strong><code>StreamingSinkFinalizeOutput::HasMoreOutput</code> 何时使用?</strong> 看签名是"finalize 完还有输出 + 下次还能再 finalize",但找不到把 <code>states</code> 重新塞回去的明显 caller。可能是 partial+final 模式预留接口。</li>
+<li><strong>HashAgg Output 阶段的 merge 并行度</strong>:从 <code>sinks/grouped_aggregate.rs</code> 看是单实例 finalize,4 个 worker 的 hashtable 串行合并。当 group 基数非常大时,这一步可能成为瓶颈——是否有 multi-stage merge 或 partition-aware 的优化?</li>
+<li><strong><code>Flotilla Only Nodes</code></strong>(<code>plan.rs:109</code>):<code>IntoPartitions / RepartitionWrite / GatherWrite / ShuffleRead / SortMergeJoin / AsofJoin / DistributedActorPoolProject</code> 标注了 "Flotilla Only",但 NativeExecutor 也能 build_pipeline 吗?是否在分布式模式以外 panic?(待 <a href="./05-分布式执行.html">05 分布式执行</a> 章节细看 Flotilla 是什么)</li>
+</ol>
+<hr />
+<blockquote>
+<p>下一篇:<a href="./05-分布式执行.html">05 分布式执行</a> — Native Runner vs Ray Runner,Flight shuffle 与 Ray remote task。</p>
+</blockquote>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

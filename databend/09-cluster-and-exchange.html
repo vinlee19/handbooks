@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>09 · 集群与 Exchange：节点发现 + Flight Shuffle · Databend 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#ff6b6b}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">☁️ <span>Databend 源码深度解析</span></span><nav class="nav"><a href="00-meta.html">元信息与阅读指南</a><a href="01-overview.html">总览：三层架构与设计取舍</a><a href="02-meta-service.html">Meta Service：客户端层 + 外部 OpenRaft 状态机</a><a href="03-sql-frontend.html">SQL 前端：词法 / 语法 / 绑定</a><a href="04-planner-optimizer.html">Planner / Optimizer：从 SExpr 到最优计划</a><a href="05-pipeline-execution.html">Pipeline 执行：Push-based + Event 状态机</a><a href="06-fuse-storage.html">FUSE 存储引擎：Snapshot / Segment / Block</a><a href="07-io-and-cache.html">IO 与多级缓存：OpenDAL Layer 栈 + CacheManager</a><a href="08-indexes-and-search.html">索引与搜索：Bloom / Inverted / Vector / Range / Page / Spatial</a><a href="09-cluster-and-exchange.html" class=on>集群与 Exchange：节点发现 + Flight Shuffle</a><a href="10-extensions.html">扩展：Stream / UDF / Iceberg / Delta</a><a href="99-diagrams.html">Mermaid 图源归档</a></nav></div></header>
+<main class="wrap">
+<h1>09 · 集群与 Exchange：节点发现 + Flight Shuffle</h1>
+<blockquote>
+<p>基于 commit <code>fe693bb677</code>。本篇覆盖 <code>service/src/clusters/</code> 与 <code>service/src/servers/flight/</code>，把"无状态 query 集群如何协同"以及"DataBlock 如何在节点间穿梭"讲清楚。</p>
+</blockquote>
+<h2>1. 解决了什么问题</h2>
+<p>无状态 query 集群有两个绕不开的子问题：</p>
+<ol>
+<li><strong>节点发现</strong>：query 节点是临时的，启动 / 失效都不该对客户端可见；查询规划要知道当前活着的节点。</li>
+<li><strong>节点间数据搬运</strong>：MPP 查询会在不同节点上跑同一个查询的不同分片，分片之间需要交换 DataBlock（join 的 hash shuffle、广播小表、最终合并到 coordinator）。</li>
+</ol>
+<p>直接拿 ZK / 自带 gRPC 写一套的反例：</p>
+<table>
+<thead>
+<tr>
+<th>反例</th>
+<th>后果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>节点信息存在每个节点本地</td>
+<td>一旦节点失效，集群视图分裂</td>
+</tr>
+<tr>
+<td>用普通 gRPC 流序列化 DataBlock</td>
+<td>反复序列化/反序列化 + 没有零拷贝</td>
+</tr>
+<tr>
+<td>客户端走与节点间相同的协议</td>
+<td>边界混淆；客户端协议升级会牵连节点间通讯</td>
+</tr>
+<tr>
+<td>一条流过一个 RPC</td>
+<td>大查询的 shuffle 直接打满单连接</td>
+</tr>
+</tbody>
+</table>
+<p>Databend 的取舍：</p>
+<ul>
+<li><strong>集群视图</strong>寄存在 meta-service：query 节点启动时 register、心跳续约、watch 变更。</li>
+<li><strong>节点间通讯走 Arrow Flight</strong>——RecordBatch 是 wire 格式，列存零拷贝；客户端通讯（MySQL/HTTP/FlightSQL）完全独立。</li>
+</ul>
+<h2>2. 在 Databend 中的位置</h2>
+<div class="mermaid">
+flowchart TB
+  subgraph Meta[&quot;meta-service (外部)&quot;]
+    WHM[WarehouseApi\n节点注册/心跳/列表]
+  end
+  subgraph QueryNode[&quot;databend-query 节点&quot;]
+    direction TB
+    CD[ClusterDiscovery\n(全局单例)]
+    CL[Cluster (Arc)]
+    FC[FlightClient (出向)]
+    FS[FlightService (入向 9091)]
+    FSQL[FlightSQLServer (入向 8900)]
+    DEM[DataExchangeManager]
+    QC[QueryCoordinator (per query_id)]
+    PB[PipelineBuilder + ExchangeInjector]
+  end
+  subgraph Peer[&quot;其它 query 节点&quot;]
+    PFS[FlightService]
+    PCD[ClusterDiscovery]
+  end
+
+  CD -- register/heartbeat --&gt; WHM
+  CD -- watch --&gt; WHM
+  PCD -- register --&gt; WHM
+
+  PB --&gt; DEM
+  DEM --&gt; QC
+  QC --&gt; FC
+  FC -- Arrow Flight do_get/do_exchange --&gt; PFS
+  FS -- 收到对端流 --&gt; DEM
+</div>
+<p>源码：</p>
+<table>
+<thead>
+<tr>
+<th>模块</th>
+<th>路径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ClusterDiscovery</td>
+<td><code>src/query/service/src/clusters/cluster.rs::ClusterDiscovery (L≈81)</code></td>
+</tr>
+<tr>
+<td>Cluster trait</td>
+<td>同文件 <code>ClusterHelper (L≈95)</code></td>
+</tr>
+<tr>
+<td>FlightService（节点间）</td>
+<td><code>src/query/service/src/servers/flight/flight_service.rs::FlightService (L≈33)</code></td>
+</tr>
+<tr>
+<td>FlightClient</td>
+<td><code>src/query/service/src/servers/flight/flight_client.rs</code></td>
+</tr>
+<tr>
+<td>FlightSQLServer（面向客户端）</td>
+<td><code>src/query/service/src/servers/flight_sql/flight_sql_server.rs</code></td>
+</tr>
+<tr>
+<td>DataExchangeManager</td>
+<td><code>src/query/service/src/servers/flight/v1/exchange/exchange_manager.rs::DataExchangeManager (L≈148)</code></td>
+</tr>
+<tr>
+<td>交换类型</td>
+<td><code>src/query/service/src/servers/flight/v1/exchange/data_exchange.rs::DataExchange (L≈19)</code></td>
+</tr>
+<tr>
+<td>注入到 Pipeline</td>
+<td><code>src/query/service/src/servers/flight/v1/exchange/exchange_injector.rs</code></td>
+</tr>
+</tbody>
+</table>
+<h2>3. 关键数据结构</h2>
+<h3>3.1 ClusterDiscovery 与 Cluster</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/service/src/clusters/cluster.rs:81</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">ClusterDiscovery</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    local_id: String,</span>
+<span style="color: #F8F8F2">    local_secret: String,</span>
+<span style="color: #F8F8F2">    version: </span><span style="color: #A6E22E">BuildInfoRef</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    heartbeat: </span><span style="color: #A6E22E">Mutex</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ClusterHeartbeat</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    warehouse_manager: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">dyn</span><span style="color: #F8F8F2"> WarehouseApi</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,    </span><span style="color: #959077">// meta-service 抽象</span>
+<span style="color: #F8F8F2">    cluster_id: String,</span>
+<span style="color: #F8F8F2">    tenant_id: String,</span>
+<span style="color: #F8F8F2">    flight_address: String,</span>
+<span style="color: #F8F8F2">    lru_cache: </span><span style="color: #A6E22E">parking_lot</span><span style="color: #F8F8F2">::Mutex</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">LruCache</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String, CachedNode</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #959077">#[async_trait::async_trait]</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">trait</span><span style="color: #F8F8F2"> ClusterHelper {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">create</span><span style="color: #F8F8F2">(nodes: Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">NodeInfo</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">, local_id: String) -&gt; </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Cluster</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">empty</span><span style="color: #F8F8F2">(node: </span><span style="color: #A6E22E">NodeInfo</span><span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Cluster</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">is_empty</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self) -&gt; </span><span style="color: #66D9EF">bool</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">ordered_index</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self) -&gt; </span><span style="color: #66D9EF">usize</span><span style="color: #F8F8F2">;            </span><span style="color: #959077">// 节点在按 id 排序后的位置</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">index_of_nodeid</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self, node_id: </span><span style="color: #66D9EF">&amp;str</span><span style="color: #F8F8F2">) -&gt; Option</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">usize</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">get_nodes</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self) -&gt; Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">NodeInfo</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">async</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">do_action</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">T, Res</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self, path: </span><span style="color: #66D9EF">&amp;str</span><span style="color: #F8F8F2">, message: </span><span style="color: #A6E22E">HashMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String, T</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">                               flight_params: </span><span style="color: #A6E22E">FlightParams</span><span style="color: #F8F8F2">) -&gt; Result</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">HashMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String, Res</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<div class="mermaid">
+classDiagram
+  class ClusterDiscovery {
+    +local_id
+    +local_secret
+    +heartbeat: Mutex~ClusterHeartbeat~
+    +warehouse_manager: Arc dyn WarehouseApi
+    +flight_address: String
+    +lru_cache: LruCache~String, CachedNode~
+    +register_to_metastore(cfg) async
+    +discover(cfg) Cluster
+    +instance() Self
+  }
+  class Cluster {
+    +unassign: bool
+    +local_id
+    +nodes: Vec~NodeInfo~
+  }
+  class NodeInfo {
+    +id
+    +secret
+    +cpu_nums
+    +version
+    +flight_address
+    +warehouse_id
+    +cluster_id
+  }
+  class ClusterHeartbeat {
+    +interval
+    +tx: ShutdownTx
+  }
+  ClusterDiscovery --&gt; Cluster : discover()
+  Cluster --&gt; NodeInfo
+  ClusterDiscovery --&gt; ClusterHeartbeat
+</div>
+<p>注意：</p>
+<ul>
+<li><strong><code>local_secret</code></strong>：本节点持有的随机串，发给对端时携带，用于"对端是不是同一集群"的鉴定。</li>
+<li><strong><code>ordered_index</code></strong> 把 nodes 按 id 排序，为 hash shuffle 提供稳定的目的端编号。</li>
+<li><strong><code>do_action</code></strong> 是个通用 RPC fan-out：传入 <code>HashMap&lt;node_id, T&gt;</code>，给每个目标节点的 FlightService 推一份消息，收齐结果再 fan-in；这是 cluster 层"一致行动"的基础（同步 state、初始化 query env 等）。</li>
+</ul>
+<h3>3.2 FlightService（节点间 RPC 入口）</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/service/src/servers/flight/flight_service.rs:33</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">FlightService</span><span style="color: #F8F8F2"> { </span><span style="color: #959077">/* tonic + arrow-flight 服务 */</span><span style="color: #F8F8F2"> }</span>
+</code></pre></div>
+
+<p><code>FlightService::start</code> 在 <code>entry.rs::start_services (L≈146)</code> 启动，监听 <code>flight_api_address</code>（默认 9091）。它实现 <code>arrow_flight::flight_service_server::FlightService</code> 这个 trait，关键方法：</p>
+<ul>
+<li><code>do_action(action: Action)</code> → 处理 <code>ClusterHelper::do_action</code> 类型的"广播一段消息给特定节点"。</li>
+<li><code>do_get(ticket: Ticket)</code> → 单向流式拉取数据（用于 Merge / NodeToNodeExchange）。</li>
+<li><code>do_exchange(stream: Stream&lt;FlightData&gt;)</code> → 双向 ping-pong 流（用于 Broadcast / GlobalShuffleExchange）。</li>
+<li><code>do_put(stream)</code> → 流式 push（统计、状态同步等）。</li>
+</ul>
+<h3>3.3 DataExchange — 四种交换类型</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/service/src/servers/flight/v1/exchange/data_exchange.rs:19</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">DataExchange</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    Merge(MergeExchange),</span>
+<span style="color: #F8F8F2">    Broadcast(BroadcastExchange),</span>
+<span style="color: #F8F8F2">    NodeToNodeExchange(NodeToNodeExchange),       </span><span style="color: #959077">// 普通 hash shuffle</span>
+<span style="color: #F8F8F2">    GlobalShuffleExchange(NodeToNodeExchange),    </span><span style="color: #959077">// 跨阶段全局 shuffle</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #66D9EF">impl</span><span style="color: #F8F8F2"> DataExchange {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">use_do_exchange</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self) -&gt; </span><span style="color: #66D9EF">bool</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">        </span><span style="color: #A6E22E">matches!</span><span style="color: #F8F8F2">(self,</span>
+<span style="color: #F8F8F2">            DataExchange::Broadcast(_) </span><span style="color: #FF4689">|</span><span style="color: #F8F8F2"> DataExchange::GlobalShuffleExchange(_))</span>
+<span style="color: #F8F8F2">    }</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<div class="mermaid">
+flowchart TB
+  subgraph Merge[&quot;Merge (do_get)&quot;]
+    M1[Worker A]
+    M2[Worker B]
+    M3[Worker C]
+    MD[(coordinator 单点)]
+    M1 --&gt; MD
+    M2 --&gt; MD
+    M3 --&gt; MD
+  end
+  subgraph Broadcast[&quot;Broadcast (do_exchange ping-pong)&quot;]
+    B1[Source]
+    B1 --&gt; BD1[Dest 1]
+    B1 --&gt; BD2[Dest 2]
+    B1 --&gt; BD3[Dest 3]
+  end
+  subgraph N2N[&quot;NodeToNodeExchange (do_get hash shuffle)&quot;]
+    NA[Node A] --hash--&gt; NB1[Node B 桶 1]
+    NA --hash--&gt; NB2[Node B 桶 2]
+    NB1 --hash--&gt; NA1[Node A 桶 1]
+  end
+  subgraph GS[&quot;GlobalShuffleExchange (do_exchange)&quot;]
+    G1[阶段 1 全节点]
+    G2[阶段 2 全节点]
+    G1 -- ping-pong --- G2
+  end
+</div>
+<p>为什么 Broadcast 与 GlobalShuffle 用 <code>do_exchange</code> 而 Merge / NodeToNode 用 <code>do_get</code>：</p>
+<ul>
+<li><strong><code>do_get</code></strong> 是单向流——发送方推完即可结束。Merge 把数据汇聚到一个目的端；NodeToNode 单向拉。</li>
+<li><strong><code>do_exchange</code></strong> 是双向流——上下游都能在同一连接上发送握手 / 反压 / 状态。Broadcast 需要等所有目的端 ack；GlobalShuffle 在跨阶段时上下游互相确认水位。</li>
+</ul>
+<h3>3.4 DataExchangeManager 与 QueryCoordinator</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/service/src/servers/flight/v1/exchange/exchange_manager.rs:148</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">DataExchangeManager</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    queries_coordinator: </span><span style="color: #A6E22E">ReentrantMutex</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">SyncUnsafeCell</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">HashMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String, QueryCoordinator</span><span style="color: #FF4689">&gt;&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<div class="mermaid">
+classDiagram
+  class DataExchangeManager {
+    +queries_coordinator: HashMap query_id-QueryCoordinator
+    +init_query_env(env, ctx)
+    +get_query_ctx(query_id)
+    +get_running_query_graph_dump(query_id)
+    +get_query_execution_stats()
+  }
+  class QueryCoordinator {
+    +info: Option~Info~
+    +query_executor
+    +query_ctx
+    +input/output streams
+    +exchanges: Vec~ExchangeChannel~
+  }
+  class ExchangeSink
+  class ExchangeSourceReader
+  class ExchangeSinkBuffer {
+    +server-side outbound buffer
+    +背压控制
+  }
+  DataExchangeManager --&gt; QueryCoordinator : per query
+  QueryCoordinator --&gt; ExchangeSink
+  QueryCoordinator --&gt; ExchangeSourceReader
+  ExchangeSink --&gt; ExchangeSinkBuffer
+</div>
+<p><code>DataExchangeManager</code> 是<strong>全局</strong>单例，但每个 <code>query_id</code> 进来时建一个 <code>QueryCoordinator</code>：里面持有该 query 涉及的所有 sink / source / buffer。query 结束时 coordinator 被擦掉，资源即时释放。</p>
+<p><code>SyncUnsafeCell&lt;HashMap&gt;</code> + <code>ReentrantMutex</code> 的组合：因为 query 内的多个组件可能在持锁状态下回调到 manager，需要可重入锁；外层 <code>SyncUnsafeCell</code> 是为了让 Mutex 持锁后获得 <code>&amp;mut HashMap</code>。</p>
+<h3>3.5 ExchangeSink / ExchangeSourceReader / 内部 Pipeline</h3>
+<div class="mermaid">
+flowchart LR
+  subgraph SrcPipe[&quot;发送侧 Pipeline (本节点)&quot;]
+    OP[上游算子] --&gt; ETS[ExchangeTransformScatter\n按 hash 分桶]
+    ETS --&gt; HSS[HashSendTransform / HashSendSink]
+    HSS --&gt; ESB[ExchangeSinkBuffer\n背压窗]
+    ESB --&gt; EW[ExchangeSinkWriter\n→ FlightClient]
+  end
+  subgraph Net[Arrow Flight stream]
+    EW --&gt;|RecordBatch| RR
+  end
+  subgraph DstPipe[&quot;接收侧 Pipeline (对端节点)&quot;]
+    RR[ExchangeSourceReader] --&gt; ESS[ExchangeSource processor]
+    ESS --&gt; DSP[下游算子]
+  end
+</div>
+<p>要点：</p>
+<ul>
+<li><strong>背压</strong>：<code>ExchangeSinkBuffer</code> 有"未 ack 字节数"窗口，写满则停。</li>
+<li><strong>行/列零拷贝</strong>：写出时 DataBlock 直接转 Arrow RecordBatch；接收侧不用 deserialize 整张表。</li>
+<li><strong>失败传播</strong>：任一边断流，立刻向对端发 error frame，coordinator 触发整 query 中止。</li>
+</ul>
+<h2>4. 关键流程</h2>
+<h3>4.1 节点上下线</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Q as Query node 启动
+  participant CD as ClusterDiscovery
+  participant Wh as WarehouseApi (meta)
+  participant Peer as 其它节点
+
+  Q-&gt;&gt;CD: init(config, version)
+  CD-&gt;&gt;Wh: heartbeat / register {node_id, flight_addr, secret, cpu, warehouse_id}
+  Wh--&gt;&gt;CD: ack
+  CD-&gt;&gt;Wh: watch nodes
+  loop 周期心跳
+    CD-&gt;&gt;Wh: heartbeat (TTL 续约)
+  end
+  Wh--&gt;&gt;Peer: notify nodes changed
+  Peer-&gt;&gt;CD: discover (拉最新列表)
+  Note over Q,CD: ClusterDiscovery 维护 LruCache，避免高频拉取
+  Q-&gt;&gt;CD: shutdown → drop heartbeat
+  Wh--&gt;&gt;Peer: 节点离开（TTL 过期或显式 deregister）
+</div>
+<p>ClusterDiscovery 的 <code>lru_cache</code> 缓存 <code>CachedNode</code>——同一 query 内多次 <code>discover</code> 不会反复打 meta-service。</p>
+<h3>4.2 一次分布式查询</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Cli as 客户端
+  participant Co as Coordinator (任一 query node)
+  participant CD as Coordinator.ClusterDiscovery
+  participant DEM as DataExchangeManager (Co)
+  participant N1 as Node1
+  participant N2 as Node2
+
+  Cli-&gt;&gt;Co: SQL（含 join）
+  Co-&gt;&gt;CD: get nodes
+  CD--&gt;&gt;Co: [N1, N2, Co]
+  Co-&gt;&gt;Co: 优化 → PhysicalPlan 含 ExchangeSink + ExchangeSource 节点
+  Co-&gt;&gt;DEM: init_query_env(env, ctx)
+  par
+    Co-&gt;&gt;N1: do_action(&quot;init_query_env&quot;, ...) via Flight
+    Co-&gt;&gt;N2: do_action(&quot;init_query_env&quot;, ...)
+  end
+  par
+    Co-&gt;&gt;N1: do_action(&quot;submit_fragment&quot;, ...)
+    Co-&gt;&gt;N2: do_action(&quot;submit_fragment&quot;, ...)
+  and
+    Co-&gt;&gt;Co: 启动本地 fragment（PipelineExecutor）
+  end
+  par 各节点独立执行
+    N1-&gt;&gt;N2: do_get / do_exchange (shuffle)
+    N1-&gt;&gt;Co: do_get (merge to coordinator)
+    N2-&gt;&gt;Co: do_get
+    Co-&gt;&gt;Co: 本地 ExchangeSourceReader 接 stream → 接入 Pipeline
+  end
+  Co--&gt;&gt;Cli: 最终结果
+</div>
+<p>注意：</p>
+<ul>
+<li><strong>每个节点都跑同一份 PhysicalPlan</strong>——只是 <code>ExchangeSink/Source</code> 上的 partition 子集不同。</li>
+<li><strong><code>init_query_env</code></strong> 把整个 plan 预先广播给所有节点，省得每次有数据 shuffle 都重新协商。</li>
+<li><strong>Coordinator 是"刚好被客户端选中的那个节点"</strong>，没有专属角色——这是 stateless 的红利。</li>
+</ul>
+<h3>4.3 ExchangeInjector 决定何时插边</h3>
+<div class="mermaid">
+flowchart TB
+  PB[PipelineBuilder build_pipeline] --&gt; CHK{当前节点 PhysicalPlan 子树\n是否横跨节点?}
+  CHK -- 是 --&gt; EI[ExchangeInjector.injection_at_sink]
+  EI --&gt; ESN[在子树之上加 ExchangeSink]
+  CHK -- 否 --&gt; NORM[正常 Pipe]
+  PB --&gt; CHK2{是否需要从外部接 stream?}
+  CHK2 -- 是 --&gt; EI2[ExchangeInjector.injection_at_source]
+  EI2 --&gt; ESC[在子树之下加 ExchangeSource]
+  CHK2 -- 否 --&gt; NORM
+</div>
+<p><code>is_exchange_stack: Vec&lt;bool&gt;</code>（<code>pipeline_builder.rs::L≈62</code>）记录递归深度，让 child build_pipeline 知道父亲是不是 Exchange，从而决定要不要包一层 sink/source。详见 05 文档。</p>
+<h2>5. 性能与优化点</h2>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>在哪里</th>
+<th>效果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Arrow Flight 列存协议</strong></td>
+<td>tonic + arrow-flight</td>
+<td>RecordBatch 在网络上零拷贝；接收方不复制</td>
+</tr>
+<tr>
+<td><strong><code>do_get</code> vs <code>do_exchange</code> 区分</strong></td>
+<td><code>data_exchange.rs L≈70 use_do_exchange</code></td>
+<td>单向 vs 双向流分开使用，减少握手成本</td>
+</tr>
+<tr>
+<td><strong>ExchangeSinkBuffer 背压</strong></td>
+<td><code>outbound_buffer.rs L≈236</code></td>
+<td>慢消费方不会让快生产方爆内存</td>
+</tr>
+<tr>
+<td><strong><code>do_action</code> fan-out + fan-in</strong></td>
+<td><code>cluster.rs L≈162</code></td>
+<td>集群级"一致行动"用一次 RPC 完成</td>
+</tr>
+<tr>
+<td><strong>NodeInfo lru_cache</strong></td>
+<td><code>cluster.rs L≈90</code></td>
+<td>频繁 discover 不打 meta-service</td>
+</tr>
+<tr>
+<td><strong>stateless 路由</strong></td>
+<td>任何节点都可以当 coordinator</td>
+<td>客户端无需了解集群拓扑</td>
+</tr>
+<tr>
+<td><strong>节点间 Flight 与客户端 FlightSQL 端口分离</strong></td>
+<td>9091 vs 8900</td>
+<td>客户端协议升级不影响节点间</td>
+</tr>
+<tr>
+<td><strong>statistics_sender / receiver</strong></td>
+<td><code>statistics_*.rs</code></td>
+<td>子 fragment 的 plan profiler 数据沿同一通道汇总</td>
+</tr>
+</tbody>
+</table>
+<h2>6. 与同类系统的对照</h2>
+<table>
+<thead>
+<tr>
+<th>系统</th>
+<th>节点发现</th>
+<th>数据交换协议</th>
+<th>特点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Spark</td>
+<td>Driver + Spark Master / k8s</td>
+<td>Block manager + Netty</td>
+<td>RDD lineage 重算</td>
+</tr>
+<tr>
+<td>Trino</td>
+<td>Discovery service（HTTP）</td>
+<td>HTTP（Trino 自有）</td>
+<td>Coordinator 强依赖</td>
+</tr>
+<tr>
+<td>StarRocks</td>
+<td>FE 集群</td>
+<td>自研 BRPC</td>
+<td>FE/BE 双角色</td>
+</tr>
+<tr>
+<td>ClickHouse</td>
+<td>ZooKeeper</td>
+<td>TCP（自有协议）</td>
+<td>复制 + 分布式表混合</td>
+</tr>
+<tr>
+<td><strong>Databend</strong></td>
+<td><strong>meta-service WarehouseApi + heartbeat</strong></td>
+<td><strong>Arrow Flight (gRPC)</strong></td>
+<td><strong>stateless coordinator + 列存 zero-copy 网络</strong></td>
+</tr>
+<tr>
+<td>Snowflake</td>
+<td>私有</td>
+<td>私有</td>
+<td>—</td>
+</tr>
+<tr>
+<td>DuckDB</td>
+<td>单机</td>
+<td>—</td>
+<td>不适用</td>
+</tr>
+</tbody>
+</table>
+<p>最大的差异：<strong>Databend 没有"Coordinator/Worker"角色之分</strong>——任何节点都可以当 coordinator。这与 stateless 的设计一致：客户端可以负载均衡到任意节点，集群的拓扑信息全在 meta-service，本地节点不持久化任何状态。</p>
+<h2>7. 端到端案例</h2>
+<p><code>SELECT count(*) FROM t WHERE x &gt; 1</code> 在分布式集群上：</p>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Cli as 客户端
+  participant Co as Coordinator
+  participant CD as ClusterDiscovery
+  participant N1 as Node1
+  participant N2 as Node2
+
+  Cli-&gt;&gt;Co: SQL
+  Co-&gt;&gt;CD: discover()
+  CD--&gt;&gt;Co: [Co, N1, N2]
+  Co-&gt;&gt;Co: 优化器决定使用 distributed_pruning + AggregatePartial+Final
+  Note over Co: PhysicalPlan: TableScan(prewhere x&gt;1) → AggregatePartial → ExchangeSink(Merge to Co) → AggregateFinal
+  par
+    Co-&gt;&gt;N1: init_query_env + submit_fragment
+    Co-&gt;&gt;N2: init_query_env + submit_fragment
+  and
+    Co-&gt;&gt;Co: 本地 fragment 启动
+  end
+  par
+    N1-&gt;&gt;N1: 读 segment 子集 → block 裁剪 → AggregatePartial(count_per_block)
+    N1-&gt;&gt;Co: do_get(stream)
+  and
+    N2-&gt;&gt;N2: 同
+    N2-&gt;&gt;Co: do_get(stream)
+  and
+    Co-&gt;&gt;Co: 本地 fragment 也跑 AggregatePartial
+  end
+  Co-&gt;&gt;Co: ExchangeSourceReader 收 N1/N2 流 → AggregateFinal 累计
+  Co--&gt;&gt;Cli: count
+</div>
+<p>注意：</p>
+<ul>
+<li><strong>count(*) 的中间状态</strong>只需传一个 u64 per partition，跨节点流量极小；这就是 partial+final 设计的精髓——大数据集流量被压缩到 worker_count × group_count。</li>
+<li><strong>没有 join，所以也没有 hash shuffle</strong>；本例只用 Merge 一种 Exchange。</li>
+</ul>
+<h2>8. 未解之谜</h2>
+<ul>
+<li><strong><code>assigned_warehouse</code></strong> 与 <code>warehouse_id</code>：节点可以未分配仓库时仍然在线（<code>Cluster.create</code> 检查 <code>unassign</code>）；具体 warehouse 调度策略（动态分配 / 弹性扩缩）需要在 EE 模块或 cloud-control 协议里看。</li>
+<li><strong><code>statistics_sender</code> / <code>statistics_receiver</code></strong>：本篇仅记录其存在；它们如何与 <code>ExplainAnalyze</code> 的 profile 协同？</li>
+<li><strong><code>exchange_transform_shuffle.rs</code> vs <code>exchange_transform_scatter.rs</code></strong>：两个 transform 看起来都做 hash 重分桶；差异点在于何时丢给 sink 还是再过一次本地 transform。</li>
+<li><strong>多端口安全</strong>：9091（节点间）与 8900（FlightSQL 客户端）共用 tonic，但前者必须验证 <code>local_secret</code>。secret 校验路径在 <code>do_action</code> 入口还是更深层？</li>
+<li><strong>DNS / IP 漂移</strong>：节点 <code>flight_address</code> 在 register 时记录；如果集群跑在 k8s pod 上 IP 随重启变化，靠的是"先 deregister 再 register"还是"watch 触发新 NodeInfo"？需要看心跳里携带的字段。</li>
+<li><strong>一致性 vs 可用性</strong>：心跳过期后节点被踢出，正在跑的查询会怎么样？看起来是查询级别的 fail-fast（fragment 收不到对端 ack 即报错），而非系统级容错重跑——本篇未在 <code>QueryCoordinator</code> 层面验证。</li>
+</ul>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

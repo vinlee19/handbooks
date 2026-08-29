@@ -1,0 +1,2574 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>99 · Mermaid 图源归档 · Databend 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#ff6b6b}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">☁️ <span>Databend 源码深度解析</span></span><nav class="nav"><a href="00-meta.html">元信息与阅读指南</a><a href="01-overview.html">总览：三层架构与设计取舍</a><a href="02-meta-service.html">Meta Service：客户端层 + 外部 OpenRaft 状态机</a><a href="03-sql-frontend.html">SQL 前端：词法 / 语法 / 绑定</a><a href="04-planner-optimizer.html">Planner / Optimizer：从 SExpr 到最优计划</a><a href="05-pipeline-execution.html">Pipeline 执行：Push-based + Event 状态机</a><a href="06-fuse-storage.html">FUSE 存储引擎：Snapshot / Segment / Block</a><a href="07-io-and-cache.html">IO 与多级缓存：OpenDAL Layer 栈 + CacheManager</a><a href="08-indexes-and-search.html">索引与搜索：Bloom / Inverted / Vector / Range / Page / Spatial</a><a href="09-cluster-and-exchange.html">集群与 Exchange：节点发现 + Flight Shuffle</a><a href="10-extensions.html">扩展：Stream / UDF / Iceberg / Delta</a><a href="99-diagrams.html" class=on>Mermaid 图源归档</a></nav></div></header>
+<main class="wrap">
+<h1>99 · Mermaid 图源归档</h1>
+<blockquote>
+<p>本文是把 00–10 中所有 Mermaid 代码块按出处归档，方便修改时一处即可改图。每张图的标题取自其出现位置上方最近的 <code>##</code> / <code>###</code> 章节标题。</p>
+</blockquote>
+<h2>使用方法</h2>
+<ul>
+<li>直接把 Mermaid 代码块复制到 <a href="https://mermaid.live">https://mermaid.live</a> 渲染，或粘进 GitHub/飞书的 Markdown 里。</li>
+<li>修改图请同时改正文与本归档；本归档只是镜像。</li>
+</ul>
+<hr />
+<h2>来自 <a href="./01-overview.html">01-overview.md</a></h2>
+<h3>1. 2. 在 Databend 中的位置：进程拓扑</h3>
+<div class="mermaid">
+flowchart TB
+    subgraph Client[&quot;Client&quot;]
+      C1[bendsql / mysql client / driver]
+    end
+
+    subgraph QueryCluster[&quot;databend-query 集群（无状态，可水平扩展）&quot;]
+      direction TB
+      Q1[&quot;query node #1\nMySQL/HTTP/FlightSQL\nFlight RPC（节点间）&quot;]
+      Q2[&quot;query node #2&quot;]
+      Q3[&quot;query node #N&quot;]
+    end
+
+    subgraph Meta[&quot;databend-meta 集群（OpenRaft，奇数节点）&quot;]
+      M1[Leader]
+      M2[Follower]
+      M3[Follower]
+    end
+
+    subgraph Storage[&quot;对象存储（OpenDAL 抽象）&quot;]
+      direction LR
+      S3[S3 / GCS / Azure / OSS / HDFS / FS]
+    end
+
+    C1 -- &quot;MySQL 3307 / HTTP 8000 / FlightSQL 8900&quot; --&gt; Q1
+    Q1 &lt;-- &quot;Flight RPC 9091\n(集群发现 + Shuffle)&quot; --&gt; Q2
+    Q1 &lt;-- &quot;Flight RPC&quot; --&gt; Q3
+    Q1 -- &quot;gRPC&quot; --&gt; M1
+    Q2 -- &quot;gRPC&quot; --&gt; M1
+    Q3 -- &quot;gRPC&quot; --&gt; M1
+    M1 &lt;-- &quot;Raft&quot; --&gt; M2
+    M1 &lt;-- &quot;Raft&quot; --&gt; M3
+    Q1 -- &quot;OpenDAL&quot; --&gt; S3
+    Q2 -- &quot;OpenDAL&quot; --&gt; S3
+    Q3 -- &quot;OpenDAL&quot; --&gt; S3
+</div>
+<h3>2. 3. 关键数据结构：进程内的全局单例</h3>
+<div class="mermaid">
+classDiagram
+    class GlobalInstance {
+      &lt;&lt;container&gt;&gt;
+      +set/get any Arc~T~
+    }
+    class GlobalConfig {
+      +InnerConfig
+    }
+    class GlobalLogger
+    class GlobalIORuntime
+    class GlobalQueryRuntime
+    class ClusterDiscovery {
+      +register_to_metastore(conf)
+      +discover(conf) Cluster
+    }
+    class CatalogManager {
+      +meta: MetaStore
+      +default_catalog: Arc~dyn Catalog~
+      +catalog_creators: HashMap~CatalogType, CatalogCreator~
+    }
+    class DataOperator {
+      +Operator (OpenDAL)
+    }
+    class CacheManager {
+      +memory + disk + hybrid
+    }
+    class DataExchangeManager {
+      +shuffle / broadcast / merge
+    }
+    class SessionManager
+    class UserApiProvider {
+      +meta-backed RBAC
+    }
+    class HttpQueryManager
+    class TaskService {
+      &lt;&lt;feature task-support&gt;&gt;
+    }
+
+    GlobalInstance --&gt; GlobalConfig
+    GlobalInstance --&gt; GlobalLogger
+    GlobalInstance --&gt; GlobalIORuntime
+    GlobalInstance --&gt; GlobalQueryRuntime
+    GlobalInstance --&gt; ClusterDiscovery
+    GlobalInstance --&gt; CatalogManager
+    GlobalInstance --&gt; DataOperator
+    GlobalInstance --&gt; CacheManager
+    GlobalInstance --&gt; DataExchangeManager
+    GlobalInstance --&gt; SessionManager
+    GlobalInstance --&gt; UserApiProvider
+    GlobalInstance --&gt; HttpQueryManager
+    GlobalInstance --&gt; TaskService
+    CatalogManager ..&gt; ClusterDiscovery : meta 拉 catalog
+    UserApiProvider ..&gt; CatalogManager : 共用 MetaStore
+    CacheManager ..&gt; DataOperator : 缓存层下沉到对象存储
+</div>
+<h3>3. 4.1 启动时序</h3>
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Main as ee_main.rs::main
+    participant Sig as SignalListener
+    participant RT as Tokio Runtime
+    participant Cmd as Cmd::parse
+    participant Init as init_services
+    participant Glob as GlobalServices::init
+    participant Lic as EnterpriseServices::init
+    participant Start as start_services
+    participant Cluster as ClusterDiscovery
+    participant Servers as RPC/MySQL/HTTP/Metric/Admin/FlightSQL
+
+    Main-&gt;&gt;Sig: pipe_file + set_crash_hook + spawn
+    Main-&gt;&gt;Main: ThreadTracker::init
+    Main-&gt;&gt;RT: Runtime::with_default_worker_threads
+    RT-&gt;&gt;Cmd: parse CLI
+    Cmd--&gt;&gt;RT: InnerConfig
+    RT-&gt;&gt;Init: init_services(conf, ee_mode=true)
+    Init-&gt;&gt;Init: 检查 SSE4.2 / 拒绝 embedded meta
+    Init-&gt;&gt;Glob: GlobalServices::init(conf, BUILD_INFO, ee_mode)
+    Glob--&gt;&gt;Init: 全部全局单例就绪
+    Init-&gt;&gt;Lic: EnterpriseServices::init
+    RT-&gt;&gt;Start: start_services(conf)
+    Start-&gt;&gt;Cluster: register_to_metastore
+    Start-&gt;&gt;Servers: FlightService.start (节点间 RPC)
+    Start-&gt;&gt;Servers: MySQLHandler.start
+    Start-&gt;&gt;Servers: HttpHandler.start
+    Start-&gt;&gt;Servers: MetricService.start
+    Start-&gt;&gt;Servers: AdminService.start
+    Start-&gt;&gt;Servers: FlightSQLServer.start
+    Start-&gt;&gt;Start: 打印就绪信息 + wait_for_termination_request
+</div>
+<h3>4. 4.1.1 进程内部：一个 query node 实际跑什么</h3>
+<div class="mermaid">
+flowchart TB
+  subgraph Process[&quot;databend-query 单进程&quot;]
+    direction TB
+    subgraph Servers[&quot;监听端口&quot;]
+      H[HTTP 8000]
+      M[MySQL 3307]
+      F[Flight RPC 9091]
+      FS[FlightSQL 8900]
+      Met[/metrics 7070]
+      Adm[Admin 8080]
+    end
+    subgraph Globals[&quot;全局单例&quot;]
+      Cat[CatalogManager]
+      Sess[SessionManager]
+      Cl[ClusterDiscovery]
+      DEM[DataExchangeManager]
+      DO[DataOperator (OpenDAL)]
+      CM[CacheManager]
+    end
+    subgraph Runtimes[&quot;专用 tokio runtime&quot;]
+      QR[GlobalQueryRuntime]
+      IO[GlobalIORuntime]
+      AR[Async UDF runtime]
+    end
+    Servers --&gt; Sess
+    Sess --&gt; Cat
+    Sess --&gt; Cl
+    Sess --&gt; DEM
+    Cat --&gt; DO
+    DO --&gt; IO
+    Sess --&gt; QR
+  end
+</div>
+<h3>5. 4.2 服务监听端口与协议（启动顺序就是源码顺序）</h3>
+<div class="mermaid">
+flowchart LR
+    A[&quot;start_services&lt;br/&gt;(entry.rs L≈121)&quot;] --&gt; B[precheck_services]
+    B --&gt; C[ClusterDiscovery.register_to_metastore]
+    C --&gt; D[&quot;FlightService.start&lt;br/&gt;(节点间 RPC, 9091)&quot;]
+    D --&gt; E[&quot;MySQLHandler.start&lt;br/&gt;(3307)&quot;]
+    E --&gt; F[&quot;HttpHandler.start&lt;br/&gt;(8000, poem)&quot;]
+    F --&gt; G[&quot;MetricService.start&lt;br/&gt;(7070, /metrics)&quot;]
+    G --&gt; H[&quot;AdminService.start&lt;br/&gt;(8080)&quot;]
+    H --&gt; I[&quot;FlightSQLServer.start&lt;br/&gt;(8900)&quot;]
+    I --&gt; J[wait_for_termination_request]
+</div>
+<h3>6. 5.1 心跳与节点上下线（粗粒度）</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Q as Query 节点
+  participant CD as ClusterDiscovery
+  participant Wh as WarehouseApi (meta)
+
+  Q-&gt;&gt;CD: GlobalServices::init → ClusterDiscovery::init
+  CD-&gt;&gt;Wh: register_to_metastore
+  loop 周期续约
+    CD-&gt;&gt;Wh: heartbeat（含 flight_address / cpu / version）
+  end
+  Wh--&gt;&gt;CD: 节点列表变更通知（watch）
+  Q-&gt;&gt;Q: 跑查询时 ClusterDiscovery::discover() 取最新视图
+  Q-&gt;&gt;CD: 关停 → drop heartbeat
+  Wh--&gt;&gt;Wh: TTL 过期 → 节点摘除
+</div>
+<h3>7. 6. 与同类系统的对照</h3>
+<div class="mermaid">
+flowchart TB
+    subgraph CK[ClickHouse]
+      CK1[本地盘 / shared-nothing]
+      CK2[Merge Tree（强相关）]
+      CK3[ZooKeeper 协调]
+    end
+    subgraph SR[StarRocks/Doris]
+      SR1[本地盘 + 共享存储双模]
+      SR2[FE/BE 分层]
+      SR3[Cascades + 物化视图]
+    end
+    subgraph SF[Snowflake]
+      SF1[FDN 内部存储]
+      SF2[Virtual Warehouse]
+      SF3[Multi-cluster 弹性]
+    end
+    subgraph DB[Databend]
+      DB1[OpenDAL → 客户对象存储]
+      DB2[FUSE Snapshot/Segment/Block]
+      DB3[Cascades + DPHyp]
+      DB4[OpenRaft Meta 独立服务]
+    end
+</div>
+<h3>8. 7. 端到端案例：<code>SELECT count(*) FROM t WHERE x &gt; 1</code></h3>
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Cli as bendsql
+    participant Q as query node
+    participant Meta as meta-service
+    participant S3 as S3 (OpenDAL)
+
+    Cli-&gt;&gt;Q: HTTP POST /v1/query \n {sql: &quot;SELECT count(*) FROM t WHERE x &gt; 1&quot;}
+    Q-&gt;&gt;Q: parse_sql + Binder::bind
+    Q-&gt;&gt;Meta: get_table(&quot;default&quot;, &quot;t&quot;)  (gRPC)
+    Meta--&gt;&gt;Q: TableInfo + 最新 Snapshot location
+    Q-&gt;&gt;Q: Cascades / DPHyp 优化 → PhysicalPlan
+    Q-&gt;&gt;Q: PipelineBuilder::finalize → Pipeline DAG
+    Q-&gt;&gt;S3: GET &lt;snapshot.json&gt;
+    S3--&gt;&gt;Q: TableSnapshot
+    Q-&gt;&gt;S3: GET &lt;segment.json&gt; 数个
+    S3--&gt;&gt;Q: SegmentInfo[]
+    Q-&gt;&gt;Q: 用 BlockMeta(min/max + bloom) 裁块
+    Q-&gt;&gt;S3: 仅对存活的 block 发 GET (parallel)
+    S3--&gt;&gt;Q: Parquet bytes (压缩)
+    Q-&gt;&gt;Q: 解压 → DataBlock → FilterTransform(x&gt;1) → FinalAggregate(count)
+    Q--&gt;&gt;Cli: {data: [[N]]}
+</div>
+<hr />
+<h2>来自 <a href="./02-meta-service.html">02-meta-service.md</a></h2>
+<h3>1. 2. 在 Databend 中的位置</h3>
+<div class="mermaid">
+flowchart LR
+  subgraph Q[&quot;databend (本仓库)&quot;]
+    direction TB
+    APP[meta/app\nRust 类型]
+    PROTOS[meta/protos\nprotobuf 定义]
+    PCONV[meta/proto-conv\n版本表 + FromToProto]
+    API[meta/api\nKvApi/SchemaApi 接口]
+    STORE[meta/store\nMetaStore client]
+    BINS[meta/binaries\nmetactl / metabench / metaverifier]
+    QSVC[query 服务\n通过 MetaStore 调 RPC]
+    QSVC --&gt; STORE
+    STORE --&gt; API
+    API --&gt; PCONV
+    PCONV --&gt; PROTOS
+    PCONV --&gt; APP
+  end
+  subgraph M[&quot;databend-meta (外部仓库)&quot;]
+    direction TB
+    SVC[server/service\nMetaNode / raft_service]
+    RFT[server/raft-store\nsm_v003 + raft_log_v004]
+    SLD[server/sled-store\n旧版 sled KV]
+    TYP[server/types]
+    BASE[server/base]
+    CLI[client/{client,kvapi,types,base}]
+    PRT[common/proto]
+    SVC --&gt; RFT
+    RFT --&gt; SLD
+    SVC --&gt; TYP
+    SVC --&gt; BASE
+    SVC --&gt; PRT
+  end
+  STORE -. gRPC .-&gt; SVC
+</div>
+<h3>2. 3.1 客户端类型（本仓库 src/meta/app/）</h3>
+<div class="mermaid">
+classDiagram
+  class TableMeta {
+    +schema: TableSchema
+    +engine / options
+    +cluster_key
+    +storage_params
+    +column_mask_policy
+    +constraints
+    +created_on / updated_on
+    +statistics
+  }
+  class DatabaseMeta { +engine +options +created_on }
+  class CatalogMeta { +catalog_option (Iceberg/Hive/Default) }
+  class IndexMeta { +index_type (Aggregating) +query +sync_creation +updated_on }
+  class TableCopiedFileInfo { +etag +content_length +last_modified }
+  class LeastVisibleTime { +time }
+  class Lock { +tenant +id +acquired_on }
+  class DataMaskMeta { +args +body }
+  class RowAccessPolicyMeta { +args +body }
+  class Ownership / Grant
+  class UserDefinedFunction
+  TableMeta --&gt; DataMaskMeta : column_mask_policy 引用
+  TableMeta --&gt; RowAccessPolicyMeta : security column map
+  CatalogMeta --&gt; DatabaseMeta : 容器
+  DatabaseMeta --&gt; TableMeta : 容器
+</div>
+<h3>3. 3.2 META_CHANGE_LOG — 唯一可信演进表</h3>
+<div class="mermaid">
+flowchart LR
+  W[Writer 写出 protobuf bytes] --&gt; ME[bytes 内嵌 ver=VER, min_reader=MIN_READER_VER]
+  R1[Reader v=N\nN &gt;= ver.min_reader] --&gt; OK1[能读]
+  R2[Reader v=N\nN &lt; min_reader] --&gt; FAIL[直接失败 — 上线时强制升级 reader]
+  ME --&gt; R1
+  ME --&gt; R2
+</div>
+<h3>4. 3.3 KvApi 与 SchemaApi</h3>
+<div class="mermaid">
+classDiagram
+  class KvApi {
+    &lt;&lt;trait&gt;&gt;
+    +get_kv(key) Option~SeqV~
+    +mget_kv(keys) ...
+    +list_kv(prefix) Stream
+    +upsert_kv(req) UpsertReply
+    +transaction(TxnRequest) TxnReply
+    +watch(WatchRequest) Stream
+  }
+  class SchemaApi {
+    &lt;&lt;trait&gt;&gt;
+    +create_database / drop_database / get_database / list_databases
+    +create_table / drop_table / commit_table_meta
+    +create_index / drop_index / list_indexes
+    +get_table_copied_file_info
+    +get_lock_revisions / acquire_lock / extend_lock_revision
+    +set_row_access_policy / unset_row_access_policy
+    +set_data_mask / unset_data_mask
+    +update_table_statistics
+    +update_least_visible_time
+  }
+  class MetaStore {
+    &lt;&lt;enum&gt;&gt;
+    Local(LocalRaftStore)
+    Remote(MetaGrpcClient)
+  }
+  KvApi &lt;|.. MetaStore
+  SchemaApi &lt;|.. SchemaApiImpl
+  SchemaApiImpl --&gt; KvApi : 在 KV 上拼装高层操作
+</div>
+<h3>5. 3.4 外部仓库的 MetaNode</h3>
+<div class="mermaid">
+flowchart TB
+  subgraph MetaNode
+    direction TB
+    R[OpenRaft Raft\nleader/follower 流程]
+    LOG[raft_log_v004\nWAL on-disk]
+    SM[sm_v003 (LeveledStore + KV)]
+    DISP[DispatcherHandle\nrequest 多路复用]
+    SVC[gRPC Service]
+  end
+  Client[Query node 经 gRPC 写入] --&gt; SVC --&gt; DISP --&gt; R
+  R -- AppendEntries --&gt; Peer1[Follower MetaNode]
+  R -- AppendEntries --&gt; Peer2[Follower MetaNode]
+  R -- 已 committed log --&gt; SM
+  SM -- 周期 --&gt; Snap[on-disk snapshot]
+  R -- read --&gt; SM
+</div>
+<h3>6. 3.5 状态机 sm_v003 与日志 raft_log_v004</h3>
+<div class="mermaid">
+flowchart TB
+  subgraph SMv3[&quot;sm_v003&quot;]
+    LD[LeveledStore\n多级 KV：Level0=可写, Level1+=只读 base]
+    APPLIER[applier/]
+    COMP[immutable_compactor + compactor_acquirer]
+    SNAP[snapshot_loader / snapshot_store_v003]
+    KVAPI[sm_v003_kv_api.rs]
+  end
+  subgraph LOGv4[&quot;raft_log_v004&quot;]
+    WAL[WAL 写流：log_store_meta + io_phase + io_desc]
+    CB[callback (append/commit)]
+    UTIL[importer / codec_wrapper]
+  end
+  R[OpenRaft] --&gt; WAL
+  R --&gt; APPLIER
+  APPLIER --&gt; LD
+  COMP --&gt; LD
+  SNAP --&gt; LD
+  KVAPI --&gt; LD
+</div>
+<h3>7. 4.1 Query → Meta：一次读</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Q as Query node
+  participant Cli as MetaGrpcClient
+  participant Net as gRPC
+  participant Svc as MetaService (Leader)
+  participant RR as RaftLeader
+  participant SM as sm_v003
+
+  Q-&gt;&gt;Cli: SchemaApi.get_table(&quot;default&quot;,&quot;t&quot;)
+  Cli-&gt;&gt;Cli: 拼 key 前缀 / 选择 endpoint
+  Cli-&gt;&gt;Net: kv_read_v1(GetReq)
+  Net-&gt;&gt;Svc: 收请求
+  Svc-&gt;&gt;RR: ensure_leader / read_index（线性化读保障）
+  RR-&gt;&gt;SM: read(&quot;__fd_table_by_id/...&quot;)
+  SM--&gt;&gt;Svc: SeqV&lt;TableMeta bytes&gt;
+  Svc--&gt;&gt;Net: KvReply
+  Net--&gt;&gt;Cli: bytes
+  Cli-&gt;&gt;Cli: proto-conv decode → TableMeta（按 ver）
+  Cli--&gt;&gt;Q: TableMeta
+</div>
+<h3>8. 4.2 Query → Meta：一次写（commit table snapshot）</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Q as Query (CommitSink)
+  participant Cli as MetaGrpcClient
+  participant L as Leader MetaNode
+  participant F1 as Follower
+  participant F2 as Follower
+  participant SM as sm_v003
+
+  Q-&gt;&gt;Cli: SchemaApi.update_table_meta(prev_seq, new_meta)
+  Cli-&gt;&gt;L: TxnRequest { compare prev_seq == X, then put new_meta }
+  L-&gt;&gt;L: 包成 raft entry, 写 WAL
+  L-&gt;&gt;F1: AppendEntries
+  L-&gt;&gt;F2: AppendEntries
+  F1--&gt;&gt;L: ack
+  F2--&gt;&gt;L: ack
+  L-&gt;&gt;SM: apply（CAS：seq 一致才成功）
+  alt CAS 成功
+    SM--&gt;&gt;L: TxnReply { success=true, new_seq }
+    L--&gt;&gt;Cli: ok
+    Cli--&gt;&gt;Q: 成功
+  else seq 不一致
+    SM--&gt;&gt;L: TxnReply { success=false }
+    L--&gt;&gt;Cli: TableVersionMismatched
+    Cli--&gt;&gt;Q: 失败 → set_backoff 重试（详见 06 文档）
+  end
+</div>
+<h3>9. 4.3 滚动升级 / 版本兼容</h3>
+<div class="mermaid">
+flowchart LR
+  subgraph Cluster[&quot;query 集群（v1.2.x）&quot;]
+    Q1[Query 节点 1]
+    Q2[Query 节点 2]
+  end
+  subgraph Meta[&quot;databend-meta 集群&quot;]
+    M1[Meta 1]
+    M2[Meta 2]
+    M3[Meta 3]
+  end
+  Q1 --(VER=173)--&gt;M1
+  Q2 --(VER=170)--&gt;M1
+  M1 --&gt; CHK{字节内嵌的 ver in MIN_READER_VER..=VER ?}
+  CHK -- 是 --&gt; OK[正常读]
+  CHK -- 否 --&gt; FAIL[要求升级 query]
+</div>
+<h3>10. 4.4 metactl 的角色</h3>
+<div class="mermaid">
+flowchart TB
+  CLI[databend-metactl] --&gt; SUB{子命令}
+  SUB -- status --&gt; ST[GET Raft 状态\n（leader/term/last_log）]
+  SUB -- export --&gt; EXP[导出整个状态机为 JSON 行]
+  SUB -- import --&gt; IMP[根据 JSON 重建一个新集群\n（仅同 DataVersion 内）]
+  SUB -- lua-script --&gt; LS[在 meta 上跑 Lua 表达式（管理用途）]
+</div>
+<h3>11. 4.5 数据版本（DataVersion）与磁盘演进</h3>
+<div class="mermaid">
+flowchart LR
+  V0 --&gt; V001 --&gt; V002 --&gt; V003 --&gt; V004
+  V003 -. compatible .-&gt; V002
+  V004 -. compatible .-&gt; V002
+</div>
+<h3>12. 7. 端到端案例</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Bind as Binder
+  participant Cat as CatalogManager
+  participant Cli as MetaGrpcClient
+  participant Meta as Meta Leader
+  participant SM as sm_v003
+
+  Bind-&gt;&gt;Cat: get_table(&quot;default&quot;,&quot;t&quot;)
+  Cat-&gt;&gt;Cli: SchemaApi.get_table_by_name(tenant, db, t)
+  Cli-&gt;&gt;Meta: kv_read_v1(GetReq[__fd_table_id_by_name/...])
+  Meta-&gt;&gt;SM: read
+  SM--&gt;&gt;Meta: SeqV { seq, value=table_id }
+  Cli-&gt;&gt;Meta: kv_read_v1(GetReq[__fd_table_meta/&lt;table_id&gt;])
+  Meta-&gt;&gt;SM: read
+  SM--&gt;&gt;Meta: SeqV { seq, value=TableMeta protobuf bytes(ver=N) }
+  Cli-&gt;&gt;Cli: proto-conv decode → TableMeta
+  Cli--&gt;&gt;Cat: TableMeta（含 OPT_KEY_SNAPSHOT_LOCATION）
+  Cat--&gt;&gt;Bind: TableInfo
+  Note over Bind: 后续走 06 文档的 FUSE 路径，meta 不再参与
+</div>
+<h3>13. 7. 端到端案例</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant CS as FuseTable.commit
+  participant Cli as MetaGrpcClient
+  participant L as Meta Leader
+  participant Q as Raft 队列
+  participant SM as sm_v003
+
+  CS-&gt;&gt;Cli: update_table_meta(prev_seq, new_meta)
+  Cli-&gt;&gt;L: TxnRequest { Compare prev_seq, Then Put new TableMeta }
+  L-&gt;&gt;Q: append entry
+  Q-&gt;&gt;L: 多数派 ack
+  L-&gt;&gt;SM: apply
+  SM--&gt;&gt;L: ok / 失败
+  L--&gt;&gt;Cli: TxnReply
+  Cli--&gt;&gt;CS: ok 或 set_backoff 重试
+</div>
+<hr />
+<h2>来自 <a href="./03-sql-frontend.html">03-sql-frontend.md</a></h2>
+<h3>1. 2. 在 Databend 中的位置</h3>
+<div class="mermaid">
+flowchart LR
+  subgraph Front[&quot;前端 (databend-common-ast)&quot;]
+    TOK[Tokenizer]
+    PARSE[parse_sql]
+    AST[Statement / Query / Expr]
+  end
+  subgraph Mid[&quot;绑定 (databend-common-sql::planner::binder)&quot;]
+    BIND[Binder]
+    BC[BindContext]
+    META[Metadata]
+    BS[Plan::Query{ s_expr, metadata, bind_context, ... }]
+  end
+  subgraph Back[&quot;后续阶段&quot;]
+    OPT[Optimizer]
+    PHYS[PhysicalPlan]
+    PIPE[Pipeline]
+  end
+  TOK --&gt; PARSE --&gt; AST --&gt; BIND
+  BIND --&gt; BC
+  BIND --&gt; META
+  BIND --&gt; BS
+  BS --&gt; OPT
+  OPT --&gt; PHYS
+  PHYS --&gt; PIPE
+</div>
+<h3>2. 3.1 Tokenizer 与 nom Parser</h3>
+<div class="mermaid">
+flowchart TB
+  Sql[SQL 字符串] --&gt; Tokz[Tokenizer\nparser/token.rs]
+  Tokz --&gt; Tokens[&quot;Vec&amp;lt;Token&amp;gt;&quot;]
+  Tokens --&gt; Input[Input { tokens, dialect, mode, backtrace }]
+  Input --&gt; Combo[nom 组合器 statement / expr / values / ...]
+  Combo --&gt; Stmt[Statement / Expr / Values]
+  Combo --&gt; Bt[Backtrace 用于错误展示]
+  Stmt --&gt; Out[&quot;(Statement, Option&amp;lt;FORMAT&amp;gt;)&quot;]
+</div>
+<h3>3. 3.2 顶层 AST 节点</h3>
+<div class="mermaid">
+classDiagram
+  class Statement {
+    &lt;&lt;enum&gt;&gt;
+    Query(Box~Query~)
+    Insert(InsertStmt)
+    Replace(ReplaceStmt)
+    MergeInto(MergeIntoStmt)
+    Delete(DeleteStmt)
+    Update(UpdateStmt)
+    CopyIntoTable / CopyIntoLocation
+    Explain { kind, options, query }
+    StatementWithSettings { settings, stmt }
+    SetStmt / UnSetStmt / Use / KillStmt
+    ... 100+ DDL/DML/Show/Admin variants
+  }
+  class Query {
+    +Vec~With~ with
+    +SetExpr body
+    +Vec~OrderByExpr~ order_by
+    +Option~Expr~ limit
+    +Option~Expr~ offset
+    ...
+  }
+  class Expr {
+    &lt;&lt;enum&gt;&gt;
+    Literal { span, value }
+    ColumnRef { span, column }
+    FunctionCall(FunctionCall)
+    BinaryOp / UnaryOp
+    Case { conditions, results, else_result }
+    Subquery { modifier, subquery }
+    Cast / TryCast / IsNull / Tuple / Array
+    ...
+  }
+  Statement --&gt; Query
+  Query --&gt; Expr
+</div>
+<h3>4. 3.3 Binder 与 BindContext</h3>
+<div class="mermaid">
+classDiagram
+  class BindContext {
+    +parent: Option~BindContext~
+    +columns: Vec~ColumnBinding~
+    +aggregate_info / windows / srf_info / cte_context
+    +in_grouping: bool
+    +inverted_index_map / vector_index_map
+  }
+  class ColumnBinding {
+    +database_name / table_name
+    +column_name / column_name_lower
+    +column_position
+    +table_index: IndexType
+    +index: Symbol
+    +data_type: DataType
+    +visibility: Visibility
+    +virtual_expr: Option~String~
+    +is_srf: bool
+  }
+  class Metadata {
+    &lt;&lt;MetadataRef = Arc&amp;lt;RwLock&amp;lt;Metadata&amp;gt;&amp;gt;&gt;&gt;
+    +tables: Vec~Table~
+    +columns: Vec~Column~
+    +base_column_scan_index: ...
+  }
+  BindContext --&gt; ColumnBinding : columns[]
+  BindContext ..&gt; BindContext : parent
+  Binder --&gt; BindContext : 创建 / 嵌套
+  Binder --&gt; Metadata : 全局共享
+</div>
+<h3>5. 4.1 整体流程</h3>
+<div class="mermaid">
+flowchart TB
+  Sql[SQL 文本]
+  Sql --&gt; T[tokenize_sql]
+  T --&gt; P[parse_sql → Statement]
+  P --&gt; B0[Binder::bind]
+  B0 --&gt; BS[bind_statement]
+  BS -- Query --&gt; BQ[bind_query]
+  BS -- DDL --&gt; BD[bind_ddl]
+  BS -- Insert/Replace/Merge --&gt; BM[bind_mutation]
+  BS -- Set / Use / Show --&gt; BSh[bind_admin]
+  BQ --&gt; BSel[bind_select]
+  BSel --&gt; BTR[bind_table_reference]
+  BSel --&gt; Scal[bind scalar / aggregate / window / srf]
+  BSel --&gt; Proj[project / sort / limit / having / qualify]
+  Proj --&gt; SE[SExpr 树]
+  SE --&gt; P_OUT[Plan::Query { s_expr, metadata, bind_context, ... }]
+</div>
+<h3>6. 4.2 SELECT 的内部分解</h3>
+<div class="mermaid">
+flowchart LR
+  S[SELECT a, sum(b) FROM t WHERE c&gt;1 GROUP BY a HAVING sum(b)&gt;10 ORDER BY a LIMIT 5]
+  S --&gt; FROM[bind_table_reference\n→ Scan(t)]
+  FROM --&gt; WHERE[bind WHERE\n→ Filter(c&gt;1)]
+  WHERE --&gt; SCAN[scan AggregateInfo / WindowInfo / SetReturning\n（来自 SELECT/HAVING/QUALIFY）]
+  SCAN --&gt; AGG[bind_aggregate\n→ Aggregate{group_items=[a], agg_funcs=[sum(b)]}]
+  AGG --&gt; HAV[bind HAVING\n→ Filter(sum(b)&gt;10)]
+  HAV --&gt; WIN[bind windows\n→ Window 算子若有]
+  WIN --&gt; Q[bind QUALIFY 若有]
+  Q --&gt; P[bind_projection\n→ EvalScalar / Project]
+  P --&gt; ORD[bind_order_by → Sort]
+  ORD --&gt; LIM[bind_limit → Limit]
+  LIM --&gt; SE[最终 SExpr]
+</div>
+<h3>7. 4.3 命名解析</h3>
+<div class="mermaid">
+sequenceDiagram
+  participant E as Expr::ColumnRef(&quot;t.x&quot;)
+  participant Resolver as TypeChecker (scalar/...)
+  participant BC as BindContext
+  participant P as parent BindContext
+  participant Meta as Metadata
+
+  E-&gt;&gt;Resolver: resolve_column(&quot;t.x&quot;)
+  Resolver-&gt;&gt;BC: 查 columns[] 中 (Some(&quot;t&quot;), &quot;x&quot;)
+  alt 找到 + 唯一
+    BC--&gt;&gt;Resolver: ColumnBinding
+  else 未找到 → 向外层
+    Resolver-&gt;&gt;P: 查 parent.columns[]
+    alt 找到（外层）
+      P--&gt;&gt;Resolver: 标记为 outer ref
+    else 仍未找到
+      P-&gt;&gt;Meta: 是否是 internal/virtual 列？
+      Meta--&gt;&gt;Resolver: ColumnBinding 或 ColumnNotFound
+    end
+  else 找到但模糊
+    BC--&gt;&gt;Resolver: AmbiguousColumn 错误
+  end
+  Resolver--&gt;&gt;E: ScalarExpr::BoundColumnRef
+</div>
+<h3>8. 7. 端到端案例</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant T as Tokenizer
+  participant P as parse_sql
+  participant B as Binder::bind
+  participant BC as BindContext
+  participant Cat as CatalogManager
+  participant M as Metadata
+
+  T-&gt;&gt;T: [&quot;SELECT&quot;, &quot;count&quot;, &quot;(&quot;, &quot;*&quot;, &quot;)&quot;, &quot;FROM&quot;, &quot;t&quot;, &quot;WHERE&quot;, &quot;x&quot;, &quot;&gt;&quot;, &quot;1&quot;]
+  T-&gt;&gt;P: tokens
+  P-&gt;&gt;P: run_parser(statement)
+  P--&gt;&gt;B: Statement::Query(Query { body: SELECT, where: x&gt;1 })
+  B-&gt;&gt;BC: 新建空 BindContext
+  B-&gt;&gt;B: bind_statement → bind_query → bind_select
+  B-&gt;&gt;Cat: 查 default.t
+  Cat-&gt;&gt;M: 注册 Table(t), Column(x), 隐式 Column(_row_id)
+  Cat--&gt;&gt;B: TableInfo
+  B-&gt;&gt;BC: 添加 columns: [t.x → Symbol(0), ...]
+  B-&gt;&gt;B: bind WHERE → Filter(BoundColumnRef(0) &gt; 1)
+  B-&gt;&gt;B: bind_projection: count(*) 是聚合，进入 AggregateInfo
+  B-&gt;&gt;B: bind_aggregate → Aggregate { group_items: [], agg_funcs: [count] }
+  B-&gt;&gt;B: 最终 SExpr = EvalScalar(Aggregate(Filter(Scan(t))))
+  B--&gt;&gt;P: Plan::Query { s_expr, metadata: M, bind_context: BC, ... }
+</div>
+<hr />
+<h2>来自 <a href="./04-planner-optimizer.html">04-planner-optimizer.md</a></h2>
+<h3>1. 2. 在 Databend 中的位置</h3>
+<div class="mermaid">
+flowchart LR
+  IN[Binder 输出\nPlan::Query { s_expr, metadata, bind_context, ... }]
+  IN --&gt; OPT[optimize_query\noptimizer.rs L≈246]
+  OPT --&gt; OUT[优化后的 SExpr\n(可含 Exchange / 物理性质)]
+  OUT --&gt; PB[PhysicalPlanBuilder]
+  PB --&gt; PP[PhysicalPlan]
+  PP --&gt; PiPB[PipelineBuilder]
+</div>
+<h3>2. 3.3 OptimizerPipeline — 把不同优化器串起来</h3>
+<div class="mermaid">
+classDiagram
+  class OptimizerPipeline {
+    +context: Arc~OptimizerContext~
+    +stages: Vec~Box dyn Optimizer~
+    +execute() async Result~SExpr~
+    +add(Optimizer)
+    +add_if(cond, Optimizer)
+  }
+  class Optimizer {
+    &lt;&lt;trait&gt;&gt;
+    +optimize(s_expr) Result~SExpr~
+  }
+  class SubqueryDecorrelatorOptimizer
+  class CollectStatisticsOptimizer
+  class RecursiveRuleOptimizer { +rules: ~RuleID }
+  class DPhpyOptimizer
+  class CascadesOptimizer { +memo +cost_model +rule_set }
+  class DistributedOptimizer
+  Optimizer &lt;|-- SubqueryDecorrelatorOptimizer
+  Optimizer &lt;|-- CollectStatisticsOptimizer
+  Optimizer &lt;|-- RecursiveRuleOptimizer
+  Optimizer &lt;|-- DPhpyOptimizer
+  Optimizer &lt;|-- CascadesOptimizer
+  Optimizer &lt;|-- DistributedOptimizer
+  OptimizerPipeline --&gt; Optimizer
+</div>
+<h3>3. 3.4 Cascades 内部结构</h3>
+<div class="mermaid">
+classDiagram
+  class CascadesOptimizer {
+    +memo: Memo
+    +cost_model: Box dyn CostModel
+    +explore_rule_set: RuleSet
+    +optimize_sync(s_expr) Result~SExpr~
+    +optimize_internal(s_expr)
+  }
+  class Memo {
+    +groups: Vec~Group~
+    +root: Option~GroupIndex~
+  }
+  class Group {
+    +group_index
+    +exprs: Vec~MExpr~
+    +winner: Option~MExpr~
+    +rel_prop / stat_info
+  }
+  class MExpr {
+    +group_index
+    +children: Vec~GroupIndex~
+    +applied_rules: AppliedRules
+  }
+  class TaskManager {
+    +pending: VecDeque~Box dyn Task~
+    +run_until_empty()
+  }
+  class Task {
+    &lt;&lt;trait&gt;&gt;
+    OptimizeGroup
+    OptimizeExpr
+    ExploreGroup
+    ExploreExpr
+    ApplyRule
+  }
+  CascadesOptimizer --&gt; Memo
+  CascadesOptimizer --&gt; TaskManager
+  Memo --&gt; Group
+  Group --&gt; MExpr
+  TaskManager --&gt; Task
+</div>
+<h3>4. 4.1 顶层流水线</h3>
+<div class="mermaid">
+flowchart TB
+  S0[SExpr from Binder]
+  S0 --&gt; A1[SubqueryDecorrelatorOptimizer]
+  A1 --&gt; A2[RuleStatsAggregateOptimizer]
+  A2 --&gt; A3[CollectStatisticsOptimizer]
+  A3 --&gt; A4[RuleNormalizeAggregateOptimizer]
+  A4 --&gt; A5[PullUpFilterOptimizer]
+  A5 --&gt; A6{enable_cse_optimizer?}
+  A6 -- 是 --&gt; A7[CommonSubexpressionOptimizer]
+  A6 -- 否 --&gt; A8
+  A7 --&gt; A8[RecursiveRuleOptimizer\n@DEFAULT_REWRITE_RULES]
+  A8 --&gt; A9[CTEFilterPushdownOptimizer]
+  A9 --&gt; A10[SyncMaterializedCTERefOptimizer]
+  A10 --&gt; A11[RecursiveRuleOptimizer\n@SplitAggregate]
+  A11 --&gt; A12[DPhpyOptimizer\n标记 dphyp_optimized=true]
+  A12 --&gt; A13[EliminateSelfJoinOptimizer]
+  A13 --&gt; A14[SingleToInnerOptimizer]
+  A14 --&gt; A15[DeduplicateJoinConditionOptimizer]
+  A15 --&gt; A16{enable_join_reorder?}
+  A16 -- 是 --&gt; A17[CommuteJoin Rule]
+  A16 -- 否 --&gt; A18
+  A17 --&gt; A18{force_eager_aggregate?}
+  A18 -- 是 --&gt; A19[RuleEagerAggregation]
+  A18 -- 否 --&gt; A20
+  A19 --&gt; A20[CascadesOptimizer]
+  A20 --&gt; A21{planning_agg_index?}
+  A21 -- 否 --&gt; A22[EliminateEvalScalar]
+  A21 -- 是 --&gt; A23
+  A22 --&gt; A23[CleanupUnusedCTEOptimizer]
+  A23 --&gt; OUT[最终 SExpr]
+</div>
+<h3>5. 4.2 RBO 规则——push-down/eliminate 范式</h3>
+<div class="mermaid">
+flowchart TB
+  subgraph Simplify[&quot;简化&quot;]
+    EliminateSort
+    DeduplicateSort
+    EliminateUnion
+    MergeEvalScalar
+    NormalizeScalarFilter
+    FilterNulls
+    EliminateFilter
+    MergeFilter
+  end
+  subgraph PushFilter[&quot;谓词下推&quot;]
+    PushDownFilterUnion
+    PushDownFilterAggregate
+    PushDownFilterWindow
+    PushDownFilterWindowTopN
+    PushDownFilterSort
+    PushDownFilterEvalScalar
+    PushDownFilterJoin
+    PushDownFilterProjectSet
+  end
+  subgraph PushLimit[&quot;LIMIT/Sort 下推&quot;]
+    MergeLimit
+    PushDownLimit
+    PushDownLimitUnion
+    PushDownSortEvalScalar
+    PushDownLimitEvalScalar
+    PushDownLimitSort
+    PushDownLimitWindow
+    PushDownRankLimitAggregate
+    PushDownLimitOuterJoin
+    PushDownLimitScan
+  end
+  subgraph JoinSimp[&quot;Join 简化&quot;]
+    SemiToInnerJoin
+    FoldCountAggregate
+    TryApplyAggIndex
+  end
+  subgraph ScanLayer[&quot;Scan 层下推&quot;]
+    PushDownFilterScan
+    PushDownPrewhere
+    PushDownSortScan
+    PushDownSortFilterScan
+    PushDownLimitFilterScan
+    HierarchicalGroupingSetsToUnion
+    GroupingSetsToUnion
+  end
+  Simplify --&gt; PushFilter --&gt; PushLimit --&gt; JoinSimp --&gt; ScanLayer
+</div>
+<h3>6. 4.3 DPHyp — 多表 join 的动态规划</h3>
+<div class="mermaid">
+flowchart LR
+  S[初始 SExpr 含 N 个 Join 节点] --&gt; QG[query_graph.rs\n构造连接超图]
+  QG --&gt; JR[join_relation.rs\n基础关系（叶子表）]
+  JR --&gt; JN[join_node.rs\nDP 子集状态]
+  JN --&gt; DP[dphyp.rs\nDPHyp 主算法\nemit_csg / emit_cmp / emit_csg_cmp]
+  DP --&gt; Pick[挑选最佳 join 顺序\nbuild new SExpr 树]
+  Pick --&gt; OPTSE[加上 dphyp_optimized=true]
+</div>
+<h3>7. 4.4 Cascades — Memo + Task 队列</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant CO as CascadesOptimizer
+  participant M as Memo
+  participant TM as TaskManager
+  participant T as Tasks (Apply/Explore/Optimize)
+
+  CO-&gt;&gt;M: init(s_expr) 把 SExpr 放进 group
+  CO-&gt;&gt;TM: schedule OptimizeGroup(root, required_prop)
+  loop run_until_empty
+    TM-&gt;&gt;T: pop next task
+    alt OptimizeGroup
+      T-&gt;&gt;TM: schedule OptimizeExpr 对 group 内每个 MExpr
+    else OptimizeExpr
+      T-&gt;&gt;TM: schedule ExploreGroup（先看子组）
+      T-&gt;&gt;TM: schedule ApplyRule 对自身适用规则
+    else ExploreGroup
+      T-&gt;&gt;TM: schedule ExploreExpr per MExpr
+    else ApplyRule
+      T-&gt;&gt;M: 把变换后表达式插入 group / 新 group
+      T-&gt;&gt;TM: schedule OptimizeGroup 对新 group
+    end
+  end
+  CO-&gt;&gt;M: 取 root group winner
+  M--&gt;&gt;CO: 最优 SExpr（含 Exchange 等物理算子）
+</div>
+<h3>8. 4.5 解相关（Subquery Decorrelator）</h3>
+<div class="mermaid">
+flowchart TB
+  IN[&quot;IN/EXISTS/标量子查询，含 outer 引用&quot;] --&gt; SD[subquery_decorrelator.rs L≈169]
+  SD --&gt;|EXISTS / NOT EXISTS| SJ[Semi/Anti Join]
+  SD --&gt;|IN / NOT IN| MJ[Mark Join]
+  SD --&gt;|Scalar Subquery| LSJ[LeftSingleJoin\n空时返回 NULL]
+  SD --&gt;|相关投影| EVS[EvalScalar 提到外层]
+  SJ --&gt; OK[已无相关引用]
+  MJ --&gt; OK
+  LSJ --&gt; OK
+  EVS --&gt; OK
+</div>
+<h3>9. 5. 性能与优化点</h3>
+<div class="mermaid">
+gantt
+  title 一条 6 表 inner-join 优化时间线（示意）
+  dateFormat  X
+  axisFormat  %s
+  section 解相关
+  SubqueryDecorrelator      :a1, 0, 1
+  section 统计采集
+  CollectStatistics         :b1, 1, 2
+  section 规则重写
+  DEFAULT_REWRITE_RULES     :c1, 2, 4
+  CTE pushdown              :c2, 4, 5
+  section 物理 join 顺序
+  DPHyp（最贵）             :d1, 5, 11
+  section 物理性质枚举
+  Cascades                  :e1, 11, 13
+  Sort/Limit pushdown       :e2, 13, 14
+  section 收尾
+  EliminateEvalScalar       :f1, 14, 15
+</div>
+<h3>10. 7. 端到端案例</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Plan as Plan::Query.s_expr
+  participant Opt as optimize_query
+  participant SD as SubqueryDecorrelator
+  participant Stat as CollectStatistics
+  participant RR as RecursiveRuleOptimizer
+  participant DP as DPhpy
+  participant CO as CascadesOptimizer
+  participant PB as PhysicalPlanBuilder
+
+  Plan-&gt;&gt;Opt: SExpr(EvalScalar(Aggregate(Filter(Scan(t)))))
+  Opt-&gt;&gt;SD: 没有子查询，no-op
+  Opt-&gt;&gt;Stat: 给 Scan/Filter/Aggregate 估行数
+  Opt-&gt;&gt;RR: DEFAULT_REWRITE_RULES
+  RR-&gt;&gt;RR: PushDownFilterScan: Filter(Scan(t,x&gt;1))→Scan(t, prewhere=x&gt;1)
+  RR-&gt;&gt;RR: FoldCountAggregate: 没遇到无谓词 count(*)，跳过
+  Opt-&gt;&gt;DP: 单表，no-op
+  Opt-&gt;&gt;CO: 现在的 SExpr 简单，单 group
+  CO-&gt;&gt;CO: ApplyRule: TryApplyAggIndex 检查 t 上是否有 agg index→否
+  CO-&gt;&gt;CO: 物理性质：单节点 Serial→不需要 Exchange
+  CO--&gt;&gt;Opt: SExpr(Aggregate(Scan(t, prewhere=x&gt;1)))
+  Opt--&gt;&gt;PB: 终态 SExpr
+  PB--&gt;&gt;PB: 转 PhysicalPlan: TableScan(t,prewhere)→FinalAggregate(count)
+</div>
+<hr />
+<h2>来自 <a href="./05-pipeline-execution.html">05-pipeline-execution.md</a></h2>
+<h3>1. 2. 在 Databend 中的位置</h3>
+<div class="mermaid">
+flowchart LR
+  subgraph Plan[&quot;上游 (planner)&quot;]
+    PP[PhysicalPlan]
+  end
+  subgraph Build[&quot;pipelines/pipeline_builder.rs&quot;]
+    PB[PipelineBuilder]
+    PBR[PipelineBuildResult\n(main + sources)]
+  end
+  subgraph Core[&quot;databend-common-pipeline / core&quot;]
+    P[Pipeline]
+    PR[Processor trait]
+    PT[ProcessorPtr]
+    PORTS[InputPort / OutputPort]
+    PIPE[Pipe / PipeItem]
+  end
+  subgraph Exec[&quot;pipelines/executor&quot;]
+    QE[QueryPipelineExecutor]
+    QPE[QueryPipelineExecutor::execute]
+    SCHED[ScheduleQueue]
+    GQ[QueryExecutorTasksQueue]
+    WC[WorkersCondvar]
+    AR[AsyncRuntime (tokio)]
+  end
+  PP --&gt; PB --&gt; PBR --&gt; QE
+  PR --&gt; PT
+  PT --&gt; PIPE
+  PORTS --&gt; PIPE
+  PIPE --&gt; P
+  P --&gt; QE
+  QE --&gt; SCHED
+  SCHED --&gt; GQ
+  GQ --&gt; WC
+  QE --&gt; AR
+</div>
+<h3>2. 3.1 Processor trait</h3>
+<div class="mermaid">
+stateDiagram-v2
+  [*] --&gt; Idle
+  Idle --&gt; NeedData : input empty
+  Idle --&gt; NeedConsume : output full
+  Idle --&gt; Sync : can compute now
+  Idle --&gt; Async : need IO / network
+  Sync --&gt; Idle : process() ok
+  Async --&gt; Idle : async_process() ok
+  Idle --&gt; Finished : 输入关闭 + 状态机走完
+  Finished --&gt; [*]
+</div>
+<h3>3. 3.3 Pipeline = petgraph DAG</h3>
+<div class="mermaid">
+flowchart LR
+  subgraph &quot;Pipeline 内部 (StableGraph&lt;Node, Edge&gt;)&quot;
+    direction LR
+    S1[Source #1] --&gt; T1[Transform A]
+    S2[Source #2] --&gt; T1
+    T1 --&gt; R[Resize to N]
+    R --&gt; A[FilterTransform]
+    A --&gt; B[FinalAggregate]
+    B --&gt; SINK1[Sink #1]
+    B --&gt; SINK2[Sink #2]
+  end
+</div>
+<h3>4. 3.4 PipelineBuilder</h3>
+<div class="mermaid">
+classDiagram
+  class PipelineBuilder {
+    +ctx: QueryContext
+    +main_pipeline: Pipeline
+    +pipelines: Vec~Pipeline~
+    +exchange_injector: ExchangeInjector
+    +hash_join_states
+    +finalize(&amp;PhysicalPlan) PipelineBuildResult
+    +build_pipeline(&amp;PhysicalPlan) // dispatch
+  }
+  class PipelineBuildResult {
+    +main_pipeline
+    +sources_pipelines
+    +exchange_injector
+    +builder_data
+    +r_cte_scan_interpreters
+  }
+  class PhysicalPlan {
+    &lt;&lt;enum&gt;&gt;
+    TableScan
+    Filter
+    HashJoin
+    AggregatePartial / AggregateFinal
+    Sort / Limit
+    ExchangeSource / ExchangeSink
+    ...
+    +build_pipeline(&amp;mut PipelineBuilder)
+  }
+  PipelineBuilder ..&gt; PhysicalPlan : 派发
+  PipelineBuilder --&gt; PipelineBuildResult
+</div>
+<h3>5. 4.1 PhysicalPlan → Pipeline DAG</h3>
+<div class="mermaid">
+flowchart TB
+  Top[PhysicalPlan 根] --&gt; Disp{variant?}
+  Disp -- TableScan --&gt; ScanB[FuseTable.do_read_data\n往 main_pipeline 加 BlockReader source + 解码 transform]
+  Disp -- Filter --&gt; Filt[push FilterTransform]
+  Disp -- AggregatePartial --&gt; AP[push PartialAggregator]
+  Disp -- AggregateFinal --&gt; AF[Resize to merge → FinalAggregator]
+  Disp -- HashJoin --&gt; HJ[新开 build pipeline → BasicHashJoinState\n再在 main_pipeline 加 ProbeTransform]
+  Disp -- ExchangeSink --&gt; ES[ExchangeSink + Flight 客户端]
+  Disp -- ExchangeSource --&gt; ESrc[ExchangeSource 接收 Flight stream]
+  Disp -- Sort --&gt; SR[多阶段：partial sort → resize → merge sort]
+  Disp -- Limit --&gt; LM[LimitTransform]
+  ScanB --&gt; Done[main_pipeline 增长完毕]
+  Filt --&gt; Done
+  AP --&gt; Done
+  AF --&gt; Done
+  HJ --&gt; Done
+  ES --&gt; Done
+  ESrc --&gt; Done
+  SR --&gt; Done
+  LM --&gt; Done
+</div>
+<h3>6. 4.2 Executor：QueryPipelineExecutor 与调度</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Build as PipelineBuildResult
+  participant QE as QueryPipelineExecutor::create
+  participant RG as RunningGraph
+  participant TQ as QueryExecutorTasksQueue
+  participant W as Worker[i]
+  participant P as ProcessorPtr
+  participant TK as tokio runtime
+
+  Build-&gt;&gt;QE: pipeline / pipelines + settings
+  QE-&gt;&gt;RG: 把 Pipeline DAG 烫平为 RunningGraph（带依赖边）
+  QE-&gt;&gt;TQ: 用 ScheduleQueue 引导初始任务
+  QE-&gt;&gt;QE: spawn N 个 worker 线程
+  loop 每个 worker
+    W-&gt;&gt;TQ: pop_task()
+    alt 拿到 sync 任务
+      W-&gt;&gt;P: event() / process()
+      P--&gt;&gt;W: 完成或推下游
+      W-&gt;&gt;RG: schedule(下游 NodeIndex)
+    else 拿到 async 任务
+      W-&gt;&gt;TK: 把 async_process() future 投递
+      TK--&gt;&gt;RG: 完成回调 → schedule
+    else 队列空
+      W-&gt;&gt;WC: park
+    end
+  end
+  W-&gt;&gt;QE: finished / error → finished_notify
+</div>
+<h3>7. 4.3 同步 vs 异步：把 IO 推到 tokio</h3>
+<div class="mermaid">
+flowchart LR
+  N[event() = Async] --&gt; P[ProcessorAsyncTask\nprocessor_async_task.rs]
+  P --&gt; TR[tokio Runtime]
+  TR --&gt; AP[async_process()]
+  AP --&gt; CB[完成回调\nCompletedAsyncTask 入列]
+  CB --&gt; SQ[ScheduleQueue 唤醒 worker]
+</div>
+<h3>8. 4.4 ExchangeInjector — 决定何时插 Flight 边</h3>
+<div class="mermaid">
+flowchart LR
+  PB[PipelineBuilder] --&gt; EI[ExchangeInjector trait]
+  EI -.默认.-&gt; DEI[DefaultExchangeInjector]
+  EI -.分布式.-&gt; DataXM[DataExchangeManager 注入]
+  DataXM --&gt; ESrc[ExchangeSource (Flight)]
+  DataXM --&gt; ESink[ExchangeSink (Flight client)]
+</div>
+<h3>9. 5. 性能与优化点</h3>
+<div class="mermaid">
+gantt
+  title 4 worker 跑「Scan→Filter→Aggregate」的近似时序
+  dateFormat  X
+  axisFormat  %s
+  section Worker0
+  Scan(part0) IO    :a1, 0, 3
+  Filter            :a2, 3, 4
+  PartialAgg        :a3, 4, 5
+  section Worker1
+  Scan(part1) IO    :b1, 0, 3
+  Filter            :b2, 3, 4
+  PartialAgg        :b3, 4, 5
+  section Worker2
+  Scan(part2) IO    :c1, 0, 3
+  Filter            :c2, 3, 4
+  PartialAgg        :c3, 4, 5
+  section Worker3
+  (空闲偷 part3)     :d0, 1, 4
+  Filter            :d1, 4, 5
+  Resize/FinalAgg   :d2, 5, 6
+</div>
+<h3>10. 7. 端到端案例</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant SI as SelectInterpreter
+  participant PB as PipelineBuilder
+  participant FT as FuseTable.do_read_data
+  participant QE as QueryPipelineExecutor
+  participant W0 as Worker0
+  participant W1 as Worker1
+  participant TK as tokio runtime
+  participant OD as OpenDAL
+
+  SI-&gt;&gt;PB: finalize(PhysicalPlan(TableScan→FilterTrans→FinalAgg))
+  PB-&gt;&gt;FT: build TableScan source（N 个 source processor，N=part_count）
+  PB-&gt;&gt;PB: add FilterTransform / AggregatePartial / Resize / AggregateFinal / Sink
+  PB--&gt;&gt;SI: PipelineBuildResult
+  SI-&gt;&gt;QE: create(pipelines, settings) → execute
+  QE-&gt;&gt;QE: spawn workers
+  par
+    W0-&gt;&gt;OD: async_process: GET part0 parquet
+    OD--&gt;&gt;TK: bytes
+    TK--&gt;&gt;W0: 完成
+    W0-&gt;&gt;W0: process: 解码 → DataBlock → push 到 FilterTransform
+  and
+    W1-&gt;&gt;OD: GET part1
+    OD--&gt;&gt;W1: bytes
+    W1-&gt;&gt;W1: 同样路径
+  end
+  W0-&gt;&gt;W0: FilterTransform sync process: x&gt;1 mask
+  W1-&gt;&gt;W1: FilterTransform sync process
+  W0-&gt;&gt;W0: PartialAggregate: count_per_block
+  W1-&gt;&gt;W1: PartialAggregate
+  W0-&gt;&gt;W0: Resize 收敛到单线程
+  W0-&gt;&gt;W0: FinalAggregate: 累计
+  W0-&gt;&gt;QE: sink（HTTP 推回客户端）
+  QE--&gt;&gt;SI: 完成
+</div>
+<hr />
+<h2>来自 <a href="./06-fuse-storage.html">06-fuse-storage.md</a></h2>
+<h3>1. 2. 在 Databend 中的位置</h3>
+<div class="mermaid">
+flowchart LR
+  subgraph Catalog[&quot;catalog (databend-common-catalog)&quot;]
+    T[trait Table]
+  end
+  subgraph FUSE[&quot;storages/fuse&quot;]
+    FT[FuseTable]
+    OPS[operations/*.rs]
+    IO[io/{snapshots,segments,locations}.rs]
+    STAT[statistics/*]
+  end
+  subgraph Meta[&quot;storages/common/table_meta&quot;]
+    SNAP[v4::TableSnapshot]
+    SEG[v4::SegmentInfo]
+    BM[v2::BlockMeta]
+  end
+  subgraph Common[&quot;storages/common&quot;]
+    PRUNER[pruner]
+    INDEX[index]
+    CACHE[cache]
+    BLOCKS[blocks]
+    IO2[io]
+  end
+  subgraph CommonStor[&quot;common/storage&quot;]
+    OD[OpenDAL Operator]
+  end
+  subgraph MetaSvc[&quot;meta-service (外部)&quot;]
+    KV[KvApi]
+  end
+  T --&gt; FT
+  FT --&gt; OPS
+  FT --&gt; IO
+  IO --&gt; SNAP
+  IO --&gt; SEG
+  IO --&gt; BM
+  OPS --&gt; PRUNER
+  OPS --&gt; INDEX
+  OPS --&gt; CACHE
+  IO --&gt; OD
+  FT --&gt; KV
+  PRUNER --&gt; SNAP
+  PRUNER --&gt; SEG
+  PRUNER --&gt; BM
+</div>
+<h3>2. 3.1 三层文件结构</h3>
+<div class="mermaid">
+flowchart TB
+  subgraph S[&quot;snapshot.json (v4)&quot;]
+    direction TB
+    S0[&quot;snapshot_id (UUID)&quot;]
+    S1[&quot;prev_snapshot_id (UUID, FormatVersion)&quot;]
+    S2[&quot;timestamp&quot;]
+    S3[&quot;schema (TableSchema)&quot;]
+    S4[&quot;summary: Statistics&quot;]
+    S5[&quot;segments: Vec&lt;Location&gt;&quot;]
+    S6[&quot;cluster_key_meta / cluster_type&quot;]
+    S7[&quot;table_statistics_location&quot;]
+  end
+  subgraph G[&quot;segment.mpk (v4, MessagePack+ZSTD)&quot;]
+    G0[&quot;blocks: Vec&lt;Arc&lt;BlockMeta&gt;&gt;&quot;]
+    G1[&quot;summary: Statistics&quot;]
+  end
+  subgraph B[&quot;block parquet (v2 BlockMeta 描述)&quot;]
+    B0[&quot;row_count / block_size / file_size&quot;]
+    B1[&quot;col_stats: min/max/null_count/distinct&quot;]
+    B2[&quot;col_metas: 列偏移与编码元数据&quot;]
+    B3[&quot;cluster_stats: 聚簇键 min/max/level&quot;]
+    B4[&quot;bloom/inverted/vector/spatial/ngram\nindex_location + size&quot;]
+    B5[&quot;compression&quot;]
+    B6[&quot;create_on&quot;]
+  end
+  S5 -. Location .-&gt; G
+  G0 -. Arc 引用 .-&gt; B
+</div>
+<h3>3. 4.1 读：从 SQL 到 DataBlock</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Plan as PhysicalPlan::TableScan
+  participant FT as FuseTable
+  participant Meta as meta-service
+  participant OD as OpenDAL Operator
+  participant Cache as Cache (snapshot/segment/bloom)
+  participant Pipe as Pipeline
+
+  Plan-&gt;&gt;FT: do_read_partitions(ctx, push_downs)
+  FT-&gt;&gt;Meta: read_table_snapshot()  (其实只取 snapshot_loc)
+  FT-&gt;&gt;Cache: get(snapshot_loc)
+  alt 缓存命中
+    Cache--&gt;&gt;FT: Arc&lt;TableSnapshot&gt;
+  else 未命中
+    FT-&gt;&gt;OD: GET &lt;snapshot.json&gt;
+    OD--&gt;&gt;FT: bytes
+    FT-&gt;&gt;Cache: put
+  end
+  FT-&gt;&gt;FT: 决定是否 distributed_pruning\n(segment_len &gt; nodes &amp;&amp; setting on)
+  alt 分布式裁剪
+    FT-&gt;&gt;Plan: 仅返回 FuseLazyPartInfo（每个 segment 一个）\n各 worker 节点自己 do_build_prune_pipeline
+  else 本地裁剪 (prune_snapshot_blocks)
+    loop 每个 segment_loc
+      FT-&gt;&gt;Cache: get(segment_loc)
+      Cache--&gt;&gt;FT: Arc&lt;SegmentInfo&gt;
+      FT-&gt;&gt;FT: RangeIndex(min/max)→BloomIndex→...\n输出存活 BlockMeta 列表
+    end
+    FT--&gt;&gt;Plan: (PartStatistics, Partitions)
+  end
+
+  Plan-&gt;&gt;FT: do_read_data(plan, pipeline)
+  FT-&gt;&gt;Pipe: 注入 BlockReader Source（异步并发）
+  Pipe-&gt;&gt;OD: 并发 GET 仅存活的 block parquet
+  OD--&gt;&gt;Pipe: bytes
+  Pipe-&gt;&gt;Pipe: 解压 → ColumnReader → DataBlock
+  Pipe--&gt;&gt;Plan: 后续 Filter / Aggregate 等 transform
+</div>
+<h3>4. 4.2 写：从 INSERT 到新的 snapshot</h3>
+<div class="mermaid">
+flowchart LR
+  IN[InsertInterpreter] --&gt; AP[do_append_data\nappend.rs L≈48]
+  AP -- enable_stream_block_write --&gt; SBuilder[TransformBlockBuilder\n+ TransformBlockWriter]
+  AP -- 否 --&gt; BC[build_compact_block_pipeline]
+  BC --&gt; SB[TransformSerializeBlock]
+  SBuilder --&gt; SS[TransformSerializeSegment]
+  SB --&gt; SS
+  SS --&gt; CMA[TableMutationAggregator]
+  CMA --&gt; CS[CommitSink]
+  CS --&gt; Meta[update_table_meta\n→ meta-service KV CAS]
+  CS --&gt; ObjStore[(对象存储\nsnapshot/segment/block)]
+</div>
+<h3>5. 4.2 写：从 INSERT 到新的 snapshot</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant W as Worker
+  participant OD as OpenDAL
+  participant M as meta-service
+
+  W-&gt;&gt;OD: PUT snapshot.json (新 snapshot)
+  W-&gt;&gt;M: update_table_meta(prev_seq, new_loc)
+  alt CAS 成功
+    M--&gt;&gt;W: ok
+  else 表 seq 已变
+    M--&gt;&gt;W: TableVersionMismatched
+    W-&gt;&gt;W: backoff + 重读 snapshot 重新 merge\nset_backoff (operations/util)
+    W-&gt;&gt;OD: PUT snapshot&#x27; (基于新 base 的 snapshot)
+    W-&gt;&gt;M: update_table_meta(prev_seq&#x27;, ...)
+  end
+</div>
+<h3>6. Compact</h3>
+<div class="mermaid">
+flowchart LR
+  C[compact 命令 / 自动触发] --&gt; CS[do_compact_segments\nL≈43]
+  C --&gt; CB[do_compact_blocks\nL≈77]
+  CS -.合并小 segment.- N1[新 segment 文件]
+  CB -.合并小 block.- N2[新 block 文件]
+  N1 --&gt; CMT[CommitSink]
+  N2 --&gt; CMT
+  CMT --&gt; SS[新 snapshot]
+</div>
+<h3>7. Time Travel</h3>
+<div class="mermaid">
+flowchart TB
+  Q[SELECT * FROM t AT (TIMESTAMP =&gt; &#x27;2026-04-30&#x27;)] --&gt; NP[navigate_to_point\nnavigate.rs L≈56]
+  NP --&gt;|TimePoint| NTP[navigate_to_time_point\nL≈117]
+  NP --&gt;|SnapshotID| NSI[navigate_to_snapshot\nL≈148]
+  NP --&gt;|StreamInfo| LBL[load_table_by_location]
+  NP --&gt;|TableTag| GTSL[get_tag_snapshot_location\n→ load_table_by_snapshot]
+  NTP --&gt; FIND[find: 沿 prev_snapshot_id 反向遍历\n直到 ts &lt;= time_point]
+  NSI --&gt; FIND
+  FIND --&gt; NEW[FuseTable 复制一份\ntable_info 指向旧 snapshot_loc]
+  NEW -.下游使用同一套读路径.-&gt; Q
+</div>
+<h3>8. 5. 性能与优化点</h3>
+<div class="mermaid">
+gantt
+  title 写入 + 读取重叠时序（同一表）
+  dateFormat  X
+  axisFormat  %S
+  section Writer
+  收数据 + 攒 block       :a1, 0, 4
+  并发写 block + index    :a2, 2, 5
+  写 segment.mpk          :a3, 5, 6
+  写 snapshot.json + CAS  :a4, 6, 7
+  section Reader (并发执行)
+  GET 旧 snapshot         :b1, 0, 1
+  GET 旧 segments + 裁块  :b2, 1, 3
+  并发 GET 旧 block parquet :b3, 3, 7
+  GET 新 snapshot (下次查) :b4, 7, 8
+</div>
+<h3>9. 7. 端到端案例</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Plan as PhysicalPlan::TableScan(t)
+  participant FT as FuseTable
+  participant OD as OpenDAL
+  participant C as 多级 Cache
+  participant Idx as RangeIndex/BloomIndex
+  participant Pipe as Pipeline
+
+  Plan-&gt;&gt;FT: do_read_partitions(push_downs={ filter: x&gt;1 })
+  FT-&gt;&gt;C: snapshot_loc
+  C--&gt;&gt;FT: Arc&lt;TableSnapshot&gt;（包含 segments[]）
+  FT-&gt;&gt;FT: 决定 distributed_pruning=false（小表）
+  loop 每个 segment_loc
+    FT-&gt;&gt;C: SegmentInfo
+    C--&gt;&gt;FT: blocks[]
+    FT-&gt;&gt;Idx: RangeIndex(col_stats[x].min/max vs &gt;1)
+    alt 区间确定不满足
+      Idx--&gt;&gt;FT: 整块剪掉
+    else 区间不能定论
+      FT-&gt;&gt;C: bloom_filter_index_location for x
+      C--&gt;&gt;FT: BloomFilter bytes
+      FT-&gt;&gt;Idx: bloom 查询 hash(x&gt;1) 不可行→跳过 bloom
+      Note over FT,Idx: count(*) 没有等值谓词，bloom 跳过
+    end
+  end
+  FT--&gt;&gt;Plan: Partitions（仅存活块）
+  Plan-&gt;&gt;FT: read_data → Pipeline
+  FT-&gt;&gt;OD: 并发 GET *.parquet（仅 col=x 与必要列）
+  OD--&gt;&gt;Pipe: bytes
+  Pipe-&gt;&gt;Pipe: ColumnReader(x) → FilterTransform(x&gt;1) → FinalAggregate(count)
+  Pipe--&gt;&gt;Plan: DataBlock { count: N }
+</div>
+<hr />
+<h2>来自 <a href="./07-io-and-cache.html">07-io-and-cache.md</a></h2>
+<h3>1. 2. 在 Databend 中的位置</h3>
+<div class="mermaid">
+flowchart TB
+  subgraph Caller[&quot;调用方（FuseTable / Pruner / Pipeline source）&quot;]
+    direction TB
+    FuseRead[FuseTable.read_data]
+    Prune[BlockPruner]
+    Pipe[Pipeline source processor]
+  end
+  subgraph Cache[&quot;storages/common/cache (CacheManager)&quot;]
+    SnapC[TableSnapshotCache]
+    SegC[CompactSegmentInfoCache]
+    BloomC[BloomIndexFilterCache]
+    InvC[InvertedIndexFileCache]
+    VecC[VectorIndexFileCache]
+    PartC[PrunePartitionsCache]
+    PQC[ParquetMetaDataCache]
+    ColC[ColumnDataCache - Hybrid]
+    BlkC[BlockMetaCache]
+  end
+  subgraph IO[&quot;common/storage (OpenDAL Operator)&quot;]
+    OP[Operator]
+    LAY[Layer 栈]
+  end
+  subgraph Net[&quot;对象存储后端&quot;]
+    S3[S3]
+    GCS[GCS]
+    Azblob[Azure Blob]
+    OSS[OSS]
+    OBS[OBS]
+    COS[COS]
+    HDFS[HDFS]
+    FS[本地 FS]
+    HTTP[HTTP]
+    HF[Huggingface]
+  end
+  Caller --&gt; Cache
+  Cache -- miss --&gt; IO
+  IO --&gt; Net
+</div>
+<h3>2. 3.1 OpenDAL <code>Operator</code> 与 Layer 栈</h3>
+<div class="mermaid">
+flowchart TB
+  Op[&quot;Operator (动态/静态混合)&quot;] --&gt; L1[&quot;TimeoutLayer (must be first!)&quot;]
+  L1 --&gt; L2[&quot;RuntimeLayer(GlobalIORuntime)\n所有 future 强制丢回 IO runtime&quot;]
+  L2 --&gt; Finish[&quot;.finish() — 静态/动态 dispatch 边界&quot;]
+  Finish --&gt; L3[HttpClientLayer]
+  L3 --&gt; L4[&quot;RetryLayer\n(jitter + DatabendRetryInterceptor)&quot;]
+  L4 --&gt; L5[AsyncBacktraceLayer]
+  L5 --&gt; L6[LoggingLayer]
+  L6 --&gt; L7[FastraceLayer]
+  L7 --&gt; L8[METRICS_LAYER\n(Prometheus opendal_*)]
+  L8 --&gt; L9{有 max_concurrent_io_requests?}
+  L9 -- 是 --&gt; L10[ConcurrentLimitLayer]
+  L9 -- 否 --&gt; Backend
+  L10 --&gt; Backend[&quot;S3 / GCS / OSS / ...&quot;]
+</div>
+<h3>3. 3.2 StorageParams — 后端配置形态</h3>
+<div class="mermaid">
+classDiagram
+  class StorageParams {
+    &lt;&lt;enum&gt;&gt;
+    Azblob(StorageAzblobConfig)
+    Fs(StorageFsConfig)
+    Gcs(StorageGcsConfig)
+    Hdfs(StorageHdfsConfig)  // feature-gated
+    Http(StorageHttpConfig)
+    Huggingface(StorageHuggingfaceConfig)
+    Ipfs(StorageIpfsConfig)
+    Memory
+    Moka(StorageMokaConfig)
+    Obs(StorageObsConfig)
+    Oss(StorageOssConfig)
+    S3(StorageS3Config)
+    Webhdfs(StorageWebhdfsConfig)
+    Cos(StorageCosConfig)
+  }
+  class StorageNetworkParams {
+    +retry_timeout
+    +retry_io_timeout
+    +max_concurrent_io_requests
+    +pool_max_idle_per_host
+    +connect_timeout
+  }
+  StorageParams --&gt; StorageNetworkParams : 每后端可选
+</div>
+<h3>4. 3.3 CacheManager 的 20+ 缓存槽位</h3>
+<div class="mermaid">
+flowchart LR
+  subgraph Snapshot[&quot;快照层&quot;]
+    A1[TableSnapshotCache]
+    A2[TableSnapshotStatisticCache]
+  end
+  subgraph Segment[&quot;段层&quot;]
+    B1[CompactSegmentInfoCache]
+    B2[ColumnOrientedSegmentInfoCache]
+    B3[SegmentStatisticsCache]
+    B4[SegmentBlockMetasCache]
+    B5[BlockMetaCache]
+  end
+  subgraph Index[&quot;索引层&quot;]
+    C1[BloomIndexMeta + Filter]
+    C2[InvertedIndex Meta + File]
+    C3[VectorIndex Meta + File]
+    C4[SpatialIndex Meta + File]
+    C5[VirtualColumnMeta]
+  end
+  subgraph Query[&quot;查询层&quot;]
+    D1[PrunePartitionsCache]
+    D2[ParquetMetaDataCache]
+  end
+  subgraph Data[&quot;数据层&quot;]
+    E1[InMemory ColumnArrayCache]
+    E2[ColumnDataCache (Hybrid)]
+  end
+  subgraph External[&quot;外部 Catalog&quot;]
+    F1[IcebergTableCache]
+  end
+</div>
+<h3>5. 3.4 CacheAccessor trait</h3>
+<div class="mermaid">
+classDiagram
+  class CacheAccessor~K, V~ {
+    &lt;&lt;trait&gt;&gt;
+    +get(key) Option~Arc~V~~
+    +put(key, value)
+    +evict(key)
+    +len() / bytes_size()
+  }
+  class InMemoryLruCache
+  class DiskCacheAccessor
+  class HybridCache {
+    +mem: InMemoryLruCache
+    +disk: DiskCacheAccessor
+  }
+  CacheAccessor &lt;|-- InMemoryLruCache
+  CacheAccessor &lt;|-- DiskCacheAccessor
+  CacheAccessor &lt;|-- HybridCache
+</div>
+<h3>6. 3.5 HybridCache：内存优先 + 异步回填磁盘</h3>
+<div class="mermaid">
+flowchart LR
+  GET[&quot;get(k)&quot;] --&gt; M{内存命中?}
+  M -- 是 --&gt; Hit[返回]
+  M -- 否 --&gt; D{磁盘命中?}
+  D -- 是 --&gt; P[Promote 到内存]
+  P --&gt; Hit
+  D -- 否 --&gt; Miss[返回 None\n上层去 OpenDAL 拿]
+  PUT[&quot;put(k,v)&quot;] --&gt; Mem[写内存]
+  Mem --&gt; Q[异步入队\n(by table_data_cache_population_queue_size)]
+  Q --&gt; Disk[磁盘 LRU 写]
+</div>
+<h3>7. 4.1 读路径：先缓存、后 OpenDAL</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant FT as FuseTable.do_read_partitions
+  participant CM as CacheManager
+  participant SnapC as TableSnapshotCache
+  participant SegC as CompactSegmentInfoCache
+  participant BFC as BloomIndexFilterCache
+  participant OD as OpenDAL Operator
+  participant LayerStack as Timeout/Retry/Limit Layer
+
+  FT-&gt;&gt;CM: get(snapshot_loc)
+  CM-&gt;&gt;SnapC: get
+  alt 命中
+    SnapC--&gt;&gt;FT: Arc&lt;TableSnapshot&gt;
+  else 未命中
+    SnapC--&gt;&gt;CM: None
+    CM-&gt;&gt;OD: read snapshot.json
+    OD-&gt;&gt;LayerStack: future
+    LayerStack--&gt;&gt;CM: bytes
+    CM-&gt;&gt;SnapC: put
+    CM--&gt;&gt;FT: Arc&lt;TableSnapshot&gt;
+  end
+
+  loop 每个 segment_loc
+    FT-&gt;&gt;CM: get(segment_loc)
+    CM-&gt;&gt;SegC: get
+    alt 命中
+      SegC--&gt;&gt;FT: SegmentInfo
+    else 未命中
+      CM-&gt;&gt;OD: read segment.mpk
+      OD--&gt;&gt;CM: bytes (zstd 解压)
+      CM-&gt;&gt;SegC: put
+    end
+  end
+
+  loop 每个 BlockMeta
+    FT-&gt;&gt;FT: RangeIndex 裁剪（用内存里的 col_stats，零 IO）
+    alt 仍存活
+      FT-&gt;&gt;CM: get(bloom_filter_index_location)
+      CM-&gt;&gt;BFC: get
+      alt 命中 → 用 bloom 再裁
+      else 未命中 → 读磁盘/对象存储 + put
+      end
+    end
+  end
+</div>
+<h3>8. 4.3 ConcurrentLimitLayer：把"突发并发"压成"稳定吞吐"</h3>
+<div class="mermaid">
+flowchart LR
+  Q[N 个 worker 同时\nGET 不同 block.parquet] --&gt; CL[ConcurrentLimitLayer\n(permits = max_concurrent_io_requests)]
+  CL -- 通过 --&gt; S[实际发 HTTP 到 S3]
+  CL -- 阻塞 --&gt; W[等许可]
+</div>
+<h3>9. 4.4 RetryLayer：抖动 + 自定义拦截</h3>
+<div class="mermaid">
+flowchart LR
+  ERR[请求出错] --&gt; CLS{HTTP 状态}
+  CLS -- 5xx / 网络抖动 --&gt; R[RetryLayer 决定重试]
+  CLS -- 4xx 永久错误 --&gt; F[直接失败]
+  R --&gt; J[Jitter 退避]
+  J --&gt; RETRY[重发请求]
+  RETRY --&gt; METRIC[METRIC_OPENDAL_RETRIES_COUNT.inc()]
+  RETRY --&gt; NOTI[DatabendRetryInterceptor.notify\n打 log]
+</div>
+<h3>10. 7. 端到端案例</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant FT as FuseTable
+  participant CM as CacheManager
+  participant OD as OpenDAL
+  participant TL as Timeout/Retry/Concurrent Layer
+  participant S3
+
+  FT-&gt;&gt;CM: TableSnapshotCache.get(snapshot_loc)
+  CM--&gt;&gt;FT: Arc&lt;TableSnapshot&gt; (命中，0 RPC)
+  loop segments
+    FT-&gt;&gt;CM: CompactSegmentInfoCache.get
+    alt 命中
+      CM--&gt;&gt;FT: SegmentInfo
+    else 首次访问
+      CM-&gt;&gt;OD: read segment_loc
+      OD-&gt;&gt;TL: future
+      TL-&gt;&gt;S3: GET object
+      S3--&gt;&gt;TL: bytes (压缩后)
+      TL--&gt;&gt;OD: bytes
+      OD--&gt;&gt;CM: 解压 + 反序列化 → SegmentInfo
+      CM-&gt;&gt;CM: put SegmentInfo
+      CM--&gt;&gt;FT: SegmentInfo
+    end
+  end
+  FT-&gt;&gt;FT: RangeIndex 裁剪（纯内存 col_stats，0 RPC）
+  FT-&gt;&gt;CM: BloomIndexFilterCache.get for bloom on x（本例不适用，跳过）
+  FT-&gt;&gt;CM: ParquetMetaDataCache.get(block.parquet)
+  alt 命中
+    CM--&gt;&gt;FT: footer metadata
+  else
+    CM-&gt;&gt;OD: range read footer (~ 8KB tail)
+    OD-&gt;&gt;TL: future
+    TL-&gt;&gt;S3: GET range
+    S3--&gt;&gt;TL: bytes
+    TL--&gt;&gt;CM: footer
+  end
+  FT-&gt;&gt;OD: 并发 GET col=x 范围
+  OD-&gt;&gt;TL: ConcurrentLimitLayer 排队
+  TL-&gt;&gt;S3: 受限并发 GET
+  S3--&gt;&gt;FT: parquet pages
+  FT-&gt;&gt;CM: ColumnDataCache.put(命中后续查询)
+</div>
+<hr />
+<h2>来自 <a href="./08-indexes-and-search.html">08-indexes-and-search.md</a></h2>
+<h3>1. 2. 在 Databend 中的位置</h3>
+<div class="mermaid">
+flowchart LR
+  subgraph Block[&quot;BlockMeta（src/query/storages/common/table_meta/src/meta/v2/segment.rs）&quot;]
+    LOC[location: data .parquet]
+    BLM[bloom_filter_index_location]
+    INVS[inverted_index_size]
+    NGS[ngram_filter_index_size]
+    VECL[vector_index_location]
+    SPAL[spatial_index_location]
+  end
+  subgraph Index[&quot;storages/common/index/src/&quot;]
+    BI[bloom_index.rs]
+    XOR[filters/xor8 + bloom_filter.rs]
+    II[inverted_index.rs (Tantivy)]
+    HN[hnsw_index/*]
+    RI[range_index.rs]
+    PI[page_index.rs]
+    SI[spatial_index.rs + spatial_predicate.rs]
+  end
+  subgraph Read[&quot;FuseTable 读路径&quot;]
+    PRUNE[prune_snapshot_blocks / do_build_prune_pipeline]
+    SEARCH[query 中的 MATCH / VECTOR_DISTANCE / 空间谓词]
+  end
+  subgraph Write[&quot;FuseTable 写路径&quot;]
+    AP[append.rs → TransformSerializeBlock]
+    BLOOMW[io/write/bloom_index_writer.rs]
+    INVW[io/write/inverted_index_writer.rs]
+    VECW[io/write/vector_index_writer.rs]
+    SPAW[io/write/spatial_index_writer.rs]
+  end
+  Block --&gt; Read
+  Read --&gt; RI
+  Read --&gt; BI --&gt; XOR
+  Read --&gt; II
+  Read --&gt; HN
+  Read --&gt; SI
+  Read --&gt; PI
+  Write --&gt; BLOOMW --&gt; Block
+  Write --&gt; INVW --&gt; Block
+  Write --&gt; VECW --&gt; Block
+  Write --&gt; SPAW --&gt; Block
+  AP --&gt; Write
+</div>
+<h3>2. 3.1 总览：每张索引的"挂点"</h3>
+<div class="mermaid">
+classDiagram
+  class BlockMeta {
+    +location: Location           # data parquet
+    +col_stats: HashMap~ColumnId, ColumnStatistics~  # min/max → RangeIndex
+    +bloom_filter_index_location: Option~Location~
+    +bloom_filter_index_size: u64
+    +inverted_index_size: Option~u64~
+    +ngram_filter_index_size: Option~u64~
+    +vector_index_size: Option~u64~
+    +vector_index_location: Option~Location~
+    +spatial_index_size: Option~u64~
+    +spatial_index_location: Option~Location~
+    +spatial_stats: Option~HashMap~ColumnId, SpatialStatistics~~
+  }
+  class RangeIndex {
+    +expr: Expr~String~
+    +schema
+    +default_stats
+    +predicates: Vec~SpatialPredicate~
+    +apply(stats, spatial_stats) bool
+  }
+  class BloomIndex {
+    +func_ctx
+    +filter_schema
+    +columns: Vec~(name, FilterImpl)~
+    +apply_predicate(expr) BloomIndexResult
+  }
+  class BloomIndexType {
+    &lt;&lt;enum&gt;&gt;
+    Xor8
+    BinaryFuse32
+  }
+  class InvertedIndexFile {
+    +tantivy 文件集（.fast / .pos / .term）
+  }
+  class HnswIndex {
+    +graph_layers: GraphLayers
+    +entry_points
+    +visited_pool
+    +search_context
+    +quantization
+  }
+  class PageIndex {
+    +per-page row offsets / cluster keys
+  }
+  class SpatialIndex {
+    +rect / point predicates
+  }
+  BlockMeta --&gt; RangeIndex : 通过 col_stats 直接喂数据
+  BlockMeta ..&gt; BloomIndex : 通过 bloom_filter_index_location 按需加载
+  BlockMeta ..&gt; InvertedIndexFile
+  BlockMeta ..&gt; HnswIndex
+  BlockMeta ..&gt; PageIndex
+  BlockMeta ..&gt; SpatialIndex
+  BloomIndex --&gt; BloomIndexType
+</div>
+<h3>3. 3.4 InvertedIndex — Tantivy + 自定义 Directory</h3>
+<div class="mermaid">
+flowchart LR
+  Q[MATCH(&#x27;rust databend&#x27;, column)] --&gt; P[Parser → tantivy QueryAst]
+  P --&gt; D[InvertedIndexDirectory\nopen by location]
+  D --&gt; OD[OpenDAL: 按需 GET tantivy .term/.pos/.fast 段]
+  OD --&gt; RES[posting list → 行号集]
+  RES --&gt; Mat[配合 BlockMeta 还原 row_id 组]
+</div>
+<h3>4. 3.5 HnswIndex — 层级图向量检索</h3>
+<div class="mermaid">
+flowchart TB
+  subgraph HNSW[&quot;src/query/storages/common/index/src/hnsw_index/&quot;]
+    direction TB
+    GL[graph_layers.rs / graph_layers_builder.rs]
+    GLINK[graph_links / graph_links.rs]
+    PS[point_scorer.rs]
+    SC[search_context.rs]
+    EP[entry_points.rs]
+    VP[visited_pool.rs]
+    Q[quantization/]
+    HN[hnsw.rs]
+  end
+  WRITE[io/write/vector_index_writer.rs] --&gt; GL
+  GL --&gt; GLINK
+  GL --&gt; PS
+  HN --&gt; EP
+  HN --&gt; SC
+  SC --&gt; PS
+  HN --&gt; VP
+  HN --&gt; Q
+</div>
+<h3>5. 3.7 SpatialIndex — 矩形/点谓词</h3>
+<div class="mermaid">
+flowchart LR
+  EXPR[&quot;ST_Intersects(geom, &#x27;POLYGON(...)&#x27;)&quot;] --&gt; CSP[collect_spatial_predicates]
+  CSP --&gt; SP[Vec~SpatialPredicate~]
+  SP --&gt; RI[RangeIndex.apply 内联]
+  RI --&gt;|Block 矩形 与谓词矩形不相交| SKIP[裁掉]
+  RI --&gt;|相交| KEEP[保留]
+</div>
+<h3>6. 4.1 写：索引和数据并行落地</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Pipe as Pipeline
+  participant TS as TransformSerializeBlock
+  participant BW as block_writer.rs
+  participant BLOOM as bloom_index_writer.rs
+  participant INV as inverted_index_writer.rs
+  participant VEC as vector_index_writer.rs
+  participant SPA as spatial_index_writer.rs
+  participant OD as OpenDAL
+
+  Pipe-&gt;&gt;TS: DataBlock
+  TS-&gt;&gt;BW: 写 .parquet（数据列 + footer）
+  par 并行索引旁路
+    BW-&gt;&gt;BLOOM: 抽样列 build Xor8/BinaryFuse32 → put 到 _i_b_v2/
+    BLOOM-&gt;&gt;OD: PUT bloom .parquet
+    OD--&gt;&gt;TS: bloom_filter_index_location + size
+  and
+    BW-&gt;&gt;INV: 文本列 build Tantivy index → put 到 _i_i/
+    INV-&gt;&gt;OD: PUT inverted file
+    OD--&gt;&gt;TS: inverted_index_size
+  and
+    BW-&gt;&gt;VEC: 向量列 build HNSW → put 到 _i_v/
+    VEC-&gt;&gt;OD: PUT vector index
+    OD--&gt;&gt;TS: vector_index_location + size
+  and
+    BW-&gt;&gt;SPA: 几何列 build spatial → put 到 _i_s/
+    SPA-&gt;&gt;OD: PUT spatial index
+    OD--&gt;&gt;TS: spatial_index_location + size
+  end
+  TS-&gt;&gt;TS: 合并 BlockMeta（含所有 location/size）
+  TS--&gt;&gt;Pipe: 下游 SerializeSegment / CommitSink
+</div>
+<h3>7. 4.2 读：层层裁剪 + 必要时 search</h3>
+<div class="mermaid">
+flowchart TB
+  WHERE[push_downs（filter/limit/sort/projection）] --&gt; CK1{有 filter?}
+  CK1 -- 否 --&gt; KEEP[保留所有 block]
+  CK1 -- 是 --&gt; R0[RangeIndex.apply\n纯内存 col_stats]
+  R0 -- false --&gt; SKIP1[裁掉块]
+  R0 -- true --&gt; R1{filter 含等值/IN?}
+  R1 -- 是 --&gt; B0[读 bloom_filter_index_location]
+  B0 --&gt; BAPPLY[BloomIndex.apply_predicate]
+  BAPPLY -- 必无 --&gt; SKIP2[裁掉块]
+  BAPPLY -- 可能有 --&gt; R2{含全文 MATCH?}
+  R1 -- 否 --&gt; R2
+  R2 -- 是 --&gt; INV[InvertedIndex search → row_id 集合]
+  R2 -- 否 --&gt; R3
+  INV --&gt; R3{含向量距离?}
+  R3 -- 是 --&gt; HN[HnswIndex.search(top-k)]
+  R3 -- 否 --&gt; KEEP
+  HN --&gt; KEEP
+  KEEP --&gt; READ[do_read_data 拉 parquet 列]
+</div>
+<h3>8. 4.3 BindContext 喂索引上下文给优化器</h3>
+<div class="mermaid">
+flowchart LR
+  Bind[BindContext.inverted_index_map / vector_index_map] --&gt; P[planner.bind_query_index\n（03 文档）]
+  P --&gt; O[Optimizer 决定是否 push_down 至 Scan]
+  O --&gt; S[Scan 算子带 index_info]
+  S --&gt; PB[PhysicalPlanBuilder]
+  PB --&gt; FT[FuseTable.do_read_partitions 接收 index_info]
+</div>
+<h3>9. 5.1 索引尺寸对比直觉</h3>
+<div class="mermaid">
+flowchart LR
+  subgraph &quot;1 GB 数据 block 的索引大小（数量级估算）&quot;
+    direction LR
+    DAT[数据 .parquet ≈ 1 GB]
+    BL[bloom_filter ≈ 5 MB]
+    INV[inverted ≈ 80 MB]
+    VEC[vector(HNSW) ≈ 50–200 MB（视维度）]
+    SPA[spatial ≈ 5–20 MB]
+  end
+</div>
+<h3>10. 7. 端到端案例</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Plan as do_read_partitions
+  participant RI as RangeIndex
+  participant BI as BloomIndex
+  participant Cache as 多级 Cache
+
+  Plan-&gt;&gt;RI: try_create(expr=x&gt;1, schema, default_stats)
+  loop 每个 BlockMeta
+    Plan-&gt;&gt;RI: apply(col_stats, spatial_stats=None)
+    alt block.col_stats[x].max &lt;= 1
+      RI--&gt;&gt;Plan: false（裁掉）
+    else block.col_stats[x].min &gt; 1
+      RI--&gt;&gt;Plan: true（保留，且本块全保留）
+    else 区间跨越 1
+      RI--&gt;&gt;Plan: true（保留，无法定夺）
+    end
+  end
+  Plan-&gt;&gt;Plan: filter 不含等值/IN，跳过 bloom
+  Plan--&gt;&gt;Plan: 仅留下&quot;区间含 1 或全 &gt;1&quot;的 block
+</div>
+<h3>11. 7. 端到端案例</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Plan as do_read_partitions
+  participant RI as RangeIndex
+  participant BIM as BloomIndexMetaCache
+  participant BIF as BloomIndexFilterCache
+  participant OD as OpenDAL
+
+  Plan-&gt;&gt;RI: apply
+  RI--&gt;&gt;Plan: 大多数块 unknown（字符串 min/max 无法判)
+  loop 候选 block
+    Plan-&gt;&gt;BIM: get(BloomIndexMeta @ bloom_filter_index_location)
+    alt 命中
+      BIM--&gt;&gt;Plan: meta（每列偏移）
+    else
+      Plan-&gt;&gt;OD: range read bloom .parquet footer
+      OD--&gt;&gt;Plan: meta
+      Plan-&gt;&gt;BIM: put
+    end
+    Plan-&gt;&gt;BIF: get(name 列 filter)
+    alt 命中
+      BIF--&gt;&gt;Plan: Xor8Filter
+    else
+      Plan-&gt;&gt;OD: range read bloom .parquet col=name
+      OD--&gt;&gt;Plan: filter bytes
+      Plan-&gt;&gt;BIF: put
+    end
+    Plan-&gt;&gt;Plan: filter.contains(hash(&#x27;Alice&#x27;))
+    alt 必无
+      Plan-&gt;&gt;Plan: 裁掉块
+    else 可能有
+      Plan-&gt;&gt;Plan: 保留 block 进 read_data
+    end
+  end
+</div>
+<hr />
+<h2>来自 <a href="./09-cluster-and-exchange.html">09-cluster-and-exchange.md</a></h2>
+<h3>1. 2. 在 Databend 中的位置</h3>
+<div class="mermaid">
+flowchart TB
+  subgraph Meta[&quot;meta-service (外部)&quot;]
+    WHM[WarehouseApi\n节点注册/心跳/列表]
+  end
+  subgraph QueryNode[&quot;databend-query 节点&quot;]
+    direction TB
+    CD[ClusterDiscovery\n(全局单例)]
+    CL[Cluster (Arc)]
+    FC[FlightClient (出向)]
+    FS[FlightService (入向 9091)]
+    FSQL[FlightSQLServer (入向 8900)]
+    DEM[DataExchangeManager]
+    QC[QueryCoordinator (per query_id)]
+    PB[PipelineBuilder + ExchangeInjector]
+  end
+  subgraph Peer[&quot;其它 query 节点&quot;]
+    PFS[FlightService]
+    PCD[ClusterDiscovery]
+  end
+
+  CD -- register/heartbeat --&gt; WHM
+  CD -- watch --&gt; WHM
+  PCD -- register --&gt; WHM
+
+  PB --&gt; DEM
+  DEM --&gt; QC
+  QC --&gt; FC
+  FC -- Arrow Flight do_get/do_exchange --&gt; PFS
+  FS -- 收到对端流 --&gt; DEM
+</div>
+<h3>2. 3.1 ClusterDiscovery 与 Cluster</h3>
+<div class="mermaid">
+classDiagram
+  class ClusterDiscovery {
+    +local_id
+    +local_secret
+    +heartbeat: Mutex~ClusterHeartbeat~
+    +warehouse_manager: Arc dyn WarehouseApi
+    +flight_address: String
+    +lru_cache: LruCache~String, CachedNode~
+    +register_to_metastore(cfg) async
+    +discover(cfg) Cluster
+    +instance() Self
+  }
+  class Cluster {
+    +unassign: bool
+    +local_id
+    +nodes: Vec~NodeInfo~
+  }
+  class NodeInfo {
+    +id
+    +secret
+    +cpu_nums
+    +version
+    +flight_address
+    +warehouse_id
+    +cluster_id
+  }
+  class ClusterHeartbeat {
+    +interval
+    +tx: ShutdownTx
+  }
+  ClusterDiscovery --&gt; Cluster : discover()
+  Cluster --&gt; NodeInfo
+  ClusterDiscovery --&gt; ClusterHeartbeat
+</div>
+<h3>3. 3.3 DataExchange — 四种交换类型</h3>
+<div class="mermaid">
+flowchart TB
+  subgraph Merge[&quot;Merge (do_get)&quot;]
+    M1[Worker A]
+    M2[Worker B]
+    M3[Worker C]
+    MD[(coordinator 单点)]
+    M1 --&gt; MD
+    M2 --&gt; MD
+    M3 --&gt; MD
+  end
+  subgraph Broadcast[&quot;Broadcast (do_exchange ping-pong)&quot;]
+    B1[Source]
+    B1 --&gt; BD1[Dest 1]
+    B1 --&gt; BD2[Dest 2]
+    B1 --&gt; BD3[Dest 3]
+  end
+  subgraph N2N[&quot;NodeToNodeExchange (do_get hash shuffle)&quot;]
+    NA[Node A] --hash--&gt; NB1[Node B 桶 1]
+    NA --hash--&gt; NB2[Node B 桶 2]
+    NB1 --hash--&gt; NA1[Node A 桶 1]
+  end
+  subgraph GS[&quot;GlobalShuffleExchange (do_exchange)&quot;]
+    G1[阶段 1 全节点]
+    G2[阶段 2 全节点]
+    G1 -- ping-pong --- G2
+  end
+</div>
+<h3>4. 3.4 DataExchangeManager 与 QueryCoordinator</h3>
+<div class="mermaid">
+classDiagram
+  class DataExchangeManager {
+    +queries_coordinator: HashMap query_id-QueryCoordinator
+    +init_query_env(env, ctx)
+    +get_query_ctx(query_id)
+    +get_running_query_graph_dump(query_id)
+    +get_query_execution_stats()
+  }
+  class QueryCoordinator {
+    +info: Option~Info~
+    +query_executor
+    +query_ctx
+    +input/output streams
+    +exchanges: Vec~ExchangeChannel~
+  }
+  class ExchangeSink
+  class ExchangeSourceReader
+  class ExchangeSinkBuffer {
+    +server-side outbound buffer
+    +背压控制
+  }
+  DataExchangeManager --&gt; QueryCoordinator : per query
+  QueryCoordinator --&gt; ExchangeSink
+  QueryCoordinator --&gt; ExchangeSourceReader
+  ExchangeSink --&gt; ExchangeSinkBuffer
+</div>
+<h3>5. 3.5 ExchangeSink / ExchangeSourceReader / 内部 Pipeline</h3>
+<div class="mermaid">
+flowchart LR
+  subgraph SrcPipe[&quot;发送侧 Pipeline (本节点)&quot;]
+    OP[上游算子] --&gt; ETS[ExchangeTransformScatter\n按 hash 分桶]
+    ETS --&gt; HSS[HashSendTransform / HashSendSink]
+    HSS --&gt; ESB[ExchangeSinkBuffer\n背压窗]
+    ESB --&gt; EW[ExchangeSinkWriter\n→ FlightClient]
+  end
+  subgraph Net[Arrow Flight stream]
+    EW --&gt;|RecordBatch| RR
+  end
+  subgraph DstPipe[&quot;接收侧 Pipeline (对端节点)&quot;]
+    RR[ExchangeSourceReader] --&gt; ESS[ExchangeSource processor]
+    ESS --&gt; DSP[下游算子]
+  end
+</div>
+<h3>6. 4.1 节点上下线</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Q as Query node 启动
+  participant CD as ClusterDiscovery
+  participant Wh as WarehouseApi (meta)
+  participant Peer as 其它节点
+
+  Q-&gt;&gt;CD: init(config, version)
+  CD-&gt;&gt;Wh: heartbeat / register {node_id, flight_addr, secret, cpu, warehouse_id}
+  Wh--&gt;&gt;CD: ack
+  CD-&gt;&gt;Wh: watch nodes
+  loop 周期心跳
+    CD-&gt;&gt;Wh: heartbeat (TTL 续约)
+  end
+  Wh--&gt;&gt;Peer: notify nodes changed
+  Peer-&gt;&gt;CD: discover (拉最新列表)
+  Note over Q,CD: ClusterDiscovery 维护 LruCache，避免高频拉取
+  Q-&gt;&gt;CD: shutdown → drop heartbeat
+  Wh--&gt;&gt;Peer: 节点离开（TTL 过期或显式 deregister）
+</div>
+<h3>7. 4.2 一次分布式查询</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Cli as 客户端
+  participant Co as Coordinator (任一 query node)
+  participant CD as Coordinator.ClusterDiscovery
+  participant DEM as DataExchangeManager (Co)
+  participant N1 as Node1
+  participant N2 as Node2
+
+  Cli-&gt;&gt;Co: SQL（含 join）
+  Co-&gt;&gt;CD: get nodes
+  CD--&gt;&gt;Co: [N1, N2, Co]
+  Co-&gt;&gt;Co: 优化 → PhysicalPlan 含 ExchangeSink + ExchangeSource 节点
+  Co-&gt;&gt;DEM: init_query_env(env, ctx)
+  par
+    Co-&gt;&gt;N1: do_action(&quot;init_query_env&quot;, ...) via Flight
+    Co-&gt;&gt;N2: do_action(&quot;init_query_env&quot;, ...)
+  end
+  par
+    Co-&gt;&gt;N1: do_action(&quot;submit_fragment&quot;, ...)
+    Co-&gt;&gt;N2: do_action(&quot;submit_fragment&quot;, ...)
+  and
+    Co-&gt;&gt;Co: 启动本地 fragment（PipelineExecutor）
+  end
+  par 各节点独立执行
+    N1-&gt;&gt;N2: do_get / do_exchange (shuffle)
+    N1-&gt;&gt;Co: do_get (merge to coordinator)
+    N2-&gt;&gt;Co: do_get
+    Co-&gt;&gt;Co: 本地 ExchangeSourceReader 接 stream → 接入 Pipeline
+  end
+  Co--&gt;&gt;Cli: 最终结果
+</div>
+<h3>8. 4.3 ExchangeInjector 决定何时插边</h3>
+<div class="mermaid">
+flowchart TB
+  PB[PipelineBuilder build_pipeline] --&gt; CHK{当前节点 PhysicalPlan 子树\n是否横跨节点?}
+  CHK -- 是 --&gt; EI[ExchangeInjector.injection_at_sink]
+  EI --&gt; ESN[在子树之上加 ExchangeSink]
+  CHK -- 否 --&gt; NORM[正常 Pipe]
+  PB --&gt; CHK2{是否需要从外部接 stream?}
+  CHK2 -- 是 --&gt; EI2[ExchangeInjector.injection_at_source]
+  EI2 --&gt; ESC[在子树之下加 ExchangeSource]
+  CHK2 -- 否 --&gt; NORM
+</div>
+<h3>9. 7. 端到端案例</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Cli as 客户端
+  participant Co as Coordinator
+  participant CD as ClusterDiscovery
+  participant N1 as Node1
+  participant N2 as Node2
+
+  Cli-&gt;&gt;Co: SQL
+  Co-&gt;&gt;CD: discover()
+  CD--&gt;&gt;Co: [Co, N1, N2]
+  Co-&gt;&gt;Co: 优化器决定使用 distributed_pruning + AggregatePartial+Final
+  Note over Co: PhysicalPlan: TableScan(prewhere x&gt;1) → AggregatePartial → ExchangeSink(Merge to Co) → AggregateFinal
+  par
+    Co-&gt;&gt;N1: init_query_env + submit_fragment
+    Co-&gt;&gt;N2: init_query_env + submit_fragment
+  and
+    Co-&gt;&gt;Co: 本地 fragment 启动
+  end
+  par
+    N1-&gt;&gt;N1: 读 segment 子集 → block 裁剪 → AggregatePartial(count_per_block)
+    N1-&gt;&gt;Co: do_get(stream)
+  and
+    N2-&gt;&gt;N2: 同
+    N2-&gt;&gt;Co: do_get(stream)
+  and
+    Co-&gt;&gt;Co: 本地 fragment 也跑 AggregatePartial
+  end
+  Co-&gt;&gt;Co: ExchangeSourceReader 收 N1/N2 流 → AggregateFinal 累计
+  Co--&gt;&gt;Cli: count
+</div>
+<hr />
+<h2>来自 <a href="./10-extensions.html">10-extensions.md</a></h2>
+<h3>1. 2. 在 Databend 中的位置</h3>
+<div class="mermaid">
+flowchart TB
+  subgraph Catalog[&quot;catalog 抽象 (databend-common-catalog)&quot;]
+    CTM[CatalogManager]
+  end
+  subgraph Default[&quot;默认 Catalog (FUSE)&quot;]
+    FT[FuseTable]
+  end
+  subgraph Iceberg[&quot;Iceberg Catalog (storages/iceberg)&quot;]
+    IC[IcebergCatalog]
+    IT[IcebergTable]
+    IDB[IcebergDatabase]
+  end
+  subgraph Hive[&quot;Hive (HiveCreator)&quot;]
+    HC[HiveCatalog]
+  end
+  subgraph Delta[&quot;storages/delta (factory 注册)&quot;]
+    DT[DeltaTable]
+    DTS[DeltaTableSource]
+  end
+  subgraph Stream[&quot;storages/stream&quot;]
+    ST[StreamTable]
+    STF[stream_status_table_func]
+  end
+  subgraph UDF[&quot;UDF 三条路径&quot;]
+    UMgr[UdfMgr (元数据)]
+    UFlight[TransformUdfServer\n(Arrow Flight)]
+    UScript[script_udf_support\n(Pool&lt;Runtime&gt;)]
+    UPhys[physical_plans/physical_udf.rs]
+  end
+
+  CTM --&gt; FT
+  CTM --&gt; IC --&gt; IT
+  CTM --&gt; HC
+  ST --&gt; FT
+  DT -. 由 storages/factory 注册 .-&gt; CTM
+  UMgr -. 元数据 .-&gt; CTM
+  UPhys --&gt; UFlight
+  UPhys --&gt; UScript
+</div>
+<h3>2. 3.1 Stream — FUSE 之上的增量视图</h3>
+<div class="mermaid">
+classDiagram
+  class StreamTable {
+    +info: TableInfo
+    +max_batch_size
+    +source_table: Option~Arc dyn Table~
+    +source_table(ctx) FuseTable
+    +navigate_within_batch_limit(...)
+    +offset() u64       # 上次读到的 snapshot 序号
+    +source_table_id() u64
+  }
+  class FuseTable {
+    +changes_desc: Option~ChangesDesc~
+    +do_read_changes_partitions(...)
+    +check_changes_valid(...)
+  }
+  class ChangesDesc {
+    +location: snapshot 起点
+    +mode: &#x27;append_only&#x27; / &#x27;standard&#x27;
+  }
+  StreamTable --&gt; FuseTable : source_table
+  FuseTable --&gt; ChangesDesc : changes 模式开关
+</div>
+<h3>3. 3.2 Iceberg — 沿用 Databend Catalog trait</h3>
+<div class="mermaid">
+classDiagram
+  class IcebergCatalog
+  class IcebergDatabase
+  class IcebergTable {
+    +get_table_info() TableInfo
+    +read_partitions / read_data
+    +append_data / commit_insertion
+  }
+  class IcebergPartition
+  class IcebergPredicate {
+    +把 push_downs 翻译成 iceberg-rust 的过滤
+  }
+  class IcebergCache
+  Catalog &lt;|-- IcebergCatalog
+  Database &lt;|-- IcebergDatabase
+  Table &lt;|-- IcebergTable
+  IcebergCatalog --&gt; IcebergDatabase
+  IcebergDatabase --&gt; IcebergTable
+  IcebergTable --&gt; IcebergPartition
+  IcebergTable --&gt; IcebergPredicate
+  IcebergCatalog --&gt; IcebergCache
+</div>
+<h3>4. 3.4 外部 UDF：Arrow Flight + Endpoint Pool</h3>
+<div class="mermaid">
+classDiagram
+  class TransformUdfServer {
+    +funcs
+    +endpoints: BTreeMap
+    +semaphore: Arc Semaphore
+    +request_batch_rows
+    +retry_times
+    +transform_inner(ctx, block) DataBlock
+  }
+  class UDFFlightClient {
+    +build_endpoint(addr,connect_timeout,request_timeout,user_agent)
+    +do_exchange(stream)
+  }
+  class UdfFunctionDesc {
+    +name
+    +udf_type: UDFType
+    +arg_types / return_type
+  }
+  TransformUdfServer --&gt; UDFFlightClient
+  TransformUdfServer --&gt; UdfFunctionDesc
+</div>
+<h3>5. 3.5 Script UDF — 同进程 Pool<Runtime></h3>
+<div class="mermaid">
+classDiagram
+  class Pool~R,B~ {
+    +builder: B
+    +runtimes: Mutex Vec~R~
+    +call(op) Result
+  }
+  class TransformUdfScript {
+    +pool: Pool&lt;JsRuntime, ...&gt;
+  }
+  class UdafScript {
+    +pool: Pool&lt;...&gt;
+  }
+  class UdfAggState {
+    +Arc dyn Array
+  }
+  Pool --&gt; TransformUdfScript
+  Pool --&gt; UdafScript
+  UdafScript --&gt; UdfAggState : 聚合中间态
+</div>
+<h3>6. 4.1 Stream 的"读增量"</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Q as SELECT * FROM stream_t
+  participant Cat as CatalogManager
+  participant ST as StreamTable
+  participant FT as FuseTable
+  participant Read as do_read_changes_partitions
+
+  Q-&gt;&gt;Cat: get_table(&quot;default&quot;,&quot;stream_t&quot;)
+  Cat--&gt;&gt;Q: StreamTable
+  Q-&gt;&gt;ST: source_table() / offset()
+  ST-&gt;&gt;FT: load source FuseTable + verify table_id 未变
+  ST-&gt;&gt;FT: check_changes_valid(offset)
+  Q-&gt;&gt;FT: read_partitions(push_downs, change_type=Insert)
+  FT-&gt;&gt;Read: do_read_changes_partitions(snapshot 起点 -&gt; 当前)
+  Read-&gt;&gt;Read: 沿 prev_snapshot_id 找区间，diff 出新 block + tombstone
+  Read--&gt;&gt;Q: Partitions（增量 BlockMeta 集）
+  Q-&gt;&gt;Q: 跑常规 read_data + Pipeline
+</div>
+<h3>7. 4.2 Iceberg 的"借力"读</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Q as SELECT * FROM iceberg.db.t WHERE x&gt;1
+  participant IC as IcebergCatalog
+  participant IT as IcebergTable
+  participant IR as iceberg-rust scan API
+  participant Pred as IcebergPredicate
+  participant OD as OpenDAL
+
+  Q-&gt;&gt;IC: get_table
+  IC--&gt;&gt;Q: IcebergTable（绑 iceberg-rust Table 句柄）
+  Q-&gt;&gt;IT: read_partitions(push_downs)
+  IT-&gt;&gt;Pred: 把 Databend Expr 转成 iceberg-rust 谓词
+  IT-&gt;&gt;IR: scan(filter=...)
+  IR-&gt;&gt;OD: 读 metadata.json + manifest list + manifest
+  IR--&gt;&gt;IT: 输出 FileScanTasks
+  IT-&gt;&gt;IT: 包成 IcebergPartition 列表
+  IT--&gt;&gt;Q: Partitions
+  Q-&gt;&gt;OD: 并发读 parquet
+</div>
+<h3>8. 4.4 UDF：物理算子 → Pipeline → 外部 Server</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Q as SELECT my_udf(x) FROM t
+  participant Bind as Binder
+  participant UMgr as UdfMgr
+  participant Meta as meta-service
+  participant Opt as Optimizer
+  participant PB as PipelineBuilder
+  participant T as TransformUdfServer
+  participant Sem as Semaphore
+  participant FC as UDFFlightClient
+  participant Server as 外部 UDF Server
+
+  Bind-&gt;&gt;UMgr: 解析函数名 my_udf
+  UMgr-&gt;&gt;Meta: 查 UDF 定义
+  Meta--&gt;&gt;UMgr: UserDefinedFunction { type=UDFServer { addr } }
+  UMgr--&gt;&gt;Bind: UdfFunctionDesc
+  Opt-&gt;&gt;Opt: SExpr 上有 RelOperator::Udf
+  PB-&gt;&gt;PB: physical_plan_builder 注入 PhysicalPlan::Udf
+  PB-&gt;&gt;T: build_pipeline 创建 TransformUdfServer
+  T-&gt;&gt;T: init_endpoints + init_semaphore
+  Q-&gt;&gt;T: 上游 DataBlock
+  T-&gt;&gt;T: 把 block 切成 request_batch_rows 大小
+  par 并发批次
+    T-&gt;&gt;Sem: acquire permit
+    T-&gt;&gt;FC: do_exchange → Server
+    Server--&gt;&gt;T: RecordBatch
+    T-&gt;&gt;Sem: release permit
+  and
+    T-&gt;&gt;Sem: acquire permit ...
+  end
+  T-&gt;&gt;T: 合回大 DataBlock
+  T--&gt;&gt;Q: 下游
+</div>
+<h3>9. 4.5 Script UDF 的同进程执行</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Up as 上游 DataBlock
+  participant Tr as TransformUdfScript
+  participant P as Pool&lt;Runtime&gt;
+  participant R as 已构建的 Runtime
+
+  Up-&gt;&gt;Tr: block (Vec&lt;Column&gt;)
+  Tr-&gt;&gt;P: call(op)
+  P-&gt;&gt;P: pop or builder.build()
+  P--&gt;&gt;Tr: borrow Runtime
+  Tr-&gt;&gt;R: invoke(funcs, args)
+  R--&gt;&gt;Tr: result column
+  Tr-&gt;&gt;P: 回收 Runtime
+  Tr--&gt;&gt;Up: 输出 block
+</div>
+<h3>10. 7. 端到端案例</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Cli as bendsql
+  participant Co as Coordinator
+  participant ST as StreamTable
+  participant FT as FuseTable (源表)
+  participant Pipe as Pipeline
+  participant T as TransformUdfServer
+  participant US as UDF Server
+
+  Cli-&gt;&gt;Co: SQL
+  Co-&gt;&gt;ST: get_table stream_t
+  Co-&gt;&gt;ST: source_table() → FuseTable + offset
+  Co-&gt;&gt;FT: read_partitions(change_type=Insert, push_downs.x&gt;1)
+  FT--&gt;&gt;Co: 增量 Partitions
+  Co-&gt;&gt;Pipe: 构建 ScanSource → FilterTransform → TransformUdfServer → Sink
+  Pipe-&gt;&gt;T: DataBlock
+  T-&gt;&gt;T: 切 batch + acquire semaphore
+  par
+    T-&gt;&gt;US: do_exchange RecordBatch[x]
+    US--&gt;&gt;T: RecordBatch[my_udf(x)]
+  and
+    T-&gt;&gt;US: ...
+  end
+  T--&gt;&gt;Pipe: 输出 DataBlock
+  Pipe--&gt;&gt;Cli: 结果
+</div>
+<hr />
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

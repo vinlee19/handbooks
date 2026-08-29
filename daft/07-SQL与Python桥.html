@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>07 · SQL 与 Python 桥 · Daft 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#a3e635}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">🐡 <span>Daft 源码深度解析</span></span><nav class="nav"><a href="index.html">总览</a><a href="00-总览.html">Daft 总览:从 `df.collect()` 到 Arrow Buffer</a><a href="01-核心类型与多模态.html">核心类型与多模态:Series / RecordBatch / MicroPartition / Image</a><a href="02-表达式DSL与函数.html">表达式 DSL 与函数:三阶段列解析、`Expr` 枚举、`FunctionRegistry`</a><a href="03-逻辑计划与优化器.html">逻辑计划与优化器</a><a href="04-Swordfish本地执行.html">Swordfish 本地执行</a><a href="05-分布式执行.html">分布式执行</a><a href="06-IO与扫描下推.html">IO 与扫描下推</a><a href="07-SQL与Python桥.html" class=on>SQL 与 Python 桥</a></nav></div></header>
+<main class="wrap">
+<h1>07 · SQL 与 Python 桥</h1>
+<blockquote>
+<p>基准 commit: <code>fa0d066204eae630962af7b22a5ab559ecd454fb</code> (v0.7.10-13)
+文档版本: v0.3.0-dev0 / Rust 2024
+阅读前置: <a href="./00-总览.html">00 总览</a> · <a href="./02-表达式DSL与函数.html">02 表达式DSL与函数</a> · <a href="./03-逻辑计划与优化器.html">03 逻辑计划与优化器</a></p>
+</blockquote>
+<hr />
+<h2>1. 解决了什么问题</h2>
+<p>Daft 暴露给用户的入口是 <em>Python</em>——<code>daft.read_parquet(...)</code>、<code>daft.sql(...)</code>、<code>df.with_column(...)</code>。问题是:</p>
+<ol>
+<li>50+ Rust crate(workspace 看 <a href="./00-总览.html">00 总览 § 2.1</a>)怎么聚合成 <strong>一个</strong> Python 模块 <code>daft.daft</code>,而不是 50 个独立扩展?</li>
+<li>SQL(<code>sqlparser</code> 解析)与 DataFrame 两条前端路径,<strong>汇合点在哪</strong>?谁先把谁翻译成共同的 <code>LogicalPlanBuilder</code>?</li>
+<li>数据回流:Rust 端的 <code>MicroPartition</code> → Python <code>pyarrow.Table</code> 是否真的零拷贝?</li>
+</ol>
+<div class="mermaid">
+flowchart LR
+    SQL[&quot;daft.sql(&#x27;SELECT ...&#x27;)&quot;] --&gt; SQLP[SQLPlanner]
+    DF[&quot;df.where(...).select(...)&quot;] --&gt; Builder
+    SQLP --&gt; Builder[&quot;LogicalPlanBuilder&lt;br/&gt;(共同汇合点)&quot;]
+    Builder --&gt; Plan[Arc&amp;lt;LogicalPlan&amp;gt;]
+    Plan --&gt; Optimizer
+    Optimizer --&gt; Runner --&gt; MP[MicroPartition iterator]
+    MP --&gt;|getattr _micropartition| Py[Python PyMicroPartition]
+    Py --&gt;|to_arrow| PA[PyArrow / pandas / polars]
+
+    style Builder fill:#fff2cc
+    style Plan fill:#d5e8d4
+</div>
+<hr />
+<h2>2. 整体设计</h2>
+<h3>2.1 模块拓扑</h3>
+<div class="mermaid">
+flowchart TD
+    subgraph Python 包
+        df[daft/dataframe/dataframe.py]
+        sqlapi[daft/sql.py]
+        nrun[daft/runners/native_runner.py]
+        rrun[daft/runners/ray_runner.py]
+    end
+
+    subgraph cdylib daft.daft
+        pylib[&quot;src/lib.rs:109&lt;br/&gt;#[pymodule] fn daft&quot;]
+        sql_reg[daft_sql::register_modules]
+        scan_reg[daft_scan::register_modules]
+        io_reg[daft_io::register_modules]
+        n_more[... 25+ register_modules]
+    end
+
+    subgraph daft-sql crate
+        planner[planner.rs:165&lt;br/&gt;SQLPlanner]
+        exec[exec.rs&lt;br/&gt;execute_statement]
+        sqlpy[python.rs&lt;br/&gt;sql_exec / sql_expr / list_sql_functions]
+        sqlfns[functions/&lt;br/&gt;SQL_FUNCTIONS registry]
+    end
+
+    subgraph daft-logical-plan
+        lpb[builder/mod.rs:61&lt;br/&gt;LogicalPlanBuilder]
+        plypb[python.rs&lt;br/&gt;PyLogicalPlanBuilder]
+    end
+
+    subgraph daft-dsl
+        ex[expr/mod.rs&lt;br/&gt;Expr/ExprRef]
+        pyex[python.rs&lt;br/&gt;PyExpr]
+        fr[functions/mod.rs&lt;br/&gt;FUNCTION_REGISTRY]
+    end
+
+    df --&gt; sqlapi
+    sqlapi --&gt; sqlpy
+    sqlpy --&gt; exec
+    exec --&gt; planner
+    planner --&gt; lpb
+    df --&gt; plypb
+    plypb --&gt; lpb
+    lpb --&gt; ex
+    pylib --&gt; sql_reg &amp; scan_reg &amp; io_reg &amp; n_more
+    sql_reg --&gt; sqlpy
+    sqlpy --&gt; ex
+    pyex --&gt; ex
+    df --&gt; nrun
+    df --&gt; rrun
+
+    style pylib fill:#fff2cc
+    style lpb fill:#d5e8d4
+    style planner fill:#d5e8d4
+</div>
+<h3>2.2 SQLPlanner 的字段与上下文链</h3>
+<div class="mermaid">
+classDiagram
+    class SQLPlanner {
+        +context: Rc~RefCell~PlannerContext~~
+        +parent: Option~&amp;&#x27;sess SQLPlanner~
+        +current_plan: Option~LogicalPlanBuilder~
+        +right_side_plan: Option~LogicalPlanBuilder~
+        +bound_columns: Bindings~ExprRef~
+        +session: &amp;&#x27;sess Session
+        +new(session) Self
+        +new_child() Self
+        +plan(input) SQLPlannerResult~Statement~
+        +plan_sql(sql) SQLPlannerResult~LogicalPlanRef~
+    }
+
+    class PlannerContext {
+        +bound_ctes: Bindings~LogicalPlanBuilder~
+        +new() Self
+        +clear()
+    }
+
+    class Bindings~T~ {
+        +map: HashMap~String, T~
+        +get(ident) Option~&amp;T~
+        +insert(name, target) Option~T~
+        +clear()
+    }
+
+    class Session {
+        +catalogs / providers / tables
+        +functions / agg_functions
+        +options
+    }
+
+    SQLPlanner o-- PlannerContext
+    SQLPlanner o-- Bindings : bound_columns
+    SQLPlanner ..&gt; Session : 引用
+    SQLPlanner ..&gt; SQLPlanner : parent (子查询作用域)
+    PlannerContext o-- Bindings : bound_ctes
+</div>
+<p>源码:<code>src/daft-sql/src/planner.rs:165</code> — <code>SQLPlanner&lt;'sess&gt;</code>,<code>planner.rs:141</code> — <code>PlannerContext</code>,<code>planner.rs:184</code> — <code>new_child</code> 用于子查询作用域。</p>
+<hr />
+<h2>3. 关键数据结构</h2>
+<h3>3.1 SQL → AST → LogicalPlanBuilder 三阶段</h3>
+<div class="mermaid">
+flowchart LR
+    SQL[&quot;原始 SQL 字符串&quot;] --&gt;|Tokenizer&lt;br/&gt;planner.rs:318| TOK[Vec&amp;lt;TokenWithSpan&amp;gt;]
+    TOK --&gt;|Parser&lt;br/&gt;planner.rs:362| AST[ast::Statement]
+    AST --&gt;|plan_statement| LB[LogicalPlanBuilder]
+    LB --&gt; LP[Arc&amp;lt;LogicalPlan&amp;gt;]
+
+    classDef parse fill:#dae8fc
+    classDef plan fill:#d5e8d4
+    class SQL,TOK,AST parse
+    class LB,LP plan
+</div>
+<p><code>src/daft-sql/src/planner.rs:317-390</code> 节选:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">plan</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> self, input: </span><span style="color: #66D9EF">&amp;str</span><span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">SQLPlannerResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Statement</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> tokens </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> Tokenizer::new(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">GenericDialect {}, input).tokenize_with_location()</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// ...预处理:nested_token / 处理 trailing semicolon / ...</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> parser </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> Parser::new(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">GenericDialect {})</span>
+<span style="color: #F8F8F2">        .with_options(ParserOptions { </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">. });</span>
+<span style="color: #F8F8F2">    parser.parse_statement()</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">plan_sql</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> self, sql: </span><span style="color: #66D9EF">&amp;str</span><span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">SQLPlannerResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">LogicalPlanRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> stmt </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> self.plan(sql)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    self.plan_statement(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">stmt)</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<blockquote>
+<p>Daft 直接复用社区的 <code>sqlparser</code> crate(<code>use sqlparser::dialect::GenericDialect</code>,<code>planner.rs:36</code>),自身不写词法/语法分析器;只在 <code>plan_statement</code> 这一层把 AST 翻译成 <code>LogicalPlanBuilder</code> 操作。</p>
+</blockquote>
+<h3>3.2 SQL 路径与 DataFrame 路径的汇合</h3>
+<div class="mermaid">
+flowchart TD
+    subgraph Python
+        A1[df = daft.read_parquet]
+        A2[df.where / select / agg]
+        B1[daft.sql &#x27;SELECT...&#x27;]
+    end
+
+    subgraph &quot;Rust crate boundary&quot;
+        C[PyLogicalPlanBuilder&lt;br/&gt;daft-logical-plan/python.rs]
+        D[LogicalPlanBuilder&lt;br/&gt;daft-logical-plan/builder/mod.rs:61]
+        E[Arc&amp;lt;LogicalPlan&amp;gt;]
+    end
+
+    A1 --&gt; C
+    A2 --&gt; C
+    B1 --&gt;|sql_exec| F[execute_statement]
+    F --&gt; G[SQLPlanner]
+    G --&gt; D
+    C --&gt; D
+    D --&gt; E
+
+    classDef merge fill:#fff2cc
+    class D,E merge
+</div>
+<p>汇合点在 <code>LogicalPlanBuilder</code>(<code>builder/mod.rs:61</code>):
+- DataFrame 路径调 <code>LogicalPlanBuilder::filter / select / aggregate / ...</code>(<code>builder/mod.rs:254/440/454/652</code>)。
+- SQL 路径在 <code>SQLPlanner::plan_statement</code> 内部调用<strong>完全相同的方法</strong>——只不过参数是 AST 解析出来的 <code>ExprRef</code> 列表。</p>
+<p><code>SQLPlanner.current_plan: Option&lt;LogicalPlanBuilder&gt;</code>(<code>planner.rs:171</code>)就是 SQL 路径"当前累积的 builder"——计划逐 clause 推进时,<code>current_plan = current_plan.filter(...)?;</code>。</p>
+<h3>3.3 PyO3 <code>#[pymodule]</code> 聚合树</h3>
+<p><code>src/lib.rs:109-189</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">#[pymodule]</span>
+<span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">daft</span><span style="color: #F8F8F2">(py: </span><span style="color: #A6E22E">Python</span><span style="color: #F8F8F2">, m: </span><span style="color: #66D9EF">&amp;</span><span style="color: #A6E22E">Bound</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">PyModule</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">PyResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">()</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    refresh_logger(py)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    init_tracing();</span>
+
+<span style="color: #F8F8F2">    common_daft_config::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    common_system_info::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    common_resource_request::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    common_file_formats::python::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    common_metrics::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_ai::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_catalog::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_checkpoint::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_context::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_runners::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_core::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_core::python::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_csv::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_distributed::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_dsl::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_functions::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_io::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_json::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_local_execution::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_local_plan::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_logical_plan::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_parquet::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_partition_refs::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_micropartition::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_recordbatch::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_scan::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_session::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_sql::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_file::python::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// ...</span>
+<span style="color: #F8F8F2">    daft_dashboard::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_cli::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// 全局 FUNCTION_REGISTRY 初始化(必须最后做,需要所有 crate 已加载)</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> functions_registry </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> daft_dsl::functions::FUNCTION_REGISTRY.write()</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.;</span>
+<span style="color: #F8F8F2">    functions_registry.register::</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">daft_functions::numeric::NumericFunctions</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">();</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// ... 15+ 模块</span>
+<span style="color: #F8F8F2">    functions_registry.add_fn(daft_functions::coalesce::Coalesce);</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// ... 单函数若干</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<div class="mermaid">
+flowchart TD
+    Mod[&quot;#[pymodule] daft&quot;] --&gt; Common[&quot;common_* (5)&quot;]
+    Mod --&gt; Core[&quot;daft_core (+python)&quot;]
+    Mod --&gt; DSL[daft_dsl]
+    Mod --&gt; LP[daft_logical_plan]
+    Mod --&gt; Local[daft_local_plan + daft_local_execution]
+    Mod --&gt; Dist[daft_distributed]
+    Mod --&gt; IO[&quot;daft_io / parquet / csv / json&quot;]
+    Mod --&gt; Scan[daft_scan + daft_partition_refs + daft_micropartition + daft_recordbatch]
+    Mod --&gt; SQL[daft_sql]
+    Mod --&gt; Session[daft_context + daft_session + daft_catalog]
+    Mod --&gt; Misc[daft_ai / daft_checkpoint / daft_file / daft_runners]
+    Mod --&gt; UI[daft_dashboard + daft_cli]
+    Mod --&gt; Reg[FUNCTION_REGISTRY 初始化&lt;br/&gt;add_fn / register]
+
+    classDef leaf fill:#dae8fc
+    class Common,Core,DSL,LP,Local,Dist,IO,Scan,SQL,Session,Misc,UI leaf
+</div>
+<blockquote>
+<p>全部子 crate 注册到<strong>同一个 <code>&amp;Bound&lt;PyModule&gt;</code> (即 <code>daft.daft</code>)</strong>。Python 调用 <code>daft.daft.IOConfig(...)</code> / <code>daft.daft.PyExpr(...)</code> 等都是从这一个 cdylib 解析的。</p>
+</blockquote>
+<h3>3.4 <code>from daft.daft import X</code> 实际解析的对象</h3>
+<div class="mermaid">
+flowchart LR
+    User[&quot;from daft.daft import PyLogicalPlanBuilder, sql_exec&quot;] --&gt; Mod[加载 cdylib daft.daft]
+    Mod --&gt; Sym[&quot;在 module 命名空间查找:&quot;]
+    Sym --&gt; Sym1[PyLogicalPlanBuilder&lt;br/&gt;daft_logical_plan::python::PyLogicalPlanBuilder]
+    Sym --&gt; Sym2[sql_exec&lt;br/&gt;daft_sql::python::sql_exec]
+    Sym --&gt; Sym3[PyExpr&lt;br/&gt;daft_dsl::python::PyExpr]
+    Sym --&gt; Sym4[PyMicroPartition&lt;br/&gt;daft_micropartition::python::PyMicroPartition]
+
+    classDef sym fill:#dae8fc
+    class Sym1,Sym2,Sym3,Sym4 sym
+</div>
+<p>注:Python 端用户面 API 是 <code>daft.read_parquet</code>、<code>daft.sql</code>、<code>daft.col</code> 这些<strong>纯 Python</strong>包装(在 <code>daft/</code> 下),它们 <strong>import</strong> Rust 端 <code>daft.daft.*</code> 类型。Python 包装层负责文档、错误信息、类型提示。</p>
+<h3>3.5 <code>sql_exec</code> Python 入口签名</h3>
+<p><code>src/daft-sql/src/python.rs:38-60</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">#[pyfunction]</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">sql_exec</span><span style="color: #F8F8F2">(</span>
+<span style="color: #F8F8F2">    py: </span><span style="color: #A6E22E">Python</span><span style="color: #FF4689">&lt;&#39;</span><span style="color: #F8F8F2">_</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    sql: </span><span style="color: #66D9EF">&amp;str</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    session: </span><span style="color: #66D9EF">&amp;</span><span style="color: #A6E22E">PySession</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    ctes: </span><span style="color: #A6E22E">HashMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String, PyLogicalPlanBuilder</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    config: </span><span style="color: #A6E22E">PyDaftPlanningConfig</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">PyResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">pyo3::Py</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">pyo3::PyAny</span><span style="color: #FF4689">&gt;&gt;&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> ctes </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> ctes.into_iter()</span>
+<span style="color: #F8F8F2">        .map(</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2">(name, builder)</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2"> (name, builder.builder))</span>
+<span style="color: #F8F8F2">        .collect::</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">HashMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String, LogicalPlanBuilder</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">();</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">if</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> Some(plan) </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> execute_statement(session.session(), sql, ctes)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">        </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> builder </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> LogicalPlanBuilder::new(plan, Some(config.config));</span>
+<span style="color: #F8F8F2">        </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> builder </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> PyLogicalPlanBuilder::from(builder);</span>
+<span style="color: #F8F8F2">        </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> builder </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> builder.into_py_any(py)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">        Ok(Some(builder))</span>
+<span style="color: #F8F8F2">    } </span><span style="color: #66D9EF">else</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">        Ok(None)</span>
+<span style="color: #F8F8F2">    }</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>返回 <code>Option&lt;PyAny&gt;</code> 是因为有些 SQL(如 <code>SET ...</code>、<code>USE ...</code>)不产生 plan,只更新 session state。</p>
+<hr />
+<h2>4. 关键源码走读</h2>
+<h3>4.1 一行 SQL 完整链路</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">SELECT</span><span style="color: #F8F8F2"> user_id, </span><span style="color: #66D9EF">COUNT</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">*</span><span style="color: #F8F8F2">) </span><span style="color: #66D9EF">AS</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">c</span>
+<span style="color: #66D9EF">FROM</span><span style="color: #F8F8F2"> logs</span>
+<span style="color: #66D9EF">WHERE</span><span style="color: #F8F8F2"> ts </span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">&#39;2024-01-01&#39;</span>
+<span style="color: #66D9EF">GROUP</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">BY</span><span style="color: #F8F8F2"> user_id</span>
+<span style="color: #66D9EF">LIMIT</span><span style="color: #F8F8F2"> </span><span style="color: #AE81FF">100</span>
+</code></pre></div>
+
+<div class="mermaid">
+sequenceDiagram
+    participant App as Python: daft.sql(...)
+    participant SQLPy as Rust: sql_exec
+    participant Exec as execute_statement
+    participant Tok as Tokenizer
+    participant Par as Parser
+    participant Pl as SQLPlanner
+    participant LB as LogicalPlanBuilder
+    participant Opt as Optimizer
+    participant Run as NativeRunner / RayRunner
+
+    App-&gt;&gt;SQLPy: sql_exec(sql, session, ctes, config)
+    SQLPy-&gt;&gt;Exec: execute_statement(session, sql, ctes)
+    Exec-&gt;&gt;Tok: Tokenizer::new(GenericDialect, sql).tokenize()
+    Tok--&gt;&gt;Exec: Vec&amp;lt;Token&amp;gt;
+    Exec-&gt;&gt;Par: Parser::new(...).parse_statement()
+    Par--&gt;&gt;Exec: ast::Statement::Query
+    Exec-&gt;&gt;Pl: SQLPlanner::new(session)
+    Pl-&gt;&gt;Pl: plan_statement(stmt)
+    Note over Pl,LB: per-clause 调用 LogicalPlanBuilder
+    Pl-&gt;&gt;LB: table_scan(&#x27;logs&#x27;)
+    Pl-&gt;&gt;LB: filter(ts &gt; &#x27;2024-01-01&#x27;)
+    Pl-&gt;&gt;LB: aggregate([count(*) → c], [user_id])
+    Pl-&gt;&gt;LB: limit(100)
+    LB--&gt;&gt;Pl: Arc&amp;lt;LogicalPlan&amp;gt;
+    Pl--&gt;&gt;Exec: LogicalPlan
+    Exec--&gt;&gt;SQLPy: LogicalPlan
+    SQLPy--&gt;&gt;App: PyLogicalPlanBuilder
+
+    App-&gt;&gt;App: builder.collect()
+    App-&gt;&gt;Run: run_iter_tables(builder)
+    Run-&gt;&gt;Opt: optimize 14 batches
+    Opt--&gt;&gt;Run: 优化后 plan
+    Run-&gt;&gt;Run: lower → LocalPhysicalPlan → 执行
+    Run--&gt;&gt;App: Iterator&amp;lt;MicroPartition&amp;gt;
+</div>
+<h3>4.2 GIL 释放 / 获取标注</h3>
+<p><code>run_iter_tables</code>(<code>src/daft-runners/src/runners.rs:102-132</code>)在 Rust 中持有 <code>Python&lt;'py&gt;</code> 标记,但实际执行时:</p>
+<div class="mermaid">
+sequenceDiagram
+    participant App as Python (持 GIL)
+    participant Rust as Rust API
+    participant Tokio as tokio runtime
+
+    App-&gt;&gt;Rust: collect()
+    activate App
+    Rust-&gt;&gt;Rust: 包 PyLogicalPlanBuilder
+    Rust-&gt;&gt;App: 调 NativeRunner.run_iter_tables (Python)
+    deactivate App
+    activate App
+    App-&gt;&gt;Rust: 内部进 NativeExecutor::run
+    Rust-&gt;&gt;Tokio: Python::detach_until or block_on (释放 GIL)
+    deactivate App
+    Tokio-&gt;&gt;Tokio: 多 worker 并行计算
+    Tokio--&gt;&gt;Rust: 完成
+    Rust-&gt;&gt;App: Python::attach (重获 GIL)
+    activate App
+    App--&gt;&gt;App: 包成 PyMicroPartition yield
+    deactivate App
+</div>
+<blockquote>
+<p>Rust 端跑 IO / compute 密集时<strong>必须释放 GIL</strong>,否则 Python 主线程被卡住。<code>pyo3::Python::detach</code>(以前叫 <code>allow_threads</code>)是关键 API,在 <code>daft-local-execution/src/run.rs</code> 等执行入口内部使用。</p>
+</blockquote>
+<h3>4.3 数据回流:<code>MicroPartition → PyArrow</code></h3>
+<div class="mermaid">
+flowchart LR
+    MP[Rust MicroPartition] --&gt;|getattr _micropartition| PyMP[Python PyMicroPartition]
+    PyMP --&gt;|to_record_batch| RB[RecordBatch]
+    RB --&gt;|to_arrow| PA[pyarrow.Table&lt;br/&gt;共享 buffer 指针]
+    PA --&gt;|to_pandas| Pandas[pandas DataFrame]
+    PA --&gt;|to_polars| Polars[polars DataFrame]
+
+    classDef rust fill:#fff2cc
+    classDef py fill:#dae8fc
+    classDef arrow fill:#d5e8d4
+    class MP rust
+    class PyMP,RB,PA,Pandas,Polars py
+    class PA arrow
+</div>
+<p>零拷贝靠 Arrow C Data Interface(<code>__arrow_c_stream__</code> / <code>__arrow_c_array__</code> 协议):
+- Rust 侧 <code>RecordBatch</code> → <code>arrow_array::ArrayRef</code> → 通过 <code>pyo3-arrow</code> / <code>arrow-pyarrow</code> 暴露 ArrowSchema/ArrowArray 指针
+- PyArrow 侧调 <code>pyarrow.Table.from_arrays</code> 直接消费同一块内存</p>
+<h3>4.4 <code>FUNCTION_REGISTRY</code> 初始化时序</h3>
+<div class="mermaid">
+sequenceDiagram
+    participant Py as Python: import daft
+    participant Cdy as cdylib daft.daft
+    participant Mod as #[pymodule] fn daft
+    participant Reg as FUNCTION_REGISTRY (LazyLock)
+
+    Py-&gt;&gt;Cdy: dlopen
+    Cdy-&gt;&gt;Mod: PyInit_daft
+    Mod-&gt;&gt;Mod: 25+ register_modules 调用
+    Note over Mod: 此时 FUNCTION_REGISTRY 仍为空 LazyLock
+    Mod-&gt;&gt;Reg: write().register::&lt;NumericFunctions&gt;()
+    Mod-&gt;&gt;Reg: write().register::&lt;FloatFunctions&gt;()
+    Mod-&gt;&gt;Reg: write().register::&lt;UriFunctions&gt;()
+    Note over Mod,Reg: 共 15+ 函数模块 + 8 个单函数 add_fn
+    Mod--&gt;&gt;Py: PyResult::Ok
+    Py--&gt;&gt;Py: import 完成,daft.daft.* 全可用
+</div>
+<p>注意:<code>FUNCTION_REGISTRY</code> 的 <code>register_modules</code> 不能在子 crate 内做——需要 access 多个 crate 的类型(<code>daft_geo::SpatialFunctions</code>、<code>daft_image::functions::ImageFunctions</code> 等),只有顶层 <code>src/lib.rs</code> 同时 link 全部 crate 才能写出。这是 <code>lib.rs:157</code> 注释 <em>"the only point in the rust codebase that we have access to all crates"</em> 的来历。</p>
+<hr />
+<h2>5. 怎么优化的:三个工程要点</h2>
+<h3>5.1 SQL 路径完全复用 DataFrame 优化</h3>
+<div class="mermaid">
+flowchart LR
+    SQL[SQL → AST] --&gt; LB[LogicalPlanBuilder.filter/select/agg]
+    DF[DataFrame API] --&gt; LB
+    LB --&gt; Opt[&quot;Optimizer\n(14 batches)&quot;]
+    Opt --&gt; Phys[Physical Plan]
+
+    classDef shared fill:#d5e8d4
+    class LB,Opt,Phys shared
+</div>
+<p><strong>没有 SQL 专属优化器</strong>。所有规则(谓词下推、Join 重排、子查询消除——见 <a href="./03-逻辑计划与优化器.html">03 § 5</a>)对两条路径同等生效。<code>UnnestScalarSubquery</code>/<code>UnnestPredicateSubquery</code>(<code>optimization/rules/unnest_subquery.rs</code>)是子查询消除规则,在 SQL 路径上特别活跃。</p>
+<h3>5.2 Bindings:作用域正确性</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// planner.rs:101</span>
+<span style="color: #66D9EF">impl</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">T</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> Bindings</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">T</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">get</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self, ident: </span><span style="color: #66D9EF">&amp;str</span><span style="color: #F8F8F2">) -&gt; Option</span><span style="color: #FF4689">&lt;&amp;</span><span style="color: #F8F8F2">T</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> { </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">. }</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">insert</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> self, name: String, target: </span><span style="color: #A6E22E">T</span><span style="color: #F8F8F2">) -&gt; Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">T</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> { </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">. }</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">clear</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> self) { </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">. }</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><code>SQLPlanner</code> 自带三套 Bindings:
+- <code>bound_ctes</code> —— CTE(<code>WITH foo AS ...</code>)
+- <code>bound_columns</code> —— 当前 select clause 引入的列别名(<code>SELECT a + 1 AS x</code> → 在 <code>WHERE x &gt; 0</code> 时可见)
+- <code>current_plan.schema</code> —— 当前已选好的 relation 的列</p>
+<p>子查询通过 <code>new_child()</code>(<code>planner.rs:184</code>)创建,继承 <code>parent</code> 引用,实现 outer reference resolution。没有 child 自己的 <code>bound_columns</code> 与 outer 混淆——这正是 SQL 标准的 lexical scoping 要求。</p>
+<h3>5.3 单 cdylib vs 多模块的取舍</h3>
+<table>
+<thead>
+<tr>
+<th>方式</th>
+<th>优点</th>
+<th>缺点</th>
+<th>谁用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>单 cdylib(Daft)</td>
+<td>全局共享 <code>FUNCTION_REGISTRY</code>、零拷贝跨 crate;import 一次全到位</td>
+<td>编译时间长(单 crate 链所有 dep);二进制大</td>
+<td>Daft、Polars</td>
+</tr>
+<tr>
+<td>多 cdylib(per crate)</td>
+<td>编译并行;按需加载</td>
+<td>跨 crate 调用要走 PyObject 中转;难共享全局态</td>
+<td>早期 PyO3 项目</td>
+</tr>
+<tr>
+<td>Python 子模块(<code>m.add_submodule</code>)</td>
+<td>命名空间整洁</td>
+<td>仍是同一个 cdylib;只是 Python 侧分组</td>
+<td>DataFusion-python(部分用)</td>
+</tr>
+</tbody>
+</table>
+<p>Daft 选择 <strong>单 cdylib + 同一命名空间</strong> —— <code>from daft.daft import X</code> 一律到一个 <code>.so</code>/<code>.dylib</code>/<code>.pyd</code> 找符号。相对应,<code>src/lib.rs</code> 的 <code>register_modules</code> 调用顺序也要正确:<code>daft_dsl::register_modules</code> 必须在 <code>daft_logical_plan::register_modules</code> 之前调用,因为后者依赖 <code>PyExpr</code>。</p>
+<hr />
+<h2>6. 端到端案例</h2>
+<h3>6.1 SQL 全链路</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #FF4689">import</span><span style="color: #F8F8F2"> daft</span>
+
+<span style="color: #F8F8F2">logs</span> <span style="color: #FF4689">=</span> <span style="color: #F8F8F2">daft</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">read_parquet(</span><span style="color: #E6DB74">&quot;s3://b/year=2024/*.parquet&quot;</span><span style="color: #F8F8F2">)</span>
+<span style="color: #F8F8F2">daft</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">sql(</span><span style="color: #E6DB74">&quot;CREATE OR REPLACE TABLE logs AS SELECT * FROM ?&quot;</span><span style="color: #F8F8F2">,</span> <span style="color: #F8F8F2">logs)</span>
+
+<span style="color: #F8F8F2">result</span> <span style="color: #FF4689">=</span> <span style="color: #F8F8F2">daft</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">sql(</span><span style="color: #E6DB74">&quot;&quot;&quot;</span>
+<span style="color: #E6DB74">    SELECT user_id, COUNT(*) AS c</span>
+<span style="color: #E6DB74">    FROM logs</span>
+<span style="color: #E6DB74">    WHERE ts &gt; &#39;2024-01-01&#39; AND status = &#39;OK&#39;</span>
+<span style="color: #E6DB74">    GROUP BY user_id</span>
+<span style="color: #E6DB74">    LIMIT 100</span>
+<span style="color: #E6DB74">&quot;&quot;&quot;</span><span style="color: #F8F8F2">)</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">collect()</span>
+</code></pre></div>
+
+<p>执行步骤:</p>
+<ol>
+<li><strong>首次注册表</strong>(<code>CREATE OR REPLACE TABLE</code>)— <code>sql_exec</code> 返回 <code>None</code>,但 <code>Session.tables</code> 多了一项 <code>logs</code>(<code>src/daft-session/src/session.rs:25</code>)。</li>
+<li><strong>第二次 SQL</strong>:</li>
+<li><code>Tokenizer</code> → <code>Parser</code> → <code>ast::Statement::Query</code></li>
+<li><code>SQLPlanner.plan_statement</code> 逐 clause 调 <code>LogicalPlanBuilder</code>:
+     <code>LogicalPlanBuilder::table_scan('logs')
+        .filter(ts &gt; '2024-01-01' AND status = 'OK')
+        .aggregate([count(*) AS c], groupby=[user_id])
+        .limit(100)</code></li>
+<li><code>sql_exec</code> 返回 <code>PyLogicalPlanBuilder</code></li>
+<li><strong><code>.collect()</code></strong> 在 Python 端:</li>
+<li>调 <code>Runner.run_iter_tables</code> → 14 个 batch 优化(参见 <a href="./03-逻辑计划与优化器.html">03</a>)</li>
+<li>lowering 到 <code>LocalPhysicalPlan</code> 或 <code>DistributedPhysicalPlan</code></li>
+<li>Source 行组裁剪(参见 <a href="./06-IO与扫描下推.html">06</a>)</li>
+<li>Pipeline 调度(参见 <a href="./04-Swordfish本地执行.html">04</a>)/ Ray 调度(参见 <a href="./05-分布式执行.html">05</a>)</li>
+<li>MicroPartition 流回 Python iterator</li>
+<li><strong>回流</strong>:每个 MP 通过 <code>getattr(_micropartition).extract::&lt;PyMicroPartition&gt;()</code>(<code>runners.rs:124</code>)拆出 Rust 引用,Python 端 <code>PyMicroPartition.to_arrow()</code> 走 Arrow C Data Interface 零拷贝。</li>
+</ol>
+<h3>6.2 完整时序图</h3>
+<div class="mermaid">
+sequenceDiagram
+    participant App as Python
+    participant Rust as #[pymodule] daft.daft
+    participant Sess as Session
+    participant SQLPlan as SQLPlanner
+    participant Build as LogicalPlanBuilder
+    participant Opt as Optimizer
+    participant LowL as Lowering
+    participant Pipe as Pipeline (Swordfish)
+    participant IO as daft-io / parquet
+    participant MP as MicroPartition
+
+    App-&gt;&gt;Rust: import daft
+    Rust-&gt;&gt;Rust: register_modules × 25+
+    Rust-&gt;&gt;Rust: FUNCTION_REGISTRY 初始化
+    Rust--&gt;&gt;App: ready
+
+    App-&gt;&gt;Sess: daft.sql(CREATE TABLE)
+    Sess-&gt;&gt;Sess: tables.insert(&#x27;logs&#x27;, ...)
+
+    App-&gt;&gt;Rust: daft.sql(SELECT ...)
+    Rust-&gt;&gt;SQLPlan: sql_exec → execute_statement
+    SQLPlan-&gt;&gt;Build: table_scan / filter / agg / limit
+    Build--&gt;&gt;SQLPlan: Arc&amp;lt;LogicalPlan&amp;gt;
+    SQLPlan--&gt;&gt;Rust: PyLogicalPlanBuilder
+    Rust--&gt;&gt;App: builder
+
+    App-&gt;&gt;Rust: builder.collect()
+    Rust-&gt;&gt;Opt: optimize 14 batches
+    Opt--&gt;&gt;Rust: 优化后 plan
+    Rust-&gt;&gt;LowL: translate(plan)
+    LowL--&gt;&gt;Rust: LocalPhysicalPlan
+    Rust-&gt;&gt;Pipe: build_pipeline + run
+    Pipe-&gt;&gt;IO: ScanTask 读 parquet
+    IO-&gt;&gt;IO: 行组裁剪 + Coalesce
+    IO--&gt;&gt;Pipe: Arrow batches
+    Pipe-&gt;&gt;MP: 装成 MicroPartition
+    Pipe--&gt;&gt;Rust: yield MP
+    Rust--&gt;&gt;App: PyMicroPartition
+    App-&gt;&gt;App: to_arrow / to_pandas / to_polars
+</div>
+<hr />
+<h2>7. 与同类项目对照</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Daft</th>
+<th>DataFusion-python</th>
+<th>DuckDB Python</th>
+<th>Polars</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>单 cdylib</td>
+<td>是(<code>daft.daft</code>)</td>
+<td>是(<code>datafusion._internal</code>)</td>
+<td>是(<code>duckdb.duckdb</code>)</td>
+<td>是(<code>polars._polars</code>)</td>
+</tr>
+<tr>
+<td>SQL 与 DF 是否汇合</td>
+<td>是,<code>LogicalPlanBuilder</code></td>
+<td>是,<code>LogicalPlanBuilder</code></td>
+<td>是,<code>Relation</code></td>
+<td>否,SQL 走 separate path</td>
+</tr>
+<tr>
+<td>AST 解析器</td>
+<td><code>sqlparser</code> crate</td>
+<td><code>sqlparser</code> crate</td>
+<td>自研</td>
+<td>自研</td>
+</tr>
+<tr>
+<td>优化器复用</td>
+<td>14 batches 完全复用</td>
+<td>DataFusion optimizer</td>
+<td>binder + optimizer</td>
+<td>Polars LP</td>
+</tr>
+<tr>
+<td>Python 包装层</td>
+<td>厚(<code>daft/</code>)</td>
+<td>薄</td>
+<td>中等</td>
+<td>厚</td>
+</tr>
+<tr>
+<td>GIL 释放</td>
+<td>显式 detach</td>
+<td>显式</td>
+<td>显式</td>
+<td>显式</td>
+</tr>
+<tr>
+<td>数据回流</td>
+<td>Arrow C interface 零拷贝</td>
+<td>同上</td>
+<td>DuckDB 自己的协议 + Arrow 桥</td>
+<td>同上</td>
+</tr>
+<tr>
+<td>函数注册</td>
+<td>全局 <code>FUNCTION_REGISTRY</code></td>
+<td>per Session</td>
+<td>global + scoped</td>
+<td>per crate</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>8. 未解之谜</h2>
+<ol>
+<li><strong><code>FUNCTION_REGISTRY</code> 的写锁竞争</strong>:<code>src/lib.rs:158-186</code> 在 <code>#[pymodule]</code> 初始化时拿 <code>write()</code> 锁,理论上模块加载只发生一次。但如果用户在 worker 进程 fork 后 <code>import daft</code>,LazyLock 会<strong>重做一遍</strong>初始化吗?(待验证 fork-safety)</li>
+<li><strong>CTE 作用域 vs Catalog 作用域</strong>:<code>PlannerContext.bound_ctes</code> 是 SQL 临时,<code>Session.tables</code> 是会话持久。如果一条 SQL <code>WITH t AS ... SELECT * FROM t</code> 中 <code>t</code> 与 catalog 中的 <code>t</code> 同名,谁优先?(按 SQL 标准应是 CTE 优先,但代码里没看到显式优先级)</li>
+<li><strong><code>PyLogicalPlanBuilder.optimize_async</code> 的 observer 接口</strong>:<code>src/daft-logical-plan/src/builder/mod.rs:1016</code> 接受一个 Python 回调。每个 batch 的中间 plan 怎么序列化回 Python 的?是否 deep clone?如果 plan 很大,observer 是性能瓶颈吗?</li>
+<li><strong><code>from daft.daft import *</code> vs Python 包装层</strong>:用户用前者会得到很多 <code>Py*</code> 前缀的低级类型,而不是 <code>daft.read_parquet</code> 等高级函数。Python 包装层(<code>daft/</code>)的厚薄边界是什么?有没有指南?</li>
+<li><strong>跨语言错误链路</strong>:Rust <code>DaftError</code> 到 Python 异常的映射在哪?是否保留了完整 backtrace?(<code>src/common/error/src/lib.rs</code> 应该有 <code>impl From&lt;DaftError&gt; for PyErr</code>,但调用栈被 <code>?</code> 抹平了——是否需要 <code>pyo3::PyErr::from_value</code>?)</li>
+</ol>
+<hr />
+<h2>收尾:全局图</h2>
+<p>至此,8 篇深度剖析覆盖了 Daft 的全栈:</p>
+<div class="mermaid">
+flowchart LR
+    subgraph 前端
+        Py[daft Python]
+        SQL[SQL]
+    end
+    subgraph IR
+        DSL[Expr / ExprRef]
+        LP[LogicalPlan]
+    end
+    subgraph 优化
+        Opt[14 batches]
+    end
+    subgraph 执行
+        Local[Swordfish&lt;br/&gt;本地]
+        Dist[Distributed&lt;br/&gt;Ray]
+    end
+    subgraph 数据
+        IO[ObjectSource]
+        Scan[ScanTask + Pushdowns]
+        Stats[Stats / 行组裁剪]
+        MP[MicroPartition / RecordBatch / Series]
+    end
+
+    Py --&gt;|02| DSL
+    Py --&gt;|07| LP
+    SQL --&gt;|07| LP
+    DSL --&gt; LP
+    LP --&gt;|03| Opt
+    Opt --&gt;|04| Local
+    Opt --&gt;|05| Dist
+    Local --&gt;|06| Scan
+    Dist --&gt;|06| Scan
+    Scan --&gt;|06| IO
+    Scan --&gt;|06| Stats
+    Local --&gt;|01| MP
+    Dist --&gt;|01| MP
+
+    style LP fill:#d5e8d4
+    style Opt fill:#fff2cc
+    style MP fill:#dae8fc
+</div>
+<p>各章导航:</p>
+<ul>
+<li><a href="./00-总览.html">00 总览</a></li>
+<li><a href="./01-核心类型与多模态.html">01 核心类型与多模态</a></li>
+<li><a href="./02-表达式DSL与函数.html">02 表达式 DSL 与函数</a></li>
+<li><a href="./03-逻辑计划与优化器.html">03 逻辑计划与优化器</a></li>
+<li><a href="./04-Swordfish本地执行.html">04 Swordfish 本地执行</a></li>
+<li><a href="./05-分布式执行.html">05 分布式执行</a></li>
+<li><a href="./06-IO与扫描下推.html">06 IO 与扫描下推</a></li>
+<li><strong>07 SQL 与 Python 桥</strong>(本篇)</li>
+</ul>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

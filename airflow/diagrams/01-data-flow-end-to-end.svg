@@ -1,0 +1,201 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 680" font-family="ui-sans-serif, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="12">
+  <defs>
+    <marker id="arrD" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#0f172a"/>
+    </marker>
+  </defs>
+  <rect width="1200" height="680" fill="#f8fafc"/>
+  <text x="600" y="34" text-anchor="middle" font-size="20" font-weight="800" fill="#0f172a">端到端数据流：从一次 git push 到 TI 完成</text>
+  <text x="600" y="54" text-anchor="middle" font-size="11" fill="#475569">每个箭头标注数据载体（什么内容、用什么协议、写到哪里）</text>
+
+  <!-- swim lanes -->
+  <g stroke="#cbd5e1" stroke-dasharray="2 2">
+    <line x1="20" y1="80" x2="1180" y2="80"/>
+    <line x1="20" y1="180" x2="1180" y2="180"/>
+    <line x1="20" y1="290" x2="1180" y2="290"/>
+    <line x1="20" y1="400" x2="1180" y2="400"/>
+    <line x1="20" y1="510" x2="1180" y2="510"/>
+    <line x1="20" y1="620" x2="1180" y2="620"/>
+  </g>
+  <g font-size="11" font-weight="700" fill="#0f172a">
+    <text x="30" y="100">① 编写</text>
+    <text x="30" y="200">② 解析</text>
+    <text x="30" y="310">③ 调度</text>
+    <text x="30" y="420">④ 投递</text>
+    <text x="30" y="530">⑤ 执行</text>
+    <text x="30" y="640">⑥ 回写</text>
+  </g>
+
+  <!-- Step 1 -->
+  <g>
+    <rect x="130" y="92" width="200" height="70" rx="8" fill="#fef9c3" stroke="#ca8a04"/>
+    <text x="230" y="114" text-anchor="middle" font-weight="700" fill="#713f12">Dag 作者写 .py</text>
+    <text x="230" y="130" text-anchor="middle" font-size="10" fill="#854d0e">from airflow.sdk import dag, task</text>
+    <text x="230" y="146" text-anchor="middle" font-size="10" fill="#854d0e">git commit / push</text>
+  </g>
+  <rect x="360" y="92" width="200" height="70" rx="8" fill="#fef9c3" stroke="#a16207"/>
+  <text x="460" y="114" text-anchor="middle" font-weight="700" fill="#713f12">Bundle source</text>
+  <text x="460" y="130" text-anchor="middle" font-size="10" fill="#854d0e">git pull → /opt/airflow/dags/...</text>
+  <text x="460" y="146" text-anchor="middle" font-size="10" fill="#854d0e">版本号 = git SHA</text>
+
+  <line x1="330" y1="124" x2="360" y2="124" stroke="#0f172a" marker-end="url(#arrD)"/>
+  <text x="330" y="160" font-size="9" fill="#475569">.py 文件</text>
+
+  <!-- Step 2 -->
+  <g>
+    <rect x="130" y="192" width="200" height="80" rx="8" fill="#ede9fe" stroke="#7c3aed"/>
+    <text x="230" y="212" text-anchor="middle" font-weight="700" fill="#5b21b6">DFP Manager</text>
+    <text x="230" y="228" text-anchor="middle" font-size="10" fill="#4c1d95">扫描 Bundle</text>
+    <text x="230" y="244" text-anchor="middle" font-size="10" fill="#4c1d95">分配子进程</text>
+    <text x="230" y="260" text-anchor="middle" font-size="10" fill="#4c1d95">manager.py</text>
+  </g>
+  <g>
+    <rect x="360" y="192" width="200" height="80" rx="8" fill="#ede9fe" stroke="#7c3aed"/>
+    <text x="460" y="212" text-anchor="middle" font-weight="700" fill="#5b21b6">DAG Processor 子进程</text>
+    <text x="460" y="228" text-anchor="middle" font-size="10" fill="#4c1d95">import 用户模块</text>
+    <text x="460" y="244" text-anchor="middle" font-size="10" fill="#4c1d95">build DAG()</text>
+    <text x="460" y="260" text-anchor="middle" font-size="10" fill="#4c1d95">SerializedDAG.serialize_dag()</text>
+  </g>
+  <g>
+    <rect x="590" y="192" width="200" height="80" rx="8" fill="#fee2e2" stroke="#dc2626"/>
+    <text x="690" y="214" text-anchor="middle" font-weight="700" fill="#991b1b">serialized_dag 表</text>
+    <text x="690" y="232" text-anchor="middle" font-size="10" fill="#7f1d1d">data: JSONB (可 zlib)</text>
+    <text x="690" y="248" text-anchor="middle" font-size="10" fill="#7f1d1d">dag_hash · last_updated</text>
+    <text x="690" y="264" text-anchor="middle" font-size="10" fill="#7f1d1d">asset_ref / task warnings</text>
+  </g>
+  <line x1="330" y1="232" x2="360" y2="232" stroke="#0f172a" marker-end="url(#arrD)"/>
+  <text x="330" y="222" font-size="9" fill="#475569">文件路径</text>
+  <line x1="560" y1="232" x2="590" y2="232" stroke="#0f172a" marker-end="url(#arrD)"/>
+  <text x="560" y="222" font-size="9" fill="#475569">JSON</text>
+  <line x1="460" y1="160" x2="460" y2="192" stroke="#0f172a" stroke-dasharray="3 3" marker-end="url(#arrD)"/>
+  <text x="465" y="180" font-size="9" fill="#475569">读 .py</text>
+
+  <!-- Step 3 -->
+  <g>
+    <rect x="130" y="302" width="200" height="80" rx="8" fill="#dbeafe" stroke="#2563eb"/>
+    <text x="230" y="324" text-anchor="middle" font-weight="700" fill="#1e3a8a">Scheduler 主循环</text>
+    <text x="230" y="340" text-anchor="middle" font-size="10" fill="#1e40af">load SerializedDag</text>
+    <text x="230" y="356" text-anchor="middle" font-size="10" fill="#1e40af">_create_dag_runs()</text>
+    <text x="230" y="372" text-anchor="middle" font-size="10" fill="#1e40af">扫描 due Dag</text>
+  </g>
+  <g>
+    <rect x="360" y="302" width="200" height="80" rx="8" fill="#dbeafe" stroke="#2563eb"/>
+    <text x="460" y="324" text-anchor="middle" font-weight="700" fill="#1e3a8a">TI 状态转换</text>
+    <text x="460" y="340" text-anchor="middle" font-size="10" fill="#1e40af">created → scheduled</text>
+    <text x="460" y="356" text-anchor="middle" font-size="10" fill="#1e40af">scheduled → queued</text>
+    <text x="460" y="372" text-anchor="middle" font-size="10" fill="#1e40af">FOR UPDATE SKIP LOCKED</text>
+  </g>
+  <g>
+    <rect x="590" y="302" width="200" height="80" rx="8" fill="#fee2e2" stroke="#dc2626"/>
+    <text x="690" y="324" text-anchor="middle" font-weight="700" fill="#991b1b">task_instance 表</text>
+    <text x="690" y="340" text-anchor="middle" font-size="10" fill="#7f1d1d">state UPDATE</text>
+    <text x="690" y="356" text-anchor="middle" font-size="10" fill="#7f1d1d">queued_dttm / pool_slots</text>
+    <text x="690" y="372" text-anchor="middle" font-size="10" fill="#7f1d1d">索引：(pool, state)</text>
+  </g>
+  <line x1="590" y1="232" x2="230" y2="302" stroke="#0f172a" stroke-dasharray="3 3" marker-end="url(#arrD)"/>
+  <text x="370" y="280" font-size="9" fill="#475569">读 SerializedDag</text>
+  <line x1="330" y1="342" x2="360" y2="342" stroke="#0f172a" marker-end="url(#arrD)"/>
+  <line x1="560" y1="342" x2="590" y2="342" stroke="#0f172a" marker-end="url(#arrD)"/>
+
+  <!-- Step 4 -->
+  <g>
+    <rect x="130" y="412" width="200" height="80" rx="8" fill="#dbeafe" stroke="#3b82f6"/>
+    <text x="230" y="434" text-anchor="middle" font-weight="700" fill="#1e3a8a">Executor</text>
+    <text x="230" y="450" text-anchor="middle" font-size="10" fill="#1e40af">queue_task(Workload)</text>
+    <text x="230" y="466" text-anchor="middle" font-size="10" fill="#1e40af">Celery / K8s / Local</text>
+    <text x="230" y="482" text-anchor="middle" font-size="10" fill="#1e40af">event_buffer 反馈</text>
+  </g>
+  <g>
+    <rect x="360" y="412" width="200" height="80" rx="8" fill="#f1f5f9" stroke="#94a3b8"/>
+    <text x="460" y="434" text-anchor="middle" font-weight="700">Broker / K8s API</text>
+    <text x="460" y="450" text-anchor="middle" font-size="10" fill="#475569">Redis 队列 / kube-apiserver</text>
+    <text x="460" y="466" text-anchor="middle" font-size="10" fill="#475569">Pod 创建 / Celery push</text>
+    <text x="460" y="482" text-anchor="middle" font-size="10" fill="#475569">JWT 注入到环境变量</text>
+  </g>
+  <line x1="330" y1="450" x2="360" y2="450" stroke="#0f172a" marker-end="url(#arrD)"/>
+  <text x="330" y="440" font-size="9" fill="#475569">Workload</text>
+
+  <!-- Step 5 -->
+  <g>
+    <rect x="130" y="522" width="200" height="80" rx="8" fill="#dcfce7" stroke="#16a34a"/>
+    <text x="230" y="544" text-anchor="middle" font-weight="700" fill="#14532d">Supervisor</text>
+    <text x="230" y="560" text-anchor="middle" font-size="10" fill="#166534">取 Workload + JWT</text>
+    <text x="230" y="576" text-anchor="middle" font-size="10" fill="#166534">fork Task Runner</text>
+    <text x="230" y="592" text-anchor="middle" font-size="10" fill="#166534">建 stdin/stdout 管道</text>
+  </g>
+  <g>
+    <rect x="360" y="522" width="200" height="80" rx="8" fill="#fef9c3" stroke="#ca8a04"/>
+    <text x="460" y="544" text-anchor="middle" font-weight="700" fill="#713f12">Task Runner</text>
+    <text x="460" y="560" text-anchor="middle" font-size="10" fill="#854d0e">import Bundle 中的 Dag</text>
+    <text x="460" y="576" text-anchor="middle" font-size="10" fill="#854d0e">operator.execute(context)</text>
+    <text x="460" y="592" text-anchor="middle" font-size="10" fill="#854d0e">需 XCom/Var/Conn → 走管道</text>
+  </g>
+  <g>
+    <rect x="590" y="522" width="200" height="80" rx="8" fill="#e2e8f0" stroke="#475569"/>
+    <text x="690" y="544" text-anchor="middle" font-weight="700">Execution API</text>
+    <text x="690" y="560" text-anchor="middle" font-size="10" fill="#475569">GET xcoms / variables</text>
+    <text x="690" y="576" text-anchor="middle" font-size="10" fill="#475569">POST taskinstance state</text>
+    <text x="690" y="592" text-anchor="middle" font-size="10" fill="#475569">JWT 校验 ti:self</text>
+  </g>
+  <line x1="330" y1="562" x2="360" y2="562" stroke="#0f172a" marker-end="url(#arrD)"/>
+  <text x="332" y="554" font-size="9" fill="#475569">msgpack</text>
+  <line x1="560" y1="562" x2="590" y2="562" stroke="#0f172a" marker-end="url(#arrD)"/>
+  <text x="566" y="554" font-size="9" fill="#475569">代理 HTTP</text>
+
+  <!-- Step 6 -->
+  <g>
+    <rect x="130" y="632" width="200" height="40" rx="8" fill="#dbeafe" stroke="#2563eb"/>
+    <text x="230" y="654" text-anchor="middle" font-weight="700" fill="#1e3a8a">event_buffer / DB UPDATE</text>
+  </g>
+  <g>
+    <rect x="360" y="632" width="200" height="40" rx="8" fill="#fee2e2" stroke="#dc2626"/>
+    <text x="460" y="654" text-anchor="middle" font-weight="700" fill="#991b1b">task_instance.state = success</text>
+  </g>
+  <g>
+    <rect x="590" y="632" width="200" height="40" rx="8" fill="#dcfce7" stroke="#16a34a"/>
+    <text x="690" y="654" text-anchor="middle" font-weight="700" fill="#14532d">xcom 写入 / asset_event 触发</text>
+  </g>
+  <line x1="330" y1="652" x2="360" y2="652" stroke="#0f172a" marker-end="url(#arrD)"/>
+  <line x1="560" y1="652" x2="590" y2="652" stroke="#0f172a" marker-end="url(#arrD)"/>
+
+  <line x1="690" y1="602" x2="230" y2="632" stroke="#0f172a" stroke-dasharray="3 3" marker-end="url(#arrD)"/>
+  <text x="490" y="618" font-size="10" fill="#475569" font-style="italic">Scheduler 心跳轮询 API/event_buffer → 修正 DB</text>
+
+  <!-- right-side legend & timing -->
+  <g transform="translate(820,90)">
+    <rect width="360" height="540" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="14" y="22" font-size="13" font-weight="700" fill="#0f172a">数据载体与典型耗时</text>
+
+    <text x="14" y="50" font-size="11" font-weight="700" fill="#713f12">① 编写</text>
+    <text x="14" y="66" font-size="11" fill="#334155">Python 源码 .py、git diff</text>
+
+    <text x="14" y="92" font-size="11" font-weight="700" fill="#5b21b6">② 解析</text>
+    <text x="14" y="108" font-size="11" fill="#334155">.py → Python 对象 → JSON</text>
+    <text x="14" y="124" font-size="11" fill="#334155">SerializedDAG.serialize_dag()</text>
+    <text x="14" y="140" font-size="11" fill="#334155">可 zlib 压缩 (`_COMPRESS_SERIALIZED_DAGS`)</text>
+    <text x="14" y="156" font-size="11" fill="#475569">时延：单 Dag 通常 &lt; 1 s</text>
+
+    <text x="14" y="184" font-size="11" font-weight="700" fill="#1e3a8a">③ 调度</text>
+    <text x="14" y="200" font-size="11" fill="#334155">read serialized_dag</text>
+    <text x="14" y="216" font-size="11" fill="#334155">INSERT dag_run / task_instance</text>
+    <text x="14" y="232" font-size="11" fill="#334155">行锁：FOR UPDATE SKIP LOCKED</text>
+    <text x="14" y="248" font-size="11" fill="#475569">时延：一次循环 1~10 s（取决于规模）</text>
+
+    <text x="14" y="276" font-size="11" font-weight="700" fill="#1e3a8a">④ 投递</text>
+    <text x="14" y="292" font-size="11" fill="#334155">Workload = ExecuteTask</text>
+    <text x="14" y="308" font-size="11" fill="#334155">→ Celery task / K8s Pod manifest</text>
+    <text x="14" y="324" font-size="11" fill="#475569">时延：Celery ms 级；K8s 数秒</text>
+
+    <text x="14" y="352" font-size="11" font-weight="700" fill="#14532d">⑤ 执行</text>
+    <text x="14" y="368" font-size="11" fill="#334155">stdin/stdout 长度前缀 msgpack 帧</text>
+    <text x="14" y="384" font-size="11" fill="#334155">Supervisor ↔ Task Runner</text>
+    <text x="14" y="400" font-size="11" fill="#334155">Supervisor ↔ Execution API (HTTPS, JWT)</text>
+    <text x="14" y="416" font-size="11" fill="#475569">时延：取决于业务任务本身</text>
+
+    <text x="14" y="444" font-size="11" font-weight="700" fill="#16a34a">⑥ 回写</text>
+    <text x="14" y="460" font-size="11" fill="#334155">TaskRunner → Supervisor → Execution API</text>
+    <text x="14" y="476" font-size="11" fill="#334155">→ task_instance / xcom / asset_event 表</text>
+    <text x="14" y="492" font-size="11" fill="#334155">→ Scheduler 下次循环看到完成</text>
+    <text x="14" y="508" font-size="11" fill="#475569">时延：通常 &lt; 1 s</text>
+  </g>
+</svg>

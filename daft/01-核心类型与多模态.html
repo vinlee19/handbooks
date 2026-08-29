@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>01 · 核心类型与多模态:Series / RecordBatch / MicroPartition / Image · Daft 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#a3e635}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">🐡 <span>Daft 源码深度解析</span></span><nav class="nav"><a href="index.html">总览</a><a href="00-总览.html">Daft 总览:从 `df.collect()` 到 Arrow Buffer</a><a href="01-核心类型与多模态.html" class=on>核心类型与多模态:Series / RecordBatch / MicroPartition / Image</a><a href="02-表达式DSL与函数.html">表达式 DSL 与函数:三阶段列解析、`Expr` 枚举、`FunctionRegistry`</a><a href="03-逻辑计划与优化器.html">逻辑计划与优化器</a><a href="04-Swordfish本地执行.html">Swordfish 本地执行</a><a href="05-分布式执行.html">分布式执行</a><a href="06-IO与扫描下推.html">IO 与扫描下推</a><a href="07-SQL与Python桥.html">SQL 与 Python 桥</a></nav></div></header>
+<main class="wrap">
+<h1>01 · 核心类型与多模态:Series / RecordBatch / MicroPartition / Image</h1>
+<blockquote>
+<p><strong>基准 commit</strong>: <code>fa0d066204eae630962af7b22a5ab559ecd454fb</code> (<code>v0.7.10-13</code>)
+<strong>上一篇</strong>: <a href="00-总览.html"><code>00-总览.md</code></a> · <strong>下一篇</strong>: <code>02-表达式DSL与函数.md</code>
+<strong>本篇主题</strong>:从 Arrow <code>ArrayRef</code> 一路向上,看 Daft 怎么封出 <code>Series → RecordBatch → MicroPartition</code>,以及多模态(图像/张量/嵌入/文件)如何"借用"列存</p>
+</blockquote>
+<hr />
+<h2>1. 解决了什么问题</h2>
+<h3>1.1 多模态 DataFrame 面临的核心矛盾</h3>
+<blockquote>
+<p>同一个 DataFrame 里,<strong>结构化的 <code>int64</code></strong> 和 <strong>变长的 image bytes</strong> 怎么共存,还能保住 Arrow 列存的"零拷贝、向量化、可下推"三大美德?</p>
+</blockquote>
+<p>下表展示如果"不用 Daft"的两种朴素做法的代价:</p>
+<table>
+<thead>
+<tr>
+<th>方案</th>
+<th>int64 列</th>
+<th>image 列</th>
+<th>后果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>全部 <code>Object</code> (pandas)</td>
+<td>✅ 但慢</td>
+<td>✅ 但 GC 压力大</td>
+<td>失去向量化</td>
+</tr>
+<tr>
+<td>全部 PyArrow</td>
+<td>✅</td>
+<td>❌ image 没有原生类型</td>
+<td>业务侧自己处理嵌套 struct</td>
+</tr>
+<tr>
+<td><strong>Daft</strong></td>
+<td>✅ Arrow 原生</td>
+<td>✅ Logical Type 包装 Struct</td>
+<td>列存 + 类型语义都保住</td>
+</tr>
+</tbody>
+</table>
+<h3>1.2 Daft 的思路:<strong>Logical Type 包 Physical Type</strong></h3>
+<div class="mermaid">
+flowchart LR
+  L[&quot;逻辑类型&lt;br/&gt;(用户视角)&lt;br/&gt;Image / Tensor / Embedding / File&quot;] --&gt;|包装| P[&quot;物理类型&lt;br/&gt;(存储视角)&lt;br/&gt;Struct / FixedSizeList / List&lt;u8&gt;&quot;]
+  P --&gt;|对应| A[&quot;Arrow ArrayRef&lt;br/&gt;(传输视角)&lt;br/&gt;StructArray / FixedSizeListArray&quot;]
+  classDef logic fill:#fde2e2
+  classDef phys fill:#d4e2f1
+  classDef arrow fill:#d4f1d4
+  class L logic
+  class P phys
+  class A arrow
+</div>
+<blockquote>
+<p><strong>看图要点</strong>:用户看 <code>df.with_column("img", col("path").image.decode())</code>,看到的是 <code>Image</code> 类型;Rust 内部存的是 <code>StructArray { data, channels, heights, widths, modes }</code>;在 Arrow Flight / IPC 上传输时回到 Arrow 标准 StructArray。<strong>三套语义,一份存储</strong>。</p>
+</blockquote>
+<hr />
+<h2>2. 整体设计</h2>
+<h3>2.1 类型系统的物理结构</h3>
+<div class="mermaid">
+graph TD
+  subgraph SCHEMA_LAYER[&quot;daft-schema (描述层)&quot;]
+    DT[&quot;DataType&lt;br/&gt;枚举 50+ 变体&quot;]
+    F[&quot;Field&lt;br/&gt;{name, dtype, metadata}&quot;]
+    SC[&quot;Schema&lt;br/&gt;{fields, name_to_indices}&quot;]
+  end
+
+  subgraph CORE_LAYER[&quot;daft-core (存储层)&quot;]
+    DA[&quot;DataArray&amp;lt;T&amp;gt;&lt;br/&gt;原生类型数组&quot;]
+    LA[&quot;ListArray&lt;br/&gt;(offsets + values)&quot;]
+    SA[&quot;StructArray&lt;br/&gt;(field-named children)&quot;]
+    FSLA[&quot;FixedSizeListArray&quot;]
+    UA[&quot;UnionArray&quot;]
+    LOG[&quot;LogicalArrayImpl&amp;lt;L,P&amp;gt;&lt;br/&gt;逻辑包装层&quot;]
+    SR[&quot;Series&lt;br/&gt;多态外壳&quot;]
+  end
+
+  subgraph TABLE_LAYER[&quot;表/分区层&quot;]
+    RB[&quot;RecordBatch&lt;br/&gt;(SchemaRef + Vec&amp;lt;Column&amp;gt;)&quot;]
+    MP[&quot;MicroPartition&lt;br/&gt;(Arc&amp;lt;Vec&amp;lt;RB&amp;gt;&amp;gt; + stats)&quot;]
+  end
+
+  subgraph MM_LAYER[&quot;多模态层 (logical types)&quot;]
+    IMG[&quot;ImageArray&lt;br/&gt;= LogicalArray&amp;lt;ImageType&amp;gt;&quot;]
+    TEN[&quot;TensorArray&lt;br/&gt;= LogicalArray&amp;lt;TensorType&amp;gt;&quot;]
+    EMB[&quot;EmbeddingArray&lt;br/&gt;= LogicalArray&amp;lt;EmbeddingType&amp;gt;&quot;]
+    FA[&quot;FileArray&lt;br/&gt;(MediaType 标识)&quot;]
+  end
+
+  F --&gt; SC
+  DT --&gt; F
+  DA --&gt;|impl IntoSeries| SR
+  LA --&gt;|impl IntoSeries| SR
+  SA --&gt;|impl IntoSeries| SR
+  LOG --&gt;|impl IntoSeries| SR
+  IMG -.is.-&gt; LOG
+  TEN -.is.-&gt; LOG
+  EMB -.is.-&gt; LOG
+  FA -.is.-&gt; LOG
+  SR --&gt;|多列| RB
+  RB --&gt;|多 chunk| MP
+  SC --&gt; RB
+
+  classDef schema fill:#fff5d6
+  classDef core fill:#d4e2f1
+  classDef tab fill:#d4f1d4
+  classDef mm fill:#fde2e2
+  class DT,F,SC schema
+  class DA,LA,SA,FSLA,UA,LOG,SR core
+  class RB,MP tab
+  class IMG,TEN,EMB,FA mm
+</div>
+<blockquote>
+<p><strong>从图看出</strong>:
+- <code>daft-schema</code> 只描述类型;不持有任何数据
+- 多模态类型不是"新数组",而是 <code>LogicalArrayImpl&lt;L, P&gt;</code> 这个泛型壳子在不同 <code>L</code>/<code>P</code> 组合下的别名
+- <code>Series</code> 是所有数组的"统一身份证",上层只跟 <code>Series</code> 打交道</p>
+</blockquote>
+<h3>2.2 三层 trait 体系</h3>
+<p><code>src/daft-core/src/datatypes/mod.rs</code> 设计了一个干净的 trait 树:</p>
+<div class="mermaid">
+classDiagram
+  class DaftDataType {
+    &lt;&lt;trait&gt;&gt;
+    +get_dtype() DataType
+    +ArrayType
+  }
+  class DaftPhysicalType {
+    &lt;&lt;trait&gt;&gt;
+  }
+  class DaftArrowBackedType {
+    &lt;&lt;trait&gt;&gt;
+  }
+  class DaftLogicalType {
+    &lt;&lt;trait&gt;&gt;
+    +PhysicalType
+  }
+  class DaftNumericType {
+    &lt;&lt;trait&gt;&gt;
+    +Native
+  }
+  class DaftPrimitiveType {
+    &lt;&lt;trait&gt;&gt;
+  }
+  class DaftArrayType {
+    &lt;&lt;trait&gt;&gt;
+    +data_type() &amp;DataType
+  }
+
+  DaftDataType &lt;|-- DaftPhysicalType
+  DaftPhysicalType &lt;|-- DaftArrowBackedType
+  DaftDataType &lt;|-- DaftLogicalType
+  DaftArrowBackedType &lt;|-- DaftPrimitiveType
+  DaftArrowBackedType &lt;|-- DaftNumericType
+  DaftNumericType &lt;|-- DaftIntegerType
+  DaftNumericType &lt;|-- DaftFloatType
+</div>
+<blockquote>
+<p><strong>源码定位</strong>:<code>DaftDataType</code> line 59、<code>DaftPhysicalType</code> line 83、<code>DaftArrowBackedType</code> line 85、<code>DaftLogicalType</code> line 87、<code>DaftNumericType</code> line 326、<code>DaftPrimitiveType</code> line 418。<code>DaftArrayType</code> 是更底层(line 50),只要求 <code>data_type()</code>。</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>Trait</th>
+<th>职责</th>
+<th>典型实现者</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DaftDataType</code></td>
+<td>标识"这是 Daft 一种类型",带关联 <code>ArrayType</code></td>
+<td>所有具体类型</td>
+</tr>
+<tr>
+<td><code>DaftPhysicalType</code></td>
+<td>物理类型(可直接落到 Arrow buffer)</td>
+<td><code>Int32Type</code>, <code>Utf8Type</code>, <code>BinaryType</code></td>
+</tr>
+<tr>
+<td><code>DaftArrowBackedType</code></td>
+<td>物理类型且有 Arrow 直接对应物</td>
+<td>数值/字符串/二进制</td>
+</tr>
+<tr>
+<td><code>DaftLogicalType</code></td>
+<td>逻辑类型,带关联 <code>PhysicalType</code> 类型别名</td>
+<td><code>ImageType</code>, <code>TensorType</code>, <code>EmbeddingType</code></td>
+</tr>
+<tr>
+<td><code>DaftPrimitiveType</code></td>
+<td>进一步约束:有 <code>Native</code> 关联类型(如 i32)</td>
+<td>全部数值类型</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>3. 关键数据结构(详图)</h2>
+<h3>3.1 <code>Series</code> —— 类型擦除的多态外壳</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/daft-core/src/series/mod.rs:32</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">Series</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> inner: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">dyn</span><span style="color: #F8F8F2"> SeriesLike</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>简洁到只有一个字段。内部多态通过 trait object <code>dyn SeriesLike</code> 实现:</p>
+<div class="mermaid">
+classDiagram
+  class Series {
+    +inner: Arc&amp;lt;dyn SeriesLike&amp;gt;
+    +data_type() DataType
+    +to_arrow() ArrayRef
+    +from_arrow() Self
+    +cast() Series
+    +equal() BooleanArray
+    +hash() UInt64Array
+    +build_probe_table_without_nulls()
+  }
+
+  class SeriesLike {
+    &lt;&lt;trait, sealed&gt;&gt;
+    +data_type()
+    +len()
+    +to_arrow()
+    +cast()
+  }
+
+  class ArrayWrapper~T~ {
+    +0: T
+  }
+
+  Series *-- SeriesLike : Arc&amp;lt;dyn&amp;gt;
+  SeriesLike &lt;|.. ArrayWrapper
+
+  ArrayWrapper~DataArray_T~ : wraps DataArray&amp;lt;T&amp;gt;
+  ArrayWrapper~ListArray~ : wraps ListArray
+  ArrayWrapper~StructArray~ : wraps StructArray
+  ArrayWrapper~ImageArray~ : wraps ImageArray
+  ArrayWrapper~FileArray~ : wraps FileArray
+  ArrayWrapper~UnionArray~ : wraps UnionArray
+</div>
+<blockquote>
+<p><strong>从图看出</strong>:<code>Series</code> 自己几乎没字段,所有类型差异都被吸收进 <code>dyn SeriesLike</code>。下游只要 hold <code>Series</code>,就能用一套 API 处理所有类型 —— 这种风格在 Rust 列存里很少见(polars 用枚举 <code>Chunked&lt;T&gt;</code>),Daft 选择 trait object 是为了<strong>插入新数组类型不用改 Series 本身</strong>。</p>
+</blockquote>
+<h3>3.2 <code>DataArray&lt;T&gt;</code> —— 原生类型数组</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/daft-core/src/array/mod.rs:40</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">DataArray</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">T</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> field: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Field</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    data: </span><span style="color: #A6E22E">ArrayRef</span><span style="color: #F8F8F2">,           </span><span style="color: #959077">// Arrow 原生数组</span>
+<span style="color: #F8F8F2">    nulls: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">NullBuffer</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    marker_: </span><span style="color: #A6E22E">PhantomData</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">T</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>注意一个<strong>有意思的设计</strong>:<code>data</code> 是 <code>arrow::array::ArrayRef</code>(动态类型),但泛型参数 <code>T</code> 只是 <code>PhantomData</code>。原因是:</p>
+<ul>
+<li>在 Rust 这一层用 <code>T</code> 提供编译期类型安全(<code>DataArray&lt;Int32Type&gt;</code> 不能传给 <code>DataArray&lt;Float64Type&gt;</code>)</li>
+<li>在内存这一层直接复用 Arrow buffer,<strong>避免重复实现一套类型分发</strong></li>
+</ul>
+<p><code>as_slice()</code> 还做了一个<strong>编译期布局断言</strong>(line 66-81):</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">const</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">native_layout_assert</span><span style="color: #F8F8F2">() {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #A6E22E">assert!</span><span style="color: #F8F8F2">(std::mem::size_of::</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">T::Native</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">() </span><span style="color: #FF4689">==</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.arrow size_of</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.);</span>
+<span style="color: #F8F8F2">    </span><span style="color: #A6E22E">assert!</span><span style="color: #F8F8F2">(std::mem::align_of::</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">T::Native</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">() </span><span style="color: #FF4689">==</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.arrow align_of</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.);</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<blockquote>
+<p>这意味着 <code>DataArray&lt;Int32Type&gt;::as_slice()</code> 是<strong>真·零拷贝</strong> —— 直接把 Arrow buffer 当作 <code>&amp;[i32]</code> 返回,而 <code>unsafe</code> cast 的合法性由编译期 <code>assert!</code> 担保。</p>
+</blockquote>
+<h3>3.3 <code>DataArray&lt;i32&gt;</code> 内存布局 ASCII</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>DataArray&lt;Int32Type&gt; 一行 5 个值,其中第 3 个为 NULL:
+
+field: Arc&lt;Field&gt;
+   └── { name: &quot;x&quot;, dtype: DataType::Int32, metadata: {} }
+
+data: ArrayRef (Arrow Int32Array)
+   ┌──────────────── values_buffer (40 字节) ────────────────┐
+   │  10  │  20  │  ??  │  40  │  50  │   (??=undefined)
+   └──────┴──────┴──────┴──────┴──────┘
+       i32    i32    i32    i32    i32
+
+nulls: Option&lt;NullBuffer&gt;
+   ┌── validity_bitmap (1 字节,LSB 优先) ──┐
+   │  1   1   0   1   1   _   _   _         │   (0 = null)
+   └─────────────────────────────────────────┘
+</code></pre></div>
+
+<blockquote>
+<p><strong>可零拷贝点</strong>:<code>as_slice()</code> 直接返回 <code>&amp;[i32; 5]</code> 视图;<code>nulls()</code> 返回 <code>Option&lt;&amp;NullBuffer&gt;</code> 不复制。</p>
+</blockquote>
+<h3>3.4 <code>ListArray</code> 的二级嵌套布局(ASCII)</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>ListArray { name: &quot;tags&quot;, values: List&lt;Utf8&gt; }
+存储 3 行: [[&quot;a&quot;,&quot;b&quot;], [], [&quot;c&quot;]]
+
+offsets: Int64Array  (n+1 个偏移)
+   ┌───┬───┬───┬───┐
+   │ 0 │ 2 │ 2 │ 3 │
+   └───┴───┴───┴───┘
+     ↑   ↑   ↑   ↑
+     |   |   |   └─ row 2 end
+     |   |   └────── row 1 end (空 list)
+     |   └────────── row 0 end
+     └────────────── row 0 start
+
+flat_child: Series of Utf8     // 把所有非空元素摊平
+   ┌──────┬──────┬──────┐
+   │  &quot;a&quot; │  &quot;b&quot; │  &quot;c&quot; │
+   └──────┴──────┴──────┘
+
+nulls: Option&lt;NullBuffer&gt;      // 哪些行整体为 null
+</code></pre></div>
+
+<blockquote>
+<p><strong>源码</strong>:<code>src/daft-core/src/array/list_array.rs:17 — pub struct ListArray</code>。</p>
+</blockquote>
+<h3>3.5 <code>MicroPartition</code> —— 执行层"标准盒子"</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/daft-micropartition/src/micropartition.rs:32</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">MicroPartition</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) schema:     </span><span style="color: #A6E22E">SchemaRef</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) chunks:     </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">RecordBatch</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) metadata:   </span><span style="color: #A6E22E">TableMetadata</span><span style="color: #F8F8F2">,           </span><span style="color: #959077">// { length }</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) statistics: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">TableStatistics</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">, </span><span style="color: #959077">// 列级 min/max</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>构造时强不变量(<code>new_loaded</code> line 59):</p>
+<ol>
+<li>每个 <code>RecordBatch.schema</code> 必须等于外层 <code>schema</code>(<code>assert!</code>)</li>
+<li>若 <code>statistics</code> 存在,其 schema 必须等于外层 schema(<code>assert_eq!</code>)</li>
+<li><code>metadata.length = sum(batch.len())</code></li>
+</ol>
+<div class="mermaid">
+stateDiagram-v2
+  [*] --&gt; Empty: MicroPartition::empty()
+  [*] --&gt; Loaded: new_loaded(chunks, stats)
+  [*] --&gt; FromArrow: from_arrow()
+
+  Loaded --&gt; Loaded: concat / append
+  FromArrow --&gt; Loaded
+  Empty --&gt; Loaded: 添加 chunk
+
+  state Loaded {
+    [*] --&gt; WithoutStats
+    [*] --&gt; WithStats
+    WithoutStats --&gt; WithStats: 计算 min/max 后填入
+  }
+
+  Loaded --&gt; [*]: drop / write_to_ipc_stream
+</div>
+<blockquote>
+<p><strong>看图要点</strong>:<code>MicroPartition</code> 在当前版本主要存在两种"细分态":<strong>带 statistics</strong> 与 <strong>不带 statistics</strong>。前者能让谓词下推在不实际读列的前提下 prune 整个分区。</p>
+</blockquote>
+<h3>3.6 <code>RecordBatch</code> —— 表的最小单位</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/daft-recordbatch/src/lib.rs:68</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">RecordBatch</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> schema:    </span><span style="color: #A6E22E">SchemaRef</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    columns:       </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Column</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,    </span><span style="color: #959077">// Column 是 Series 的 newtype</span>
+<span style="color: #F8F8F2">    num_rows:      </span><span style="color: #66D9EF">usize</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>关键方法(已用 grep 验证):</p>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>行号</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>from_arrow</code></td>
+<td>313</td>
+<td>从 Arrow <code>ArrayRef</code> 列表构建</td>
+</tr>
+<tr>
+<td><code>eval_expression</code></td>
+<td>1267</td>
+<td>在表上求值一棵 <code>BoundExpr</code> 树</td>
+</tr>
+<tr>
+<td><code>eval_expression_list</code></td>
+<td>1603</td>
+<td>求值多棵表达式(投影)</td>
+</tr>
+<tr>
+<td><code>filter</code></td>
+<td>520</td>
+<td>谓词过滤(参数是 <code>&amp;[BoundExpr]</code>)</td>
+</tr>
+<tr>
+<td><code>mask_filter</code></td>
+<td>542</td>
+<td>已知 boolean mask 过滤</td>
+</tr>
+<tr>
+<td><code>take</code></td>
+<td>572</td>
+<td>行重排(用于排序/Join)</td>
+</tr>
+<tr>
+<td><code>concat</code></td>
+<td>595</td>
+<td>多个 batch 列对齐拼接</td>
+</tr>
+<tr>
+<td><code>as_physical</code></td>
+<td>1757</td>
+<td>把所有 Logical 列转为 Physical</td>
+</tr>
+<tr>
+<td><code>cast_to_schema</code></td>
+<td>1776</td>
+<td>整表强转到目标 schema</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><code>eval_expression</code> 的参数是 <strong><code>&amp;BoundExpr</code></strong>(已绑定列序号的表达式)。这暗示了"<code>Expr</code> 三阶段解析"的最后一阶段(详见 <code>02-表达式DSL与函数.md</code>)。</p>
+</blockquote>
+<hr />
+<h2>4. 关键源码走读</h2>
+<h3>4.1 <code>Series::from_arrow</code>:从外部 Arrow 进入 Daft</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/daft-core/src/series/mod.rs:111</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">from_arrow</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">F: Into</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">FieldRef</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">(field: </span><span style="color: #A6E22E">F</span><span style="color: #F8F8F2">, arrow_arr: </span><span style="color: #A6E22E">ArrayRef</span><span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">DaftResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Self</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> field </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> field.into();</span>
+<span style="color: #F8F8F2">    with_match_daft_types</span><span style="color: #FF4689">!</span><span style="color: #F8F8F2">(field.dtype, </span><span style="color: #FF4689">|</span><span style="color: #959077">$T</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">        Ok(</span><span style="color: #FF4689">&lt;&lt;</span><span style="color: #959077">$T</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">as</span><span style="color: #F8F8F2"> DaftDataType</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">::ArrayType </span><span style="color: #66D9EF">as</span><span style="color: #F8F8F2"> FromArrow</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">::from_arrow(field, arrow_arr)</span><span style="color: #FF4689">?</span>
+<span style="color: #F8F8F2">            .into_series())</span>
+<span style="color: #F8F8F2">    })</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><code>with_match_daft_types!</code> 是个<strong>类型分发宏</strong>:它根据运行时 <code>DataType</code> 值,在编译期展开成对每个 dtype 调用对应的 <code>FromArrow::from_arrow</code>。这避开了 trait object 的虚函数开销。</p>
+<div class="mermaid">
+sequenceDiagram
+    participant Caller as 调用者
+    participant Series
+    participant Macro as with_match_daft_types!
+    participant FromArrow as FromArrow trait
+    participant DA as DataArray&amp;lt;T&amp;gt; / LogicalArray
+
+    Caller-&gt;&gt;Series: Series::from_arrow(field, arrow_arr)
+    Series-&gt;&gt;Macro: 展开 match field.dtype
+    alt Int32
+      Macro-&gt;&gt;FromArrow: &lt;Int32Array as FromArrow&gt;::from_arrow
+      FromArrow-&gt;&gt;DA: 自动 coerce (e.g. Utf8 → LargeUtf8)
+      DA--&gt;&gt;Series: into_series()
+    else Image
+      Macro-&gt;&gt;FromArrow: &lt;ImageArray as FromArrow&gt;::from_arrow
+      FromArrow-&gt;&gt;DA: 拆 StructArray 进 LogicalArrayImpl
+      DA--&gt;&gt;Series: into_series()
+    end
+    Series--&gt;&gt;Caller: Series { inner: Arc&lt;dyn SeriesLike&gt; }
+</div>
+<h3>4.2 <code>Series::build_probe_table_without_nulls</code>:group-by 加速</h3>
+<p><code>src/daft-core/src/series/mod.rs:65</code> 是 join / group-by / distinct 的共享底座:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> probe_table </span><span style="color: #FF4689">=</span>
+<span style="color: #F8F8F2">    IndexMap::</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">IndexHash, (), IdentityBuildHasher</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">::with_capacity_and_hasher(</span>
+<span style="color: #F8F8F2">        DEFAULT_SIZE, Default::default());</span>
+
+<span style="color: #66D9EF">for</span><span style="color: #F8F8F2"> (idx, hash) </span><span style="color: #66D9EF">in</span><span style="color: #F8F8F2"> hashed_series.into_iter().enumerate() {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// 用 raw_entry_v1 + from_hash 显式跳过 hash-of-hash</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> entry </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> probe_table.raw_entry_v1().from_hash(hash, </span><span style="color: #FF4689">|</span><span style="color: #F8F8F2">other</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">        (hash </span><span style="color: #FF4689">==</span><span style="color: #F8F8F2"> other.hash) </span><span style="color: #FF4689">&amp;&amp;</span><span style="color: #F8F8F2"> self.get_lit(idx).eq(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self.get_lit(other.idx </span><span style="color: #66D9EF">as</span><span style="color: #F8F8F2"> _))</span>
+<span style="color: #F8F8F2">    });</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">if</span><span style="color: #F8F8F2"> entry.is_none() {</span>
+<span style="color: #F8F8F2">        probe_table.insert(IndexHash { idx: </span><span style="color: #A6E22E">idx</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">as</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">u64</span><span style="color: #F8F8F2">, hash }, ());</span>
+<span style="color: #F8F8F2">    }</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>为什么不能直接用 <code>HashMap&lt;u64, _&gt;</code>?</p>
+<div class="mermaid">
+flowchart LR
+  subgraph Naive[&quot;朴素方案&quot;]
+    H1[&quot;row → hash(row) = u64&quot;]
+    H1 --&gt;|HashMap key=u64| H2[&quot;RandomState::hash(u64) 再算一次&quot;]
+    H2 -.过载.-&gt; H3[&quot;内层 hasher 又 hash 一次&quot;]
+  end
+  subgraph Daft[&quot;Daft 方案&quot;]
+    D1[&quot;row → hash(row) = u64&quot;]
+    D1 --&gt;|raw_entry from_hash| D2[&quot;IdentityBuildHasher&lt;br/&gt;把 u64 直接当 hash&quot;]
+    D2 --&gt; D3[&quot;O(1) 命中&quot;]
+  end
+</div>
+<blockquote>
+<p><strong>看图要点</strong>:Daft 用 <code>IdentityBuildHasher</code> 短路了内层 <code>BuildHasher</code>,直接把外层算好的 <code>hash</code> 拿来用。配合 <code>IndexHash { idx, hash }</code> 同时记录原行号,后续 <code>take(idx)</code> 就能拿回原始数据。这是个<strong>很多列存查询引擎都不写出来的实现细节</strong>。</p>
+</blockquote>
+<h3>4.3 <code>MicroPartition</code> 与 IPC 序列化(分布式 shuffle 用)</h3>
+<p><code>src/daft-micropartition/src/micropartition.rs:191</code> 提供了:</p>
+<ul>
+<li><code>write_to_ipc_stream() -&gt; DaftResult&lt;Vec&lt;u8&gt;&gt;</code>(序列化到 Arrow IPC 字节流)</li>
+<li><code>read_from_ipc_stream(buffer) -&gt; DaftResult&lt;Self&gt;</code>(反序列化)</li>
+</ul>
+<p><strong>这是分布式 shuffle 的物理边界</strong>:Arrow Flight server(<code>daft-shuffles</code>)拿到的就是这一段字节;接收端反序列化后立即能拿到 <code>MicroPartition</code>,无需重建索引。</p>
+<hr />
+<h2>5. 怎么优化的</h2>
+<h3>5.1 优化对照速查</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>优化点</th>
+<th>不优化会怎样</th>
+<th>Daft 怎么做</th>
+<th>源码</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><strong>Logical/Physical 解耦</strong></td>
+<td>多模态没法用 Arrow 列存</td>
+<td><code>LogicalArrayImpl&lt;L,P&gt;</code> 把 <code>Image</code> 包成 <code>StructArray</code></td>
+<td><code>daft-core/src/datatypes/logical.rs:19</code></td>
+</tr>
+<tr>
+<td>2</td>
+<td><strong>类型分发宏 <code>with_match_daft_types!</code></strong></td>
+<td>trait object 虚调用、运行时分支</td>
+<td>编译期展开成 <code>match</code></td>
+<td><code>daft-core/src/lib.rs</code>(macro)</td>
+</tr>
+<tr>
+<td>3</td>
+<td><strong><code>as_slice()</code> 编译期布局断言</strong></td>
+<td>把 Arrow buffer 当 <code>&amp;[T]</code> 不安全</td>
+<td><code>const fn native_layout_assert</code></td>
+<td><code>daft-core/src/array/mod.rs:66</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td><strong><code>IndexHash</code> + <code>IdentityBuildHasher</code></strong></td>
+<td>HashMap 二次 hash 损耗</td>
+<td>自定义 hasher 短路</td>
+<td><code>daft-core/src/series/mod.rs:65</code></td>
+</tr>
+<tr>
+<td>5</td>
+<td><strong><code>MicroPartition.statistics</code></strong></td>
+<td>谓词下推必须读取实际数据</td>
+<td>列级 min/max 缓存</td>
+<td><code>daft-micropartition/src/micropartition.rs:49</code></td>
+</tr>
+<tr>
+<td>6</td>
+<td><strong>Schema 名→索引哈希</strong></td>
+<td>频繁 <code>name → field</code> 是 O(n)</td>
+<td><code>name_to_indices: HashMap&lt;Arc&lt;str&gt;, Vec&lt;usize&gt;&gt;</code></td>
+<td><code>daft-schema/src/schema.rs:22</code></td>
+</tr>
+<tr>
+<td>7</td>
+<td><strong><code>Arc&lt;Field&gt;</code> / <code>Arc&lt;str&gt;</code></strong></td>
+<td>复制 Field 链栈</td>
+<td>name + Arc-wrap field</td>
+<td><code>daft-schema/src/field.rs:26</code></td>
+</tr>
+<tr>
+<td>8</td>
+<td><strong><code>assert!</code> 不变量</strong></td>
+<td>错误延迟暴露(下游崩)</td>
+<td><code>new_loaded</code> 入口 assert schema 一致</td>
+<td><code>daft-micropartition/src/micropartition.rs:64-82</code></td>
+</tr>
+</tbody>
+</table>
+<h3>5.2 优化 #4 前后对比图</h3>
+<div class="mermaid">
+gantt
+  title HashMap 探测一行 vs IndexHash 探测一行 (相对耗时)
+  dateFormat X
+  axisFormat %s
+  section 朴素 HashMap&lt;u64,_&gt;
+    raw bytes hash :a1, 0, 100
+    inner hash u64 :a2, 100, 80
+    bucket probe :a3, 180, 30
+  section IndexHash + IdentityHasher
+    raw bytes hash :b1, 0, 100
+    bucket probe (zero hash overhead) :b2, 100, 30
+</div>
+<blockquote>
+<p>同一组数据,Daft 路径省掉了内层 hash 步骤(图中 80 ms 那段)。</p>
+</blockquote>
+<hr />
+<h2>6. 端到端案例:<code>with_column("img", col("path").image.decode())</code></h2>
+<h3>6.1 Python 入口</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">df</span> <span style="color: #FF4689">=</span> <span style="color: #F8F8F2">(</span>
+    <span style="color: #F8F8F2">daft</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">read_parquet(</span><span style="color: #E6DB74">&quot;s3://my-bucket/products/*.parquet&quot;</span><span style="color: #F8F8F2">)</span>  <span style="color: #959077"># 含 path: Utf8 列</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">with_column(</span><span style="color: #E6DB74">&quot;img&quot;</span><span style="color: #F8F8F2">,</span> <span style="color: #F8F8F2">col(</span><span style="color: #E6DB74">&quot;path&quot;</span><span style="color: #F8F8F2">)</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">image</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">decode())</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">where(col(</span><span style="color: #E6DB74">&quot;img&quot;</span><span style="color: #F8F8F2">)</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">image</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">height</span> <span style="color: #FF4689">&gt;</span> <span style="color: #AE81FF">256</span><span style="color: #F8F8F2">)</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">collect()</span>
+<span style="color: #F8F8F2">)</span>
+</code></pre></div>
+
+<h3>6.2 内部状态变化</h3>
+<div class="mermaid">
+flowchart TB
+  subgraph S1[&quot;Stage 1: Parquet 读出&quot;]
+    A1[&quot;RecordBatch&lt;br/&gt;{ path: Utf8 }&quot;]
+  end
+  subgraph S2[&quot;Stage 2: with_column → Project 算子&quot;]
+    A2[&quot;RecordBatch&lt;br/&gt;{ path: Utf8, img: File(Image) }&quot;]
+  end
+  subgraph S3[&quot;Stage 3: image.decode UDF&quot;]
+    A3[&quot;RecordBatch&lt;br/&gt;{ path, img: ImageArray&lt;br/&gt;(StructArray + 5 sidecar) }&quot;]
+  end
+  subgraph S4[&quot;Stage 4: where 谓词过滤&quot;]
+    A4[&quot;RecordBatch&lt;br/&gt;(行数减少)&quot;]
+  end
+  subgraph S5[&quot;Stage 5: collect&quot;]
+    A5[&quot;MicroPartition&lt;br/&gt;chunks=[A4...] -&gt; Python iter&quot;]
+  end
+  S1--&gt;S2--&gt;S3--&gt;S4--&gt;S5
+</div>
+<h3>6.3 ImageArray 物理布局(stage 3 后)</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>列 &quot;img&quot; : DataType::Image(Some(RGB))
+内部: ImageArray = LogicalArray&lt;ImageType&gt;
+  └── physical: StructArray { fields: [
+        data:     ListArray&lt;UInt8&gt;      ← 像素 bytes flatten
+        channels: UInt16Array            ← 通道数 (RGB=3)
+        heights:  UInt32Array
+        widths:   UInt32Array
+        modes:    UInt8Array             ← ImageMode 枚举
+      ]}
+
+每行一张图,变长,但所有元数据列都是定长 → 谓词下推可作用于元数据列
+</code></pre></div>
+
+<h3>6.4 为何 <code>where(img.height &gt; 256)</code> 不需要解码即可裁</h3>
+<p>注意 stage 4 的 <code>where</code>:谓词作用在 <code>img.height</code>,而 height 是一个 <strong><code>UInt32</code> sidecar 列</strong>,不需要触碰 <code>data</code> 这个 ListArray。这意味着:</p>
+<ul>
+<li>读 sidecar 只是读一段定长 buffer</li>
+<li>整张图的 raw bytes 只有在最终 stage 5 才被 Python 拿到</li>
+</ul>
+<blockquote>
+<p>这就是 <code>docs/architecture/index.md</code> 里说的"多模态感知 —— 贵算子尽量延后"在数据层的对应。</p>
+</blockquote>
+<h3>6.5 关键源码定位</h3>
+<table>
+<thead>
+<tr>
+<th>步骤</th>
+<th>类型</th>
+<th>源码</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>read_parquet</code></td>
+<td><code>MicroPartition</code> 起点</td>
+<td><code>daft-micropartition/src/micropartition.rs:618 — read_parquet_into_micropartition</code></td>
+</tr>
+<tr>
+<td><code>with_column → Project</code></td>
+<td><code>Expr::Function</code></td>
+<td><code>daft-dsl/src/expr/mod.rs:222</code>(下一篇详细)</td>
+</tr>
+<tr>
+<td><code>image.decode</code></td>
+<td><code>daft-image::functions::ImageFunctions</code></td>
+<td><code>src/lib.rs:164</code>(注册点)+ <code>daft-image/src/functions/</code></td>
+</tr>
+<tr>
+<td><code>ImageArray</code></td>
+<td>LogicalArray 类型别名</td>
+<td><code>daft-core/src/datatypes/logical.rs:189</code></td>
+</tr>
+<tr>
+<td><code>StructArray</code> 物理</td>
+<td>列存 struct</td>
+<td><code>daft-core/src/array/struct_array.rs:13</code></td>
+</tr>
+<tr>
+<td><code>RecordBatch.eval_expression</code></td>
+<td>表达式求值</td>
+<td><code>daft-recordbatch/src/lib.rs:1267</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>7. 与同类项目对照</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>列存 trait/struct</th>
+<th>多态机制</th>
+<th>多模态类型</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Daft</strong></td>
+<td><code>Series { Arc&lt;dyn SeriesLike&gt; }</code></td>
+<td>trait object</td>
+<td><code>LogicalArray&lt;L,P&gt;</code> 包 Struct/FixedSizeList</td>
+</tr>
+<tr>
+<td>polars</td>
+<td><code>Series</code> 枚举 / <code>ChunkedArray&lt;T&gt;</code></td>
+<td>enum dispatch</td>
+<td>❌ 用 Object 兜底</td>
+</tr>
+<tr>
+<td>Apache Arrow Rust</td>
+<td><code>ArrayRef = Arc&lt;dyn Array&gt;</code></td>
+<td>trait object</td>
+<td>扩展 type / Custom 元数据</td>
+</tr>
+<tr>
+<td>pandas (pyarrow backend)</td>
+<td><code>Series</code> (Python)</td>
+<td>duck typing</td>
+<td>object 列</td>
+</tr>
+<tr>
+<td>DataFusion</td>
+<td><code>ArrayRef</code>(同 Arrow)</td>
+<td>同 Arrow</td>
+<td>❌</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>看表要点</strong>:Daft 的"逻辑/物理"分层在主流引擎里<strong>算是独家</strong>。polars 用枚举省了一次虚调用,但插入新类型要改枚举本身;Daft 用 trait object 承担一次虚调用,换来"加一个多模态类型不用动 Series"。</p>
+</blockquote>
+<hr />
+<h2>8. 未解之谜</h2>
+<ol>
+<li><strong><code>SeriesLike</code> trait 是 <code>pub(crate)</code></strong>,外部 crate 怎么实现自己的 Array?目前看是不行的 —— 多模态新类型必须落在 <code>daft-core</code> 内部。这是一种"封闭多态"设计,可能是为了避免 ABI 风险。</li>
+<li><strong><code>MicroPartition.statistics</code> 真的能在 shuffle 间隔保留吗?</strong> —— <code>write_to_ipc_stream</code> 写的是 <code>chunks</code>,statistics 的传播路径还需要看 <code>daft-shuffles</code> 与 <code>daft-distributed</code> 的 IPC 边界(留给 <code>05-分布式执行.md</code> 解答)。</li>
+<li><strong><code>with_match_daft_types!</code> 宏展开后到底是 match 语句还是 if-else?</strong> —— 留个 TODO,需要 <code>cargo expand</code> 验证。</li>
+<li><strong><code>UnionArray</code> 为什么没出现在 <code>Series</code> 主用 API 中?</strong> —— 类型推断 <code>Union(Vec&lt;Field&gt;, ...)</code> 是冷门类型,可能仅在 Iceberg 兼容路径出现。</li>
+<li><strong><code>Probeable</code> trait</strong> 在 Explore 报告中被提到但本篇没找到主导文件,可能在 <code>daft-recordbatch/src/probeable/</code> 或 <code>daft-core/src/array/ops/probe.rs</code>,留待 04 篇专门讲 join 时解开。</li>
+</ol>
+<hr />
+<h2>附录 · 本篇引用源码清单</h2>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">schema</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">dtype</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">17</span><span style="color: #F8F8F2">                    pub </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> DataType</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">schema</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">field</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">26</span><span style="color: #F8F8F2">                    pub struct Field</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">schema</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">schema</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">22</span><span style="color: #F8F8F2">                   pub struct Schema</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">series</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">mod</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">32</span><span style="color: #F8F8F2">                 pub struct Series</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">series</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">mod</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">65</span><span style="color: #F8F8F2">                 build_probe_table_without_nulls</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">series</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">mod</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">111</span><span style="color: #F8F8F2">                Series::from_arrow </span><span style="color: #FF4689">+</span><span style="color: #F8F8F2"> with_match_daft_types</span><span style="color: #FF4689">!</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">array</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">mod</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">40</span><span style="color: #F8F8F2">                  pub struct DataArray</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">T</span><span style="color: #FF4689">&gt;</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">array</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">mod</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">66</span><span style="color: #F8F8F2">                  native_layout_assert (compile</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">time)</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">array</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">list_array</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">17</span><span style="color: #F8F8F2">           pub struct ListArray</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">array</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">struct_array</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">13</span><span style="color: #F8F8F2">         pub struct StructArray</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">array</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">fixed_size_list_array</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">17</span><span style="color: #F8F8F2"> pub struct FixedSizeListArray</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">array</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">image_array</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">12</span><span style="color: #F8F8F2">          pub struct ImageArraySidecarData</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">datatypes</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">mod</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">50</span><span style="color: #F8F8F2">              pub trait DaftArrayType</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">datatypes</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">mod</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">59</span><span style="color: #F8F8F2">              pub trait DaftDataType</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">datatypes</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">mod</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">83</span><span style="color: #F8F8F2">              pub trait DaftPhysicalType</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">datatypes</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">mod</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">85</span><span style="color: #F8F8F2">              pub trait DaftArrowBackedType</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">datatypes</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">mod</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">87</span><span style="color: #F8F8F2">              pub trait DaftLogicalType</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">datatypes</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">mod</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">326</span><span style="color: #F8F8F2">             pub trait DaftNumericType</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">datatypes</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">mod</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">418</span><span style="color: #F8F8F2">             pub trait DaftPrimitiveType</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">datatypes</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">logical</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">19</span><span style="color: #F8F8F2">          pub struct LogicalArrayImpl</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">L,P</span><span style="color: #FF4689">&gt;</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">datatypes</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">logical</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">189</span><span style="color: #F8F8F2">         pub type ImageArray</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">datatypes</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">logical</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">191</span><span style="color: #F8F8F2">         pub type TensorArray</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">datatypes</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">logical</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">192</span><span style="color: #F8F8F2">         pub type EmbeddingArray</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">recordbatch</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">lib</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">68</span><span style="color: #F8F8F2">                 pub struct RecordBatch</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">recordbatch</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">lib</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">1267</span><span style="color: #F8F8F2">               eval_expression</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">recordbatch</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">lib</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">1603</span><span style="color: #F8F8F2">               eval_expression_list</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">micropartition</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">micropartition</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">32</span><span style="color: #F8F8F2">   pub struct MicroPartition</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">micropartition</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">micropartition</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">59</span><span style="color: #F8F8F2">   new_loaded (with assertions)</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">micropartition</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">micropartition</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">191</span><span style="color: #F8F8F2">  write_to_ipc_stream</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">micropartition</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">micropartition</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">618</span><span style="color: #F8F8F2">  read_parquet_into_micropartition</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">image</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">ops</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">30</span><span style="color: #F8F8F2">                       pub trait ImageOps</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">file</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">file</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">rs:</span><span style="color: #AE81FF">13</span><span style="color: #F8F8F2">                       pub struct DaftFile</span>
+</code></pre></div>
+
+<p>图数量统计:Mermaid 9 张 + ASCII 4 张 + 表格 5 张 = <strong>18 个图源</strong>(≥8 ✅)。</p>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

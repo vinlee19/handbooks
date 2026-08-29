@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>01 · 整体架构与组件交互 · Airflow 源码分析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#60a5fa}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">💨 <span>Airflow 源码分析</span></span><nav class="nav"><a href="00-overview.html">概述：Airflow 解决了什么，又为何长成今天这副样子</a><a href="01-architecture.html" class=on>整体架构与组件交互</a></nav></div></header>
+<main class="wrap">
+<h1>01 · 整体架构与组件交互</h1>
+<blockquote>
+<p>本篇把 Airflow 3.x 当作一栋"建筑"来看：9 大架构边界是承重墙、5 类主进程是楼层、Metadata DB 是地基、Execution API 是隔离玻璃。读完本篇您能：(1) 在任何运维场景下画出物理部署图，(2) 解释为什么 Scheduler 不能跑用户代码，(3) 分辨 Public REST API 与 Execution API。</p>
+</blockquote>
+<hr />
+<h2>1.1 9 大架构边界（逐条展开）</h2>
+<p>CLAUDE.md 的 <em>Architecture Boundaries</em> 一节定义了 9 条边界。下面我们逐条结合源码展开，并指出每条边界对应"读哪些代码就能验证"。</p>
+<h3>1.1.1 用户用 Task SDK 写 Dag</h3>
+<blockquote>
+<p>Users author DAGs with the Task SDK (<code>airflow.sdk</code>).</p>
+</blockquote>
+<p><strong>含义</strong>：从 3.x 起，Dag 作者只应当从 <code>airflow.sdk</code> 命名空间导入抽象（<code>DAG</code>、<code>task</code>、<code>dag</code>、<code>Asset</code>、<code>TaskGroup</code>、<code>XComArg</code> 等）。<code>airflow.*</code> 内部模块对 Dag 作者来说是"实现细节"。</p>
+<p><strong>对应源码</strong>：</p>
+<ul>
+<li><code>task-sdk/src/airflow/sdk/__init__.py</code> 定义公共导出</li>
+<li><code>task-sdk/src/airflow/sdk/definitions/dag.py</code> — <code>DAG</code> 类</li>
+<li><code>task-sdk/src/airflow/sdk/definitions/decorators/__init__.py</code> — <code>@dag</code>、<code>@task</code>、<code>@task_group</code></li>
+<li><code>task-sdk/src/airflow/sdk/bases/operator.py</code> — <code>BaseOperator</code></li>
+<li><code>task-sdk/src/airflow/sdk/definitions/xcom_arg.py</code> — XCom 透传机制</li>
+</ul>
+<p><strong>为什么这是边界</strong>：把 SDK 与 <code>airflow-core</code> 拆开后，理论上一个 Dag 文件只依赖 <code>task-sdk</code> 这一个轻量分发即可解析、测试，甚至单独打包跑在远端环境。</p>
+<h3>1.1.2 DAG Processor 独立解析，写 SerializedDagModel</h3>
+<blockquote>
+<p>Dag File Processor parses Dag files in separate processes and stores serialized Dags in the metadata DB.</p>
+</blockquote>
+<p><strong>含义</strong>：用户 Python 代码的解析（<code>import xxx</code>、构造 DAG 对象）<strong>只发生在 DFP 进程</strong>。DFP 把结果序列化为 JSON 写入 <code>serialized_dag</code> 表。</p>
+<p><strong>对应源码</strong>：</p>
+<ul>
+<li><code>airflow-core/src/airflow/dag_processing/manager.py</code> — <code>DagFileProcessorManager</code>，管理子进程池</li>
+<li><code>airflow-core/src/airflow/dag_processing/processor.py</code> — <code>DagFileProcessorProcess</code>，单个 Dag 文件的解析进程</li>
+<li><code>airflow-core/src/airflow/dag_processing/collection.py</code> — <code>update_dag_parsing_results_in_db()</code>，批量原子写入</li>
+<li><code>airflow-core/src/airflow/models/serialized_dag.py</code> — <code>SerializedDagModel</code></li>
+<li><code>airflow-core/src/airflow/jobs/dag_processor_job_runner.py</code> — <code>DagProcessorJobRunner</code>，将 DFP 包装成可被 <code>airflow dag-processor</code> 命令拉起的 Job</li>
+</ul>
+<p><strong>软件守卫</strong>：CLAUDE.md 明确写：</p>
+<blockquote>
+<p>Software guards prevent individual parsing processes from accessing the database directly and enforce use of the Execution API, but these guards do not protect against intentional bypassing by malicious or misconfigured code.</p>
+</blockquote>
+<p>也就是说，DFP 子进程<strong>在设计上</strong>走 Execution API（而不是直连 DB），但目前并没有像 Worker 那样的 JWT 隔离——这是 CLAUDE.md "Security Model" 章节中标记为"已知限制"的事项。</p>
+<h3>1.1.3 Scheduler 永不执行用户代码</h3>
+<blockquote>
+<p>Scheduler reads serialized Dags — <strong>never runs user code</strong> — and creates Dag runs / task instances.</p>
+</blockquote>
+<p><strong>含义</strong>：这是 Airflow 3.x 安全模型的核心。Scheduler 从 <code>serialized_dag</code> 表读 JSON，反序列化成内部对象后调度，过程不 <code>import</code> 任何用户模块。一旦用户代码有循环 import、长耗时 import、副作用 import，全部不会影响调度器。</p>
+<p><strong>对应源码</strong>：</p>
+<ul>
+<li><code>airflow-core/src/airflow/jobs/scheduler_job_runner.py</code> — 你会在这里看到大量 <code>SerializedDagModel.read_all_dags()</code> 或类似调用，但绝看不到 <code>importlib.import_module("user_dags...")</code>。</li>
+<li>反序列化逻辑：<code>airflow-core/src/airflow/serialization/serialized_objects.py</code> — 把 JSON 还原成等价的内存对象，但不再执行原始 <code>.py</code>。</li>
+</ul>
+<h3>1.1.4 Worker 通过 Task SDK + Execution API 通信</h3>
+<blockquote>
+<p>Workers execute tasks via Task SDK and communicate with the API server through the Execution API — <strong>never access the metadata DB directly</strong>.</p>
+</blockquote>
+<p><strong>含义</strong>：Worker 进程没有 DB 连接字符串，不存在 SQLAlchemy 会话。它只持有一份 JWT，scope 为 <code>ti:self</code>，可以调用 <code>GET /execution/task_instances/{ti_id}/xcoms</code>、<code>POST /execution/task_instances/{ti_id}/state</code> 等。</p>
+<p><strong>对应源码</strong>：</p>
+<ul>
+<li><code>task-sdk/src/airflow/sdk/execution_time/supervisor.py</code> — Supervisor 主类，2418 行</li>
+<li><code>task-sdk/src/airflow/sdk/execution_time/task_runner.py</code> — Task Runner 主入口，2184 行</li>
+<li><code>task-sdk/src/airflow/sdk/execution_time/comms.py</code> — Supervisor ↔ Task Runner 的 msgpack 协议</li>
+<li><code>task-sdk/src/airflow/sdk/execution_time/secrets/execution_api.py</code> — JWT 颁发 / 续期</li>
+<li><code>airflow-core/src/airflow/api_fastapi/execution_api/routes/*.py</code> — Execution API 各路由</li>
+</ul>
+<h3>1.1.5 API Server 服务 UI 与所有客户端 DB 交互</h3>
+<blockquote>
+<p>API Server serves the React UI and handles all client-database interactions.</p>
+</blockquote>
+<p><strong>含义</strong>：UI 终端用户也不直接连 DB，他们通过 Public REST API 走 API Server。这与"Worker 通过 Execution API 走 API Server"是同构的——只是认证方式不同（OAuth / FAB / 自定义 vs JWT <code>ti:self</code>）。</p>
+<p><strong>对应源码</strong>：</p>
+<ul>
+<li><code>airflow-core/src/airflow/api_fastapi/core_api/app.py</code> — Public REST API FastAPI app</li>
+<li><code>airflow-core/src/airflow/api_fastapi/core_api/routes/public/*.py</code> — Dag / Run / TI / Connection / Variable / Pool 路由</li>
+<li><code>airflow-core/src/airflow/api_fastapi/core_api/routes/ui/*.py</code> — UI 专用聚合路由（Grid 视图、Gantt 视图等）</li>
+<li><code>airflow-core/src/airflow/auth/managers/</code> — AuthManager 抽象与具体实现</li>
+</ul>
+<h3>1.1.6 Triggerer 独立进程，软件守卫</h3>
+<blockquote>
+<p>Triggerer evaluates deferred tasks/sensors in separate processes. Like the Dag File Processor, software guards steer it through the Execution API rather than direct database access.</p>
+</blockquote>
+<p><strong>含义</strong>：Triggerer 是 Airflow 3.x 仍处于"半隔离"状态的组件——它通过 Execution API 工作，但因为 Trigger 代码本身也是用户写的（来自 <code>providers</code>），目前并没有像 Worker 那样的二进程隔离。</p>
+<p><strong>对应源码</strong>：</p>
+<ul>
+<li><code>airflow-core/src/airflow/jobs/triggerer_job_runner.py</code> — <code>TriggererJobRunner</code>，包含 asyncio 主循环</li>
+<li><code>airflow-core/src/airflow/triggers/base.py</code> — <code>BaseTrigger</code> ABC</li>
+<li><code>airflow-core/src/airflow/models/trigger.py</code> — <code>Trigger</code> ORM</li>
+</ul>
+<h3>1.1.7 Shared 库符号链接</h3>
+<blockquote>
+<p>Shared libraries that are symbolically linked to different Python distributions are in <code>shared</code> folder.</p>
+</blockquote>
+<p><strong>含义</strong>：<code>shared/configuration/</code>、<code>shared/logging/</code>、<code>shared/serialization/</code> 等小分发，被 <code>airflow-core</code>、<code>task-sdk</code>、<code>airflow-ctl</code>、各 provider 同时依赖。</p>
+<p><strong>为什么符号链接</strong>：让一个改动能同步出现在所有依赖方，但每个分发的 <code>pyproject.toml</code> 依旧独立声明依赖与版本，发布时按需打包。</p>
+<p><strong>对应布局</strong>：</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>shared/
+├── configuration/    # airflow.cfg 解析
+├── logging/          # structlog + 远端日志
+├── serialization/    # XCom / Param 序列化
+├── secrets_masker/   # 日志/响应脱敏
+├── secrets_backend/  # Vault / AWS SM
+├── state/            # TaskInstanceState / DagRunState 枚举
+├── timezones/        # 时区
+├── template_rendering/  # Jinja2
+├── observability/    # statsd + OpenTelemetry
+└── ... (共 17 个分发)
+</code></pre></div>
+
+<h3>1.1.8 UV workspace 统一依赖</h3>
+<blockquote>
+<p>Airflow uses <code>uv workspace</code> feature to keep all the distributions sharing dependencies and venv.</p>
+</blockquote>
+<p><strong>含义</strong>：根 <code>pyproject.toml</code> 声明 workspace 成员，根 <code>uv.lock</code> 锁住整个 workspace 的依赖图。开发者用 <code>uv sync</code> 一键安装所有依赖。</p>
+<h3>1.1.9 显式声明依赖</h3>
+<blockquote>
+<p>Each of the distributions should declare other needed distributions: <code>uv --project &lt;FOLDER&gt; sync</code> command acts on the selected project in the monorepo with only dependencies that it has.</p>
+</blockquote>
+<p><strong>含义</strong>：任何子分发的 <code>pyproject.toml</code> 都要把它"实际 import 到的"其他子分发列出来。这避免了"我用了 task-sdk 但没声明，仅靠 monorepo 里 PYTHONPATH 巧合能跑"的隐式依赖陷阱。</p>
+<h2>1.2 五类主进程拓扑</h2>
+<p>Airflow 3.x 的进程模型可以用 5 类主进程 + 1 个数据库 + 可选 Broker / 远端日志 来描述：</p>
+<table>
+<thead>
+<tr>
+<th>进程</th>
+<th>单进程职责</th>
+<th>多副本含义</th>
+<th>依赖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Scheduler</strong> (<code>airflow scheduler</code>)</td>
+<td>主调度循环，从 DB 读 SerializedDag，创建 DagRun / TI，向 Executor 投递</td>
+<td>HA：多实例 + <code>FOR UPDATE SKIP LOCKED</code></td>
+<td>DB</td>
+</tr>
+<tr>
+<td><strong>DAG Processor</strong> (<code>airflow dag-processor</code>)</td>
+<td>扫描 Bundle，解析用户 .py，写 <code>serialized_dag</code> 表</td>
+<td>可多实例，按 Bundle 分担</td>
+<td>DB（写）</td>
+</tr>
+<tr>
+<td><strong>API Server</strong> (<code>airflow api-server</code>)</td>
+<td>同时承载 Public REST API（UI 用）与 Execution API（worker 用）</td>
+<td>HA：无状态 + 反向代理</td>
+<td>DB</td>
+</tr>
+<tr>
+<td><strong>Triggerer</strong> (<code>airflow triggerer</code>)</td>
+<td>asyncio 事件循环，托管 deferred Trigger</td>
+<td>HA：分片或主备</td>
+<td>Execution API</td>
+</tr>
+<tr>
+<td><strong>Worker</strong> (Celery / K8s / Local / Edge)</td>
+<td>拉起 Supervisor + Task Runner 双进程执行 TI</td>
+<td>水平扩展</td>
+<td>Execution API</td>
+</tr>
+</tbody>
+</table>
+<p>下面把所有进程之间的实际调用画出来：</p>
+<p><img alt="Component interaction" src="diagrams/01-component-interaction.svg" /></p>
+<p>颜色与边界对应：</p>
+<ul>
+<li><strong>蓝</strong>：控制平面（Scheduler、Executor、API Server core_api）</li>
+<li><strong>紫</strong>：解析平面（DAG Processor）</li>
+<li><strong>绿</strong>：执行平面（Worker、Supervisor、Task Runner、Triggerer）</li>
+<li><strong>黄</strong>：用户代码（Task Runner 内部、Bundle 源）</li>
+<li><strong>红</strong>：数据 / 扩展（DB、Provider）</li>
+<li><strong>灰</strong>：接入层（UI、Ingress）</li>
+</ul>
+<h2>1.3 物理部署形态</h2>
+<p>部署 Airflow 实际上是把上述进程拼接成具体环境。下面给出两种主流形态。</p>
+<h3>1.3.1 Kubernetes + KubernetesExecutor</h3>
+<p>云原生场景的典型方案：</p>
+<p><img alt="K8s physical deployment" src="diagrams/01-physical-deployment-k8s.svg" /></p>
+<p>要点：</p>
+<ul>
+<li><code>airflow-apiserver</code> 用 <code>Deployment + HPA</code>，多副本水平扩展。前端用 <code>Ingress</code> 暴露。</li>
+<li><code>airflow-scheduler</code> 通常用 <code>StatefulSet</code>，方便日志可观测和稳定身份；多副本通过 <code>FOR UPDATE SKIP LOCKED</code> 实现 HA。</li>
+<li><code>airflow-dag-processor</code> 可多副本并行处理不同 Bundle；解析子进程是 manager 内部 <code>multiprocessing</code> 起的，不是 K8s Pod。</li>
+<li><code>airflow-triggerer</code> 用 <code>StatefulSet</code>；不同 trigger 可分片到不同 triggerer 实例（按 <code>trigger_id</code> 模运算分配）。</li>
+<li><strong>每个 TaskInstance</strong> 拉起一个新的 Pod（这就是 KubernetesExecutor 的命名由来）。Pod 内部跑 Supervisor + Task Runner 两个容器（或 init container 同步 Bundle）。Pod 完成后自动 <code>Terminated</code>，由 K8s Watcher 通知 Scheduler。</li>
+<li><strong>PostgreSQL</strong> 用 <code>StatefulSet + PVC</code>，仅 Scheduler / DFP / API Server 三类组件可访问；通过 <code>NetworkPolicy</code> 禁止其他 Pod 连接 DB。</li>
+<li>远端日志、Bundle 缓存等通过 PVC 或 S3 等外部存储。</li>
+</ul>
+<h3>1.3.2 Celery + Redis</h3>
+<p>经典分布式场景：</p>
+<p><img alt="Celery physical deployment" src="diagrams/01-physical-deployment-celery.svg" /></p>
+<p>要点：</p>
+<ul>
+<li><strong>Control Node</strong>（虚拟机 / 物理机 / 容器节点）上跑 apiserver、scheduler、dag-processor、triggerer。一般用 <code>systemd</code> 或 <code>docker compose</code> 管理。</li>
+<li><strong>Data Node</strong> 上跑 PostgreSQL 与 Redis。</li>
+<li><strong>Worker Node</strong> 跑常驻的 <code>celery worker</code> 进程，prefork 出多个子进程；任务通过 Redis 队列拉取。</li>
+<li>与 K8s 形态的根本差别：<strong>Worker 进程常驻</strong>，启动 TI 时不需要拉 Pod；吞吐更高，但相对没有隔离性。</li>
+<li>即便如此，Worker 仍然<strong>不连 DB</strong>——这是 Airflow 3.x 的硬约束。它通过 Execution API 与 apiserver 通信。</li>
+</ul>
+<h3>1.3.3 LocalExecutor</h3>
+<p>单机场景：<code>scheduler</code> / <code>dag-processor</code> / <code>apiserver</code> / <code>triggerer</code> 全部跑在同一台机器（甚至同一个 Python 解释器的不同子进程），LocalExecutor 用 Python <code>multiprocessing</code> Pool 直接 fork worker。适合开发 / 测试 / 最小生产。</p>
+<h3>1.3.4 EdgeExecutor（Airflow 3.x 新增）</h3>
+<p>远端边缘场景：worker 部署在远离数据中心的边缘节点（如车间 / 门店 / IoT 网关）。调度方式从"推送"改为"拉取"——worker 主动调用 <code>GET /execution/edge/jobs/next</code> 拿任务，再用 JWT 调 Execution API 上报状态。源码位于 <code>providers/edge3/</code>。</p>
+<h2>1.4 数据流全景</h2>
+<p>下面这张图按 6 个阶段编号，描述一次完整 TI 执行的端到端数据流：</p>
+<p><img alt="End-to-end data flow" src="diagrams/01-data-flow-end-to-end.svg" /></p>
+<p>每个阶段的数据载体：</p>
+<ul>
+<li>① <strong>编写</strong>：Python 源码 <code>.py</code>，载体是 git。</li>
+<li>② <strong>解析</strong>：DFP 子进程把 Python 对象序列化为 JSON（可选 zlib 压缩，由 <code>_COMPRESS_SERIALIZED_DAGS</code> 控制），写入 <code>serialized_dag</code> 表（PostgreSQL 的 JSONB 列）。</li>
+<li>③ <strong>调度</strong>：Scheduler 读 <code>serialized_dag</code>，对 due 的 Dag 调用 <code>_create_dag_runs()</code>、<code>_executable_task_instances_to_queued()</code>，把 <code>task_instance.state</code> 从 <code>null</code> → <code>scheduled</code> → <code>queued</code>。整个过程加 <code>FOR UPDATE SKIP LOCKED</code> 行锁。</li>
+<li>④ <strong>投递</strong>：Scheduler 把 TI 包装为 <code>Workload</code>（<code>ExecuteTask</code> 数据类，见 <code>executors/workloads/task.py</code>），调 <code>BaseExecutor.queue_task()</code>；具体 Executor 把它推到 Broker / K8s API。</li>
+<li>⑤ <strong>执行</strong>：Worker 上 Supervisor 拿到 Workload，fork 出 Task Runner 子进程；二者通过 <code>comms.py</code> 的 msgpack 协议在本机管道通信；用户代码需要 XCom / Variable / Connection 时，由 Supervisor 代理 HTTP 调 Execution API。</li>
+<li>⑥ <strong>回写</strong>：Task Runner 完成后，通过 Supervisor 把最终状态报给 Execution API，写入 <code>task_instance.state = success</code>、<code>xcom</code> 表、可能触发 <code>asset_event</code> 表写入。Scheduler 下次心跳轮询 <code>event_buffer</code> 或 DB 看到完成。</li>
+</ul>
+<h2>1.5 安全边界</h2>
+<p>下图把 Airflow 3.x 的安全模型可视化为同心圆——内圈是"DB 可访问"的控制平面，外圈是"仅 Execution API"的执行平面，最外层是 UI 终端用户：</p>
+<p><img alt="Security boundaries" src="diagrams/01-security-boundaries.svg" /></p>
+<p><code>airflow-core/docs/security/security_model.rst</code> 中明确列出三类角色：</p>
+<blockquote>
+<ul>
+<li><strong>Deployment Managers</strong>: Install, configure, manage credentials</li>
+<li><strong>DAG Authors</strong>: Create/modify DAG files (code runs on workers, triggerer, DAG processor)</li>
+<li><strong>Authenticated UI Users</strong>: Can only interact via UI, cannot author DAGs</li>
+</ul>
+</blockquote>
+<p>把代码与角色对照：</p>
+<table>
+<thead>
+<tr>
+<th>角色</th>
+<th>能做什么</th>
+<th>不能做什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Deployment Manager</td>
+<td>配置 Connection、Variable、Pool、Secret Backend、JWT secret、DB 凭据</td>
+<td>（所有约束都由这个角色"建立"，不存在更高层）</td>
+</tr>
+<tr>
+<td>Dag Author</td>
+<td>写 Dag .py 文件，能通过 Provider Operator 访问外部系统</td>
+<td>不能直接 SQL DB；写出来的代码在 Worker / Triggerer / DFP 上跑</td>
+</tr>
+<tr>
+<td>Authenticated UI User</td>
+<td>通过 UI 触发 Dag、查看 Run 状态、删除 TI（视权限）</td>
+<td>不能编辑 .py 文件；不能直接 SQL DB</td>
+</tr>
+</tbody>
+</table>
+<p>CLAUDE.md 还提示了三类<strong>已知限制</strong>（属于 Airflow 设计本意而非漏洞）：</p>
+<ol>
+<li>DFP / Triggerer 软件守卫不能防恶意代码主动绕过；</li>
+<li>Multi-Team 目前不强制 task 级别隔离；</li>
+<li>Execution API 是共享资源，并非真正多租户。</li>
+</ol>
+<h2>1.6 高可用模型</h2>
+<h3>1.6.1 多 Scheduler</h3>
+<p>通过 <code>FOR UPDATE SKIP LOCKED</code> 行锁实现"无脑加机器、自动协调"：</p>
+<ul>
+<li>每个 Scheduler 在主循环里 <code>SELECT ... FROM task_instance WHERE state='scheduled' FOR UPDATE SKIP LOCKED LIMIT N</code>；</li>
+<li>PostgreSQL / MySQL 保证只有一个 Scheduler 拿到任意行的锁；其他 Scheduler 看到该行被锁，<strong>跳过</strong>而不是阻塞（这就是 <code>SKIP LOCKED</code> 的语义）；</li>
+<li>故障 Scheduler 释放锁后，其他实例自然接手；</li>
+<li>启动顺序与数量无要求，扩缩容像无状态服务一样简单。</li>
+</ul>
+<p>具体代码见 <code>scheduler_job_runner.py</code> 中的 <code>with_row_locks(query, of=TI, session=session, skip_locked=True)</code> 调用——CLAUDE.md 已在"Architecture Boundaries" 提及这条模式。</p>
+<h3>1.6.2 多 DAG Processor</h3>
+<p>每个 DFP 实例独立扫描自己负责的 Bundle 集合；不同 DFP 不会同时解析同一个文件（按 Bundle 隔离）。Bundle 的内部并发由 Manager 控制（子进程池）。</p>
+<h3>1.6.3 多 Triggerer</h3>
+<p><code>Trigger</code> 表中每条 Trigger 都有 <code>triggerer_id</code> 字段，由 Triggerer 实例之间通过 ID 分片协商所有权。分片算法相对简单（<code>hash(trigger_id) % N</code>），所以扩缩容会带来一定数量的 Trigger 迁移；好处是任何 Triggerer 挂掉时，未完成的 Trigger 会被其他实例接管，不影响整体 SLA。详见 06 篇。</p>
+<h3>1.6.4 多 API Server</h3>
+<p>无状态。直接前面挂反向代理 / LB。注意 JWT 签发使用对称密钥（HMAC）或非对称密钥（RS256），多副本需要共享密钥；secret_backend 默认放在 K8s Secret / Hashicorp Vault。</p>
+<h2>1.7 启动顺序与依赖</h2>
+<p>部署时的合理启动顺序：</p>
+<ol>
+<li><strong>DB</strong> — 必须先就绪，运行最新 Alembic 迁移（<code>airflow db migrate</code>）。</li>
+<li><strong>API Server</strong> — 启动后能服务 Public REST + Execution API；如果 worker / triggerer 比它先起会因为连不上 API 而循环重启。</li>
+<li><strong>Scheduler</strong> — 依赖 DB 可用、依赖 API Server（部分调用走 Execution API）。</li>
+<li><strong>DAG Processor</strong> — 依赖 DB 可用。可以与 Scheduler 同时启动。</li>
+<li><strong>Triggerer</strong> — 依赖 API Server。</li>
+<li><strong>Worker</strong> — 最后启动。如果 Worker 在 API Server 之前起，第一个 TI 心跳会失败、TI 立刻进入 <code>failed</code>。</li>
+</ol>
+<p>部署工具（Helm Chart / docker-compose）通常用健康检查 + initContainer 来保证这个顺序。</p>
+<h2>1.8 与官方架构图的关系</h2>
+<p><code>airflow-core/docs/img/</code> 已有以下官方架构图：</p>
+<ul>
+<li><code>airflow-3-arch.png</code> — 总体架构</li>
+<li><code>diagram_basic_airflow_architecture.png</code> — 单机基础架构</li>
+<li><code>diagram_distributed_airflow_architecture.png</code> — 分布式架构</li>
+<li><code>diagram_dag_processor_airflow_architecture.png</code> — DFP 独立后的架构</li>
+<li><code>multi_team_arch_diagram.png</code> — Multi-Team 架构</li>
+<li><code>dag_serialization.png</code> — DAG 序列化流程</li>
+</ul>
+<p>本篇的 5 张 SVG 与官方 PNG 互为补充：官方图偏概念，本篇图把"每个组件对应代码在哪、调用走哪个协议、什么数据写到哪张表"标了出来。后续章节会进一步给出每个组件的<em>内部</em>流程图。</p>
+<hr />
+<p>下一篇：<a href="./02-dag-processing.html"><code>02-dag-processing.md</code></a> — 我们进入 DFP 进程的内部，逐文件剖析 <code>dag_processing/manager.py</code>、<code>processor.py</code>、<code>collection.py</code>、<code>bundles/</code> 的工作机制，看一份 <code>.py</code> 文件如何变成 <code>serialized_dag</code> 表中的一行 JSONB。</p>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

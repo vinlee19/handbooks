@@ -34,11 +34,17 @@ while IFS='|' read -r -u 3 name icon title desc accent src; do
 
   # 整目录同步：自动带上 style.css / script.js / assets/ / specs/ 等辅助文件，
   # 排除视觉检查中间产物与本地垃圾文件
-  rsync -a --delete \
-    --exclude='*visual-check*' \
-    --exclude='.git/' --exclude='node_modules/' --exclude='.mimosa/' \
-    --exclude='.DS_Store' \
-    "$src"/ "$name"/
+  if ls "$src"/*.html >/dev/null 2>&1; then
+    rsync -a --delete \
+      --exclude='*visual-check*' \
+      --exclude='.git/' --exclude='node_modules/' --exclude='.mimosa/' \
+      --exclude='.DS_Store' \
+      "$src"/ "$name"/
+  else
+    # Markdown 手册：用 md2html.py 转换成同风格 HTML（含 mermaid 渲染与资源拷贝）
+    rm -rf "$name"
+    python3 md2html.py "$src" "$name" "$title" "$icon" "$accent" < /dev/null
+  fi
 
   # 已知修复：duckdb 的 index 里有指向本机 vane 项目的相对链接，站内改为根导航页
   if [ -f "$name/index.html" ]; then

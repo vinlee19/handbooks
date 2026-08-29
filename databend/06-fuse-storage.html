@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>06 · FUSE 存储引擎：Snapshot / Segment / Block · Databend 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#ff6b6b}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">☁️ <span>Databend 源码深度解析</span></span><nav class="nav"><a href="00-meta.html">元信息与阅读指南</a><a href="01-overview.html">总览：三层架构与设计取舍</a><a href="02-meta-service.html">Meta Service：客户端层 + 外部 OpenRaft 状态机</a><a href="03-sql-frontend.html">SQL 前端：词法 / 语法 / 绑定</a><a href="04-planner-optimizer.html">Planner / Optimizer：从 SExpr 到最优计划</a><a href="05-pipeline-execution.html">Pipeline 执行：Push-based + Event 状态机</a><a href="06-fuse-storage.html" class=on>FUSE 存储引擎：Snapshot / Segment / Block</a><a href="07-io-and-cache.html">IO 与多级缓存：OpenDAL Layer 栈 + CacheManager</a><a href="08-indexes-and-search.html">索引与搜索：Bloom / Inverted / Vector / Range / Page / Spatial</a><a href="09-cluster-and-exchange.html">集群与 Exchange：节点发现 + Flight Shuffle</a><a href="10-extensions.html">扩展：Stream / UDF / Iceberg / Delta</a><a href="99-diagrams.html">Mermaid 图源归档</a></nav></div></header>
+<main class="wrap">
+<h1>06 · FUSE 存储引擎：Snapshot / Segment / Block</h1>
+<blockquote>
+<p>基于 commit <code>fe693bb677</code>。FUSE 是 Databend 的默认表引擎；理解它是理解整个系统的钥匙。本篇用三层文件结构 + 一次 commit 时序，把 read / write / compact / recluster / time-travel 全部串起来。</p>
+</blockquote>
+<h2>1. 解决了什么问题</h2>
+<p>把「ACID + Time Travel + 列存 + 索引」做在<strong>只读对象存储</strong>之上。对象存储有几条硬约束：</p>
+<ul>
+<li><strong>没有 rename 原子性</strong>（GCS 部分有，S3 视区域而定）。</li>
+<li><strong>没有就地修改</strong>（PUT 只能整文件覆盖；object 是不可变的）。</li>
+<li><strong>list 有强一致性，但成本高、延迟大</strong>。</li>
+<li><strong>极强一致性下的 PUT 一定是「新对象」</strong>——同 key 多写其实是创建多个版本。</li>
+</ul>
+<p>直接在对象存储上做 OLAP 表面临的反例：</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>反例 1：每次 INSERT 都改写表元数据
+        → 大事务并发争抢一把&quot;全表锁&quot;，写吞吐塌掉
+
+反例 2：把元数据放对象存储里、写时锁
+        → list-and-scan 的延迟把延迟拉到秒级
+
+反例 3：直接拿 Parquet 当表
+        → 没有事务，没有版本，没有列裁剪以外的索引
+</code></pre></div>
+
+<p>FUSE 的取舍是：<strong>所有数据/元数据都是「不可变对象」，靠一个外部强一致 KV（meta-service）只翻一个指针</strong>。任何写入都生成新文件，提交时只需要在 meta 中<strong>原子地</strong>把「表当前指向的 snapshot 路径」从旧值改到新值。回滚 = 改回旧指针。Time Travel = 沿着 <code>prev_snapshot_id</code> 走链表。</p>
+<h2>2. 在 Databend 中的位置</h2>
+<div class="mermaid">
+flowchart LR
+  subgraph Catalog[&quot;catalog (databend-common-catalog)&quot;]
+    T[trait Table]
+  end
+  subgraph FUSE[&quot;storages/fuse&quot;]
+    FT[FuseTable]
+    OPS[operations/*.rs]
+    IO[io/{snapshots,segments,locations}.rs]
+    STAT[statistics/*]
+  end
+  subgraph Meta[&quot;storages/common/table_meta&quot;]
+    SNAP[v4::TableSnapshot]
+    SEG[v4::SegmentInfo]
+    BM[v2::BlockMeta]
+  end
+  subgraph Common[&quot;storages/common&quot;]
+    PRUNER[pruner]
+    INDEX[index]
+    CACHE[cache]
+    BLOCKS[blocks]
+    IO2[io]
+  end
+  subgraph CommonStor[&quot;common/storage&quot;]
+    OD[OpenDAL Operator]
+  end
+  subgraph MetaSvc[&quot;meta-service (外部)&quot;]
+    KV[KvApi]
+  end
+  T --&gt; FT
+  FT --&gt; OPS
+  FT --&gt; IO
+  IO --&gt; SNAP
+  IO --&gt; SEG
+  IO --&gt; BM
+  OPS --&gt; PRUNER
+  OPS --&gt; INDEX
+  OPS --&gt; CACHE
+  IO --&gt; OD
+  FT --&gt; KV
+  PRUNER --&gt; SNAP
+  PRUNER --&gt; SEG
+  PRUNER --&gt; BM
+</div>
+<p><code>FuseTable</code> 实现 <code>databend-common-catalog::Table</code> trait——它就是查询引擎看到的「一张表」。下层所有 <code>operations/*.rs</code> 都是 <code>impl FuseTable</code> 的扩展方法。</p>
+<h2>3. 关键数据结构</h2>
+<h3>3.1 三层文件结构</h3>
+<div class="mermaid">
+flowchart TB
+  subgraph S[&quot;snapshot.json (v4)&quot;]
+    direction TB
+    S0[&quot;snapshot_id (UUID)&quot;]
+    S1[&quot;prev_snapshot_id (UUID, FormatVersion)&quot;]
+    S2[&quot;timestamp&quot;]
+    S3[&quot;schema (TableSchema)&quot;]
+    S4[&quot;summary: Statistics&quot;]
+    S5[&quot;segments: Vec&lt;Location&gt;&quot;]
+    S6[&quot;cluster_key_meta / cluster_type&quot;]
+    S7[&quot;table_statistics_location&quot;]
+  end
+  subgraph G[&quot;segment.mpk (v4, MessagePack+ZSTD)&quot;]
+    G0[&quot;blocks: Vec&lt;Arc&lt;BlockMeta&gt;&gt;&quot;]
+    G1[&quot;summary: Statistics&quot;]
+  end
+  subgraph B[&quot;block parquet (v2 BlockMeta 描述)&quot;]
+    B0[&quot;row_count / block_size / file_size&quot;]
+    B1[&quot;col_stats: min/max/null_count/distinct&quot;]
+    B2[&quot;col_metas: 列偏移与编码元数据&quot;]
+    B3[&quot;cluster_stats: 聚簇键 min/max/level&quot;]
+    B4[&quot;bloom/inverted/vector/spatial/ngram\nindex_location + size&quot;]
+    B5[&quot;compression&quot;]
+    B6[&quot;create_on&quot;]
+  end
+  S5 -. Location .-&gt; G
+  G0 -. Arc 引用 .-&gt; B
+</div>
+<p>源码精确锚点：</p>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>文件</th>
+<th>定义起始行</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TableSnapshot</code> (v4)</td>
+<td><code>src/query/storages/common/table_meta/src/meta/v4/snapshot.rs</code></td>
+<td>L≈53</td>
+</tr>
+<tr>
+<td><code>SegmentInfo</code> (v4)</td>
+<td><code>src/query/storages/common/table_meta/src/meta/v4/segment.rs</code></td>
+<td>L≈45</td>
+</tr>
+<tr>
+<td><code>BlockMeta</code> (live = v2)</td>
+<td><code>src/query/storages/common/table_meta/src/meta/v2/segment.rs</code></td>
+<td>L≈176</td>
+</tr>
+</tbody>
+</table>
+<h3>3.2 BlockMeta 的字段语义（live 版本）</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/storages/common/table_meta/src/meta/v2/segment.rs:176</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">BlockMeta</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> row_count: </span><span style="color: #66D9EF">u64</span><span style="color: #F8F8F2">,                 </span><span style="color: #959077">// 块内行数</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> block_size: </span><span style="color: #66D9EF">u64</span><span style="color: #F8F8F2">,                </span><span style="color: #959077">// 块内未压缩字节</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> file_size: </span><span style="color: #66D9EF">u64</span><span style="color: #F8F8F2">,                 </span><span style="color: #959077">// 对象存储上文件大小</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> col_stats: </span><span style="color: #A6E22E">HashMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ColumnId, ColumnStatistics</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">, </span><span style="color: #959077">// 每列 min/max/null_count/distinct</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> col_metas:  </span><span style="color: #A6E22E">HashMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ColumnId, ColumnMeta</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,      </span><span style="color: #959077">// 每列在 parquet 内的 offset/len/page</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> cluster_stats: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ClusterStatistics</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,        </span><span style="color: #959077">// 聚簇键 min/max/level</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> location: </span><span style="color: #A6E22E">Location</span><span style="color: #F8F8F2">,                              </span><span style="color: #959077">// 数据 .parquet 路径 + 版本</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> bloom_filter_index_location: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Location</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,   </span><span style="color: #959077">// 单独 .parquet 文件</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> bloom_filter_index_size: </span><span style="color: #66D9EF">u64</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> inverted_index_size: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">u64</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> ngram_filter_index_size: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">u64</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> vector_index_size: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">u64</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> vector_index_location: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Location</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> spatial_index_size: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">u64</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> spatial_index_location: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Location</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> spatial_stats: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">HashMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ColumnId, SpatialStatistics</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> virtual_block_meta: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">VirtualBlockMeta</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,    </span><span style="color: #959077">// 虚拟列（JSON 子路径等）</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> compression: </span><span style="color: #A6E22E">Compression</span><span style="color: #F8F8F2">,                        </span><span style="color: #959077">// Lz4Raw/Snappy/Zstd/Gzip/None</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> create_on: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">DateTime</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Utc</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>记住：<strong>索引和虚拟列都不在 parquet 文件里</strong>，而是各自的独立对象，仅靠 <code>BlockMeta</code> 上的 location 字段串联。这让索引可以独立缩放、独立淘汰、独立打开 / 关闭。</p>
+<h3>3.3 对象存储 key 命名</h3>
+<p><code>TableMetaLocationGenerator</code> 在 <code>src/query/storages/fuse/src/io/locations.rs::TableMetaLocationGenerator (L≈66)</code> 生成所有路径，前缀来自 <code>src/query/storages/fuse/src/constants.rs</code>：</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">table_storage_prefix</span><span style="color: #FF4689">&gt;/</span><span style="color: #F8F8F2">                  # </span><span style="color: #ED007E; background-color: #1E0010">来自</span><span style="color: #F8F8F2"> TableInfo.meta.options.storage_prefix</span>
+<span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> _ss</span><span style="color: #FF4689">/&lt;</span><span style="color: #F8F8F2">uuid</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">_v</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ver</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">.json</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2">mpk           # snapshot</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">       </span><span style="color: #ED007E; background-color: #1E0010">↑</span><span style="color: #F8F8F2"> FUSE_TBL_SNAPSHOT_PREFIX </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">&quot;_ss&quot;</span>
+<span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> _ts</span><span style="color: #FF4689">/&lt;</span><span style="color: #F8F8F2">uuid</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">_v</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ver</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">.mpk                # snapshot statistics</span>
+<span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> _sg</span><span style="color: #FF4689">/&lt;</span><span style="color: #F8F8F2">vacuum2</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">prefix</span><span style="color: #FF4689">&gt;&lt;</span><span style="color: #F8F8F2">uuid</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">_v</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ver</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">.mpk  # segment</span><span style="color: #ED007E; background-color: #1E0010">（默认</span><span style="color: #F8F8F2"> mpk </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> MessagePack</span><span style="color: #FF4689">+</span><span style="color: #F8F8F2">ZSTD</span><span style="color: #ED007E; background-color: #1E0010">）</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">       </span><span style="color: #ED007E; background-color: #1E0010">↑</span><span style="color: #F8F8F2"> FUSE_TBL_SEGMENT_PREFIX </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">&quot;_sg&quot;</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">       column</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">oriented </span><span style="color: #ED007E; background-color: #1E0010">时是</span><span style="color: #F8F8F2"> .col</span>
+<span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> _b</span><span style="color: #FF4689">/&lt;</span><span style="color: #F8F8F2">vacuum2</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">prefix</span><span style="color: #FF4689">&gt;&lt;</span><span style="color: #F8F8F2">uuid_v7</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">_v</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ver</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">.parquet   # </span><span style="color: #ED007E; background-color: #1E0010">数据块</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">       </span><span style="color: #ED007E; background-color: #1E0010">↑</span><span style="color: #F8F8F2"> FUSE_TBL_BLOCK_PREFIX </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">&quot;_b&quot;</span>
+<span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> _i_b_v2</span><span style="color: #FF4689">/&lt;</span><span style="color: #F8F8F2">uuid</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">_v</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ver</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">.parquet         # bloom filter</span><span style="color: #ED007E; background-color: #1E0010">（</span><span style="color: #F8F8F2">xor8</span><span style="color: #ED007E; background-color: #1E0010">）</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">       </span><span style="color: #ED007E; background-color: #1E0010">↑</span><span style="color: #F8F8F2"> FUSE_TBL_XOR_BLOOM_INDEX_PREFIX</span>
+<span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> _i_i</span><span style="color: #FF4689">/&lt;</span><span style="color: #F8F8F2">...</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">                            # inverted index (Tantivy)</span>
+<span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> _i_v</span><span style="color: #FF4689">/&lt;</span><span style="color: #F8F8F2">...</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">                            # vector index (HNSW)</span>
+<span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> _i_s</span><span style="color: #FF4689">/&lt;</span><span style="color: #F8F8F2">...</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">                            # spatial index</span>
+<span style="color: #ED007E; background-color: #1E0010">└──</span><span style="color: #F8F8F2"> _v</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">, _agg</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">, ...                       # </span><span style="color: #ED007E; background-color: #1E0010">虚拟块、</span><span style="color: #F8F8F2">aggregating index </span><span style="color: #ED007E; background-color: #1E0010">等</span>
+</code></pre></div>
+
+<p>「_b」「_sg」「_ss」这种<strong>单字母 + 下划线</strong>前缀的好处：在对象存储上 prefix list 时所有同类对象集中分布，便于 GC 与 vacuum。</p>
+<h3>3.4 FuseTable 自身</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/storages/fuse/src/fuse_table.rs:145</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">FuseTable</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) table_info: </span><span style="color: #A6E22E">TableInfo</span><span style="color: #F8F8F2">,                        </span><span style="color: #959077">// 来自 meta-service</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) meta_location_generator: </span><span style="color: #A6E22E">TableMetaLocationGenerator</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) storage_format: </span><span style="color: #A6E22E">FuseStorageFormat</span><span style="color: #F8F8F2">,            </span><span style="color: #959077">// Parquet/Native</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) segment_format: </span><span style="color: #A6E22E">FuseSegmentFormat</span><span style="color: #F8F8F2">,            </span><span style="color: #959077">// Row/Column oriented segment</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) table_compression: </span><span style="color: #A6E22E">TableCompression</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) bloom_index_cols: </span><span style="color: #A6E22E">BloomIndexColumns</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) bloom_index_type: </span><span style="color: #A6E22E">BloomIndexType</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) approx_distinct_cols: </span><span style="color: #A6E22E">ApproxDistinctColumns</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) operator: </span><span style="color: #A6E22E">Operator</span><span style="color: #F8F8F2">,                           </span><span style="color: #959077">// OpenDAL，绑定到这张表的 storage_params</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) data_metrics: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">StorageMetrics</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    table_type: </span><span style="color: #A6E22E">FuseTableType</span><span style="color: #F8F8F2">,                               </span><span style="color: #959077">// Normal/External/Attached</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) changes_desc: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ChangesDesc</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,            </span><span style="color: #959077">// Stream/CDC 模式开关</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> pruned_result_receiver: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Mutex</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">PartInfoReceiver</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>注意 <code>operator</code> 是<strong>表级</strong>的——不同表可挂不同的 storage params（外表/attached 表），这是 Databend 同时支持「Lake-house 多桶」与「单桶多表」的基础。</p>
+<h2>4. 关键流程</h2>
+<h3>4.1 读：从 SQL 到 DataBlock</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Plan as PhysicalPlan::TableScan
+  participant FT as FuseTable
+  participant Meta as meta-service
+  participant OD as OpenDAL Operator
+  participant Cache as Cache (snapshot/segment/bloom)
+  participant Pipe as Pipeline
+
+  Plan-&gt;&gt;FT: do_read_partitions(ctx, push_downs)
+  FT-&gt;&gt;Meta: read_table_snapshot()  (其实只取 snapshot_loc)
+  FT-&gt;&gt;Cache: get(snapshot_loc)
+  alt 缓存命中
+    Cache--&gt;&gt;FT: Arc&lt;TableSnapshot&gt;
+  else 未命中
+    FT-&gt;&gt;OD: GET &lt;snapshot.json&gt;
+    OD--&gt;&gt;FT: bytes
+    FT-&gt;&gt;Cache: put
+  end
+  FT-&gt;&gt;FT: 决定是否 distributed_pruning\n(segment_len &gt; nodes &amp;&amp; setting on)
+  alt 分布式裁剪
+    FT-&gt;&gt;Plan: 仅返回 FuseLazyPartInfo（每个 segment 一个）\n各 worker 节点自己 do_build_prune_pipeline
+  else 本地裁剪 (prune_snapshot_blocks)
+    loop 每个 segment_loc
+      FT-&gt;&gt;Cache: get(segment_loc)
+      Cache--&gt;&gt;FT: Arc&lt;SegmentInfo&gt;
+      FT-&gt;&gt;FT: RangeIndex(min/max)→BloomIndex→...\n输出存活 BlockMeta 列表
+    end
+    FT--&gt;&gt;Plan: (PartStatistics, Partitions)
+  end
+
+  Plan-&gt;&gt;FT: do_read_data(plan, pipeline)
+  FT-&gt;&gt;Pipe: 注入 BlockReader Source（异步并发）
+  Pipe-&gt;&gt;OD: 并发 GET 仅存活的 block parquet
+  OD--&gt;&gt;Pipe: bytes
+  Pipe-&gt;&gt;Pipe: 解压 → ColumnReader → DataBlock
+  Pipe--&gt;&gt;Plan: 后续 Filter / Aggregate 等 transform
+</div>
+<p>源码锚点（按时序）：</p>
+<table>
+<thead>
+<tr>
+<th>步骤</th>
+<th>函数</th>
+<th>文件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>入口</td>
+<td><code>FuseTable::do_read_partitions</code></td>
+<td><code>operations/read_partitions.rs::L≈115</code></td>
+</tr>
+<tr>
+<td>拉取 snapshot</td>
+<td><code>read_table_snapshot</code></td>
+<td><code>fuse_table.rs::read_table_snapshot</code></td>
+</tr>
+<tr>
+<td>分布式裁剪开关</td>
+<td><code>setting.get_enable_distributed_pruning()</code></td>
+<td><code>read_partitions.rs::L≈121</code></td>
+</tr>
+<tr>
+<td>块裁剪管道（本地）</td>
+<td><code>prune_snapshot_blocks</code></td>
+<td><code>operations/read_partitions.rs::L≈189 起调用</code></td>
+</tr>
+<tr>
+<td>块裁剪管道（分布式）</td>
+<td><code>do_build_prune_pipeline</code></td>
+<td><code>operations/read_partitions.rs::L≈202</code></td>
+</tr>
+<tr>
+<td>块读取</td>
+<td><code>do_read_data</code></td>
+<td><code>operations/read_data.rs</code></td>
+</tr>
+</tbody>
+</table>
+<h3>4.2 写：从 INSERT 到新的 snapshot</h3>
+<p>写入有两条路径，由 <code>enable_stream_block_write</code> 设置切换（<code>operations/append.rs::L≈54</code>）：</p>
+<ul>
+<li><strong>流式块写</strong>：边收边写，每攒够一块立刻落盘 + 累积统计。</li>
+<li><strong>传统批量写</strong>：先在内存里 compact 出大块，再统一 serialize → write。</li>
+</ul>
+<div class="mermaid">
+flowchart LR
+  IN[InsertInterpreter] --&gt; AP[do_append_data\nappend.rs L≈48]
+  AP -- enable_stream_block_write --&gt; SBuilder[TransformBlockBuilder\n+ TransformBlockWriter]
+  AP -- 否 --&gt; BC[build_compact_block_pipeline]
+  BC --&gt; SB[TransformSerializeBlock]
+  SBuilder --&gt; SS[TransformSerializeSegment]
+  SB --&gt; SS
+  SS --&gt; CMA[TableMutationAggregator]
+  CMA --&gt; CS[CommitSink]
+  CS --&gt; Meta[update_table_meta\n→ meta-service KV CAS]
+  CS --&gt; ObjStore[(对象存储\nsnapshot/segment/block)]
+</div>
+<p><code>do_commit (commit.rs::L≈81)</code> 把 commit 也做成了<strong>一段流水线</strong>，不是一次 RPC：</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/storages/fuse/src/operations/commit.rs:81</span>
+<span style="color: #F8F8F2">pipeline.try_resize(</span><span style="color: #AE81FF">1</span><span style="color: #F8F8F2">)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;                                    </span><span style="color: #959077">// 收敛到单线程</span>
+<span style="color: #F8F8F2">pipeline.add_transform(new_serialize_segment_processor)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;   </span><span style="color: #959077">// 攒成 segment 文件</span>
+<span style="color: #F8F8F2">pipeline.add_async_accumulating_transformer(</span>
+<span style="color: #F8F8F2">    </span><span style="color: #FF4689">||</span><span style="color: #F8F8F2"> TableMutationAggregator::create(</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.));               </span><span style="color: #959077">// 聚合所有变更</span>
+<span style="color: #F8F8F2">pipeline.add_sink(</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2">input</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2"> CommitSink::try_create(</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.));     </span><span style="color: #959077">// 写 snapshot + 更新 meta（CAS）</span>
+</code></pre></div>
+
+<p><code>CommitSink</code> 内部在写 snapshot 文件后调用 <code>commit_to_meta_server (commit.rs::L≈141)</code>，里面是两步：</p>
+<ol>
+<li><code>snapshot.write_meta(operator, &amp;snapshot_location)</code>：先把新 snapshot 文件 PUT 到对象存储；</li>
+<li><code>update_table_meta(...)</code>：以「prev_table_seq」为前提条件向 meta-service CAS 更新 <code>TableInfo.options[OPT_KEY_SNAPSHOT_LOCATION]</code>。</li>
+</ol>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant W as Worker
+  participant OD as OpenDAL
+  participant M as meta-service
+
+  W-&gt;&gt;OD: PUT snapshot.json (新 snapshot)
+  W-&gt;&gt;M: update_table_meta(prev_seq, new_loc)
+  alt CAS 成功
+    M--&gt;&gt;W: ok
+  else 表 seq 已变
+    M--&gt;&gt;W: TableVersionMismatched
+    W-&gt;&gt;W: backoff + 重读 snapshot 重新 merge\nset_backoff (operations/util)
+    W-&gt;&gt;OD: PUT snapshot&#x27; (基于新 base 的 snapshot)
+    W-&gt;&gt;M: update_table_meta(prev_seq&#x27;, ...)
+  end
+</div>
+<p>写失败重试在 <code>set_backoff</code> 里实现（指数退避），冲突场景下数据文件不变、只重写 snapshot，因此<strong>冲突重试是廉价的</strong>。</p>
+<h3>4.3 Compact / Recluster / Time-Travel</h3>
+<h4>Compact</h4>
+<div class="mermaid">
+flowchart LR
+  C[compact 命令 / 自动触发] --&gt; CS[do_compact_segments\nL≈43]
+  C --&gt; CB[do_compact_blocks\nL≈77]
+  CS -.合并小 segment.- N1[新 segment 文件]
+  CB -.合并小 block.- N2[新 block 文件]
+  N1 --&gt; CMT[CommitSink]
+  N2 --&gt; CMT
+  CMT --&gt; SS[新 snapshot]
+</div>
+<p>源码：<code>src/query/storages/fuse/src/operations/compact.rs</code>：
+- <code>do_compact_segments (L≈43)</code>：把多个小 segment 合并成大 segment，<strong>不重写 block 文件</strong>——所以非常便宜，主要降低读时元数据 I/O。
+- <code>do_compact_blocks (L≈77)</code>：把多个小 block 真正合并成大 block，要解压再压缩，重新写。</p>
+<h4>Recluster</h4>
+<p><code>do_recluster (operations/recluster.rs::L≈46)</code>：当表声明了 cluster key 时，按 cluster_stats 把"乱序的旧 block"重排成"按 cluster key 排序的新 block"。Hilbert 聚簇是企业版能力（位于 <code>src/query/ee_features/hilbert_clustering/</code>），在 <code>do_read_partitions</code> 内有特殊路径（见 <code>read_partitions.rs::L≈146</code> 的 <code>selected_segment_locations</code>）。</p>
+<h4>Time Travel</h4>
+<div class="mermaid">
+flowchart TB
+  Q[SELECT * FROM t AT (TIMESTAMP =&gt; &#x27;2026-04-30&#x27;)] --&gt; NP[navigate_to_point\nnavigate.rs L≈56]
+  NP --&gt;|TimePoint| NTP[navigate_to_time_point\nL≈117]
+  NP --&gt;|SnapshotID| NSI[navigate_to_snapshot\nL≈148]
+  NP --&gt;|StreamInfo| LBL[load_table_by_location]
+  NP --&gt;|TableTag| GTSL[get_tag_snapshot_location\n→ load_table_by_snapshot]
+  NTP --&gt; FIND[find: 沿 prev_snapshot_id 反向遍历\n直到 ts &lt;= time_point]
+  NSI --&gt; FIND
+  FIND --&gt; NEW[FuseTable 复制一份\ntable_info 指向旧 snapshot_loc]
+  NEW -.下游使用同一套读路径.-&gt; Q
+</div>
+<p>实现要点：</p>
+<ul>
+<li><strong>Time travel 不是数据库层逻辑</strong>，而是「把 <code>FuseTable</code> 指向另一个 snapshot」，下游 <code>do_read_partitions</code> 完全不变。</li>
+<li>反向遍历由 <code>find</code> 函数完成（在 <code>navigate.rs</code> 内部），逐个加载 <code>prev_snapshot_id</code> 指向的 snapshot 直到谓词满足；这条链是用对象存储上一组小 JSON 文件实现的。</li>
+<li>Stream（CDC）实际上也复用 <code>navigate_to_point::StreamInfo</code>，「读取增量」在这里被建模成「读取两个 snapshot 之间的差集」。</li>
+</ul>
+<h2>5. 性能与优化点</h2>
+<table>
+<thead>
+<tr>
+<th>优化</th>
+<th>在哪里发生</th>
+<th>为什么有效</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>三层裁剪</strong>：snapshot summary → segment summary → block min/max</td>
+<td><code>prune_snapshot_blocks</code> 与 <code>do_build_prune_pipeline</code></td>
+<td>大多数 OLAP 查询能在还没 GET parquet 之前裁掉 90%+ 的块</td>
+</tr>
+<tr>
+<td><strong>Distributed pruning</strong></td>
+<td><code>read_partitions.rs L≈121, 166</code></td>
+<td>当 segment 多于节点数时，把"读 segment 元数据 + 块裁剪"分布到各 worker，避免单点</td>
+</tr>
+<tr>
+<td><strong>索引旁路构建</strong></td>
+<td><code>io/write/{bloom_index_writer,inverted_index_writer,vector_index_writer,spatial_index_writer}.rs</code></td>
+<td>写入时用单独的 transform 并发产生索引文件，不阻塞主 block 写</td>
+</tr>
+<tr>
+<td><strong>流式块写</strong></td>
+<td><code>TransformBlockBuilder + TransformBlockWriter</code>（<code>operations/append.rs L≈54</code>）</td>
+<td>边接收边落盘，避免一次性把整批攒在内存里</td>
+</tr>
+<tr>
+<td><strong>Compact 分两层</strong></td>
+<td><code>do_compact_segments</code> vs <code>do_compact_blocks</code></td>
+<td>元数据级合并 cheap、数据级合并 expensive；按需触发</td>
+</tr>
+<tr>
+<td><strong>写冲突的廉价重试</strong></td>
+<td><code>set_backoff</code> + CommitSink</td>
+<td>数据文件不变；冲突时仅重写 snapshot.json</td>
+</tr>
+<tr>
+<td><strong>Snapshot 是 immutable JSON/MPK</strong></td>
+<td>meta v4</td>
+<td>配合多级缓存（07 文档），重复读零 RPC</td>
+</tr>
+</tbody>
+</table>
+<p>把它放进时间轴：</p>
+<div class="mermaid">
+gantt
+  title 写入 + 读取重叠时序（同一表）
+  dateFormat  X
+  axisFormat  %S
+  section Writer
+  收数据 + 攒 block       :a1, 0, 4
+  并发写 block + index    :a2, 2, 5
+  写 segment.mpk          :a3, 5, 6
+  写 snapshot.json + CAS  :a4, 6, 7
+  section Reader (并发执行)
+  GET 旧 snapshot         :b1, 0, 1
+  GET 旧 segments + 裁块  :b2, 1, 3
+  并发 GET 旧 block parquet :b3, 3, 7
+  GET 新 snapshot (下次查) :b4, 7, 8
+</div>
+<p>并发读和并发写<strong>互不干扰</strong>——读端永远读到旧 snapshot 直到 CAS 成功为止。这是不可变对象 + 单点指针切换的红利。</p>
+<h2>6. 与同类系统的对照</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Iceberg</th>
+<th>Delta Lake</th>
+<th>Hudi</th>
+<th><strong>Databend FUSE</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>元数据载体</td>
+<td>metadata JSON + manifest list + manifest avro</td>
+<td>_delta_log/ JSON + checkpoint parquet</td>
+<td>timeline/ + base/log files</td>
+<td><strong>snapshot.json + segment.mpk + parquet</strong>（三层）</td>
+</tr>
+<tr>
+<td>提交锁</td>
+<td>catalog（HMS/Glue/REST）</td>
+<td>filesystem rename</td>
+<td>时间线 + lock</td>
+<td><strong>meta-service CAS（强一致 KV）</strong></td>
+</tr>
+<tr>
+<td>Schema 演进</td>
+<td>列 ID 持久化</td>
+<td>名称匹配 + 类型扩展</td>
+<td>字段演进</td>
+<td>snapshot 内 <code>schema: TableSchema</code></td>
+</tr>
+<tr>
+<td>Time Travel</td>
+<td>snapshot id / ts</td>
+<td>version / ts</td>
+<td>时间线提交点</td>
+<td>snapshot id / ts</td>
+</tr>
+<tr>
+<td>索引</td>
+<td>列统计 + bloom（v3+）</td>
+<td>列统计 + bloom</td>
+<td>列统计 + bloom</td>
+<td><strong>bloom + inverted + vector + ngram + spatial（统一接口）</strong></td>
+</tr>
+<tr>
+<td>写并发模型</td>
+<td>乐观并发 + 重试</td>
+<td>乐观并发 + rename</td>
+<td>多种</td>
+<td><strong>乐观 CAS + 数据不重写</strong></td>
+</tr>
+<tr>
+<td>实现语言</td>
+<td>Java/Rust/Python 多前端</td>
+<td>Scala/Java</td>
+<td>Java</td>
+<td><strong>Rust 单实现</strong></td>
+</tr>
+</tbody>
+</table>
+<p>FUSE 没有 Iceberg 那种"manifest of manifests"的抽象层；segment 就是 manifest 的等价物，但<strong>不能跨 snapshot 共享</strong>——每次写都生成新 segment。换来的好处是写路径极简、提交一次只写一个 snapshot 文件。</p>
+<h2>7. 端到端案例</h2>
+<p><code>SELECT count(*) FROM t WHERE x &gt; 1</code>，FUSE 段：</p>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Plan as PhysicalPlan::TableScan(t)
+  participant FT as FuseTable
+  participant OD as OpenDAL
+  participant C as 多级 Cache
+  participant Idx as RangeIndex/BloomIndex
+  participant Pipe as Pipeline
+
+  Plan-&gt;&gt;FT: do_read_partitions(push_downs={ filter: x&gt;1 })
+  FT-&gt;&gt;C: snapshot_loc
+  C--&gt;&gt;FT: Arc&lt;TableSnapshot&gt;（包含 segments[]）
+  FT-&gt;&gt;FT: 决定 distributed_pruning=false（小表）
+  loop 每个 segment_loc
+    FT-&gt;&gt;C: SegmentInfo
+    C--&gt;&gt;FT: blocks[]
+    FT-&gt;&gt;Idx: RangeIndex(col_stats[x].min/max vs &gt;1)
+    alt 区间确定不满足
+      Idx--&gt;&gt;FT: 整块剪掉
+    else 区间不能定论
+      FT-&gt;&gt;C: bloom_filter_index_location for x
+      C--&gt;&gt;FT: BloomFilter bytes
+      FT-&gt;&gt;Idx: bloom 查询 hash(x&gt;1) 不可行→跳过 bloom
+      Note over FT,Idx: count(*) 没有等值谓词，bloom 跳过
+    end
+  end
+  FT--&gt;&gt;Plan: Partitions（仅存活块）
+  Plan-&gt;&gt;FT: read_data → Pipeline
+  FT-&gt;&gt;OD: 并发 GET *.parquet（仅 col=x 与必要列）
+  OD--&gt;&gt;Pipe: bytes
+  Pipe-&gt;&gt;Pipe: ColumnReader(x) → FilterTransform(x&gt;1) → FinalAggregate(count)
+  Pipe--&gt;&gt;Plan: DataBlock { count: N }
+</div>
+<p>注意：</p>
+<ul>
+<li><code>count(*)</code> 这种<strong>只需要 row_count</strong> 的查询，可以直接读 <code>BlockMeta.row_count</code> 求和，根本不打开 parquet——但这要求<strong>没有过滤谓词</strong>或谓词能完全靠 col_stats 决定。本例 <code>WHERE x &gt; 1</code> 在多数数据分布下做不到，所以仍需读列。</li>
+<li>如果谓词改成 <code>x = 'a'</code>（等值字符串），bloom 会真的发挥作用，把绝大多数 block 在打开 parquet 之前裁掉。</li>
+</ul>
+<h2>8. 未解之谜</h2>
+<ul>
+<li><strong><code>virtual_block_meta</code></strong>：BlockMeta 里挂了 <code>Option&lt;VirtualBlockMeta&gt;</code>，看似与「虚拟列 / JSON 路径展开」相关。本篇未深入；它是企业版 ee_features 之一吗？后续 10 文档可能会再触及。</li>
+<li><strong>stream / CDC 与 Change tracking</strong>：<code>changes_desc</code> 字段如何与 <code>_change_type</code> 元数据列协同生成「两个 snapshot 之间的差异」？需要在 10 文档中专门展开 <code>do_read_changes_partitions</code>。</li>
+<li><strong><code>is_column_oriented</code> 路径</strong>：<code>gen_segment_info_location</code> 在 column-oriented 时落 <code>.col</code> 文件而非 <code>.mpk</code>；这条路径上的 reader/writer 与传统 row-oriented 的差异未充分调研。</li>
+<li><strong>Hilbert 聚簇</strong> 在 <code>ee_features/hilbert_clustering/</code> 中实现，本篇仅引用了 <code>selected_segment_locations</code> 这一调用点；细节留给后续。</li>
+<li><strong><code>prev_table_seq</code> 的语义</strong>：snapshot 字段里有它，commit 路径里也有它，但它跟 meta-service 的 <code>seq_v</code> 是同一个值吗？需要对照 <code>update_table_meta</code> 与 meta <code>KvApi</code> 的 CAS 实现。</li>
+</ul>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

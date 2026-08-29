@@ -1,0 +1,1009 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>06 · IO 与扫描下推 · Daft 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#a3e635}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">🐡 <span>Daft 源码深度解析</span></span><nav class="nav"><a href="index.html">总览</a><a href="00-总览.html">Daft 总览:从 `df.collect()` 到 Arrow Buffer</a><a href="01-核心类型与多模态.html">核心类型与多模态:Series / RecordBatch / MicroPartition / Image</a><a href="02-表达式DSL与函数.html">表达式 DSL 与函数:三阶段列解析、`Expr` 枚举、`FunctionRegistry`</a><a href="03-逻辑计划与优化器.html">逻辑计划与优化器</a><a href="04-Swordfish本地执行.html">Swordfish 本地执行</a><a href="05-分布式执行.html">分布式执行</a><a href="06-IO与扫描下推.html" class=on>IO 与扫描下推</a><a href="07-SQL与Python桥.html">SQL 与 Python 桥</a></nav></div></header>
+<main class="wrap">
+<h1>06 · IO 与扫描下推</h1>
+<blockquote>
+<p>基准 commit: <code>fa0d066204eae630962af7b22a5ab559ecd454fb</code> (v0.7.10-13)
+文档版本: v0.3.0-dev0 / Rust 2024
+阅读前置: <a href="./00-总览.html">00 总览</a> · <a href="./03-逻辑计划与优化器.html">03 逻辑计划与优化器</a></p>
+</blockquote>
+<hr />
+<h2>1. 解决了什么问题</h2>
+<p>「读 100 行」对用户而言是一个 SQL <code>LIMIT 100</code>,但底层要做的事完全不同:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">              </span><span style="color: #E6DB74">用户视角</span><span style="color: #F8F8F2">                                    </span><span style="color: #E6DB74">存储视角(S3</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">+</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">Parquet)</span>
+<span style="color: #F8F8F2">              </span><span style="color: #E6DB74">-----------</span><span style="color: #F8F8F2">                               </span><span style="color: #E6DB74">-----------------------</span>
+<span style="color: #F8F8F2">  daft.read_parquet(&quot;s3:</span><span style="color: #E6DB74">//b/year</span><span style="color: #F8F8F2">=</span><span style="color: #E6DB74">2024/*&quot;)</span><span style="color: #F8F8F2">               </span><span style="color: #AE81FF">1.</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">LIST</span><span style="color: #F8F8F2">  (s3:</span><span style="color: #E6DB74">//b/year</span><span style="color: #F8F8F2">=</span><span style="color: #E6DB74">2024/*</span><span style="color: #F8F8F2">  </span><span style="color: #E6DB74">→</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">文件清单)</span>
+<span style="color: #F8F8F2">    </span><span style="color: #E6DB74">.where(&quot;amount</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">&gt;</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">100&quot;)</span><span style="color: #F8F8F2">                              </span><span style="color: #AE81FF">2.</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">GET</span><span style="color: #F8F8F2">   </span><span style="color: #E6DB74">(每个文件</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">footer</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">8B</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">+</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">footer</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">N</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">kB)</span>
+<span style="color: #F8F8F2">    </span><span style="color: #E6DB74">.select(&quot;user_id&quot;,</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">&quot;amount&quot;)</span><span style="color: #F8F8F2">                        </span><span style="color: #AE81FF">3.</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">解析行组统计,evaluate</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">amount&gt;100</span>
+<span style="color: #F8F8F2">    </span><span style="color: #E6DB74">.limit(100)</span><span style="color: #F8F8F2">                                         </span><span style="color: #AE81FF">4.</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">选中行组的</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">column</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">chunk</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">byte</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">ranges</span>
+<span style="color: #F8F8F2">    </span><span style="color: #E6DB74">.collect()</span><span style="color: #F8F8F2">                                          </span><span style="color: #AE81FF">5.</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">字节范围合并/拆分(coalesce</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">/</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">split)</span>
+<span style="color: #F8F8F2">                                                        </span><span style="color: #AE81FF">6.</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">并发</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">GET</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">数据页</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">+</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">解码</span>
+<span style="color: #F8F8F2">                                                        </span><span style="color: #AE81FF">7.</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">解码后</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">filter</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">&amp;</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">limit</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">终止</span>
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>落地优化</th>
+<th>收益</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>谓词 + 投影下推到 ScanTask</td>
+<td>不读不需要的列、不需要的行组</td>
+</tr>
+<tr>
+<td>行组级 min/max 统计裁剪</td>
+<td><code>amount &gt; 100</code> 在 <code>max ≤ 100</code> 的行组直接跳过</td>
+</tr>
+<tr>
+<td>字节范围 coalesce / split</td>
+<td>减少 S3 GET 次数,同时不超出请求大小</td>
+</tr>
+<tr>
+<td>Backpressure + 重试 + jitter</td>
+<td>S3 socket error 自动恢复,从断点续传</td>
+</tr>
+<tr>
+<td>16 MB eager / stream 阈值</td>
+<td>小文件一次拉,大文件流式读</td>
+</tr>
+</tbody>
+</table>
+<div class="mermaid">
+flowchart LR
+    subgraph 优化器层
+        LP[LogicalPlan + Pushdowns]
+    end
+    subgraph daft-scan
+        ST[ScanTask 列表]
+        SS[ScanSource]
+    end
+    subgraph daft-parquet
+        Meta[DaftParquetMetadata 缓存]
+        Stats[ColumnRangeStatistics 评估]
+        RP[ReadPlanner Coalesce/Split]
+    end
+    subgraph daft-stats
+        TV[TruthValue]
+    end
+    subgraph daft-io
+        IOC[IOClient]
+        OS[ObjectSource trait]
+        Backends[&quot;S3 / GCS / Azure / HF /&lt;br/&gt;HTTP / Local / Tos / Unity / Gravitino / OpenDAL&quot;]
+    end
+
+    LP --&gt; ST --&gt; SS
+    SS --&gt; Meta
+    Meta --&gt; Stats --&gt; TV
+    TV --&gt; RP
+    RP --&gt; IOC --&gt; OS --&gt; Backends
+
+    style TV fill:#fff2cc
+    style RP fill:#fff2cc
+</div>
+<hr />
+<h2>2. 整体设计</h2>
+<h3>2.1 IO 子系统模块图</h3>
+<div class="mermaid">
+flowchart TD
+    subgraph daft-io
+        client[IOClient&lt;br/&gt;lib.rs:216]
+        os[ObjectSource trait&lt;br/&gt;object_io.rs:287]
+        getres[GetResult enum&lt;br/&gt;object_io.rs:42]
+        retry[ResumableByteStream&lt;br/&gt;object_io.rs:147]
+        types[SourceType enum&lt;br/&gt;lib.rs:492]
+        s3[S3LikeSource]
+        gcs[GCSSource]
+        az[AzureBlobSource]
+        http[HttpSource]
+        hf[HFSource]
+        local[LocalSource]
+        tos[TosSource]
+        unity[UnitySource]
+        grav[GravitinoSource]
+        opendal[OpenDALSource]
+    end
+
+    subgraph daft-file
+        df[DaftFile&lt;br/&gt;file.rs:13]
+        osr[ObjectSourceReader&lt;br/&gt;file.rs:121]
+    end
+
+    subgraph daft-scan
+        st[ScanTask&lt;br/&gt;lib.rs:348]
+        ss[ScanSource&lt;br/&gt;lib.rs:166]
+        cs[ChunkSpec&lt;br/&gt;lib.rs:142]
+        pd[Pushdowns&lt;br/&gt;pushdowns.rs:16]
+    end
+
+    subgraph daft-parquet
+        rp[ReadPlanner&lt;br/&gt;read_planner.rs:126]
+        rc[RangesContainer&lt;br/&gt;read_planner.rs:199]
+        coal[CoalescePass&lt;br/&gt;read_planner.rs:14]
+        split[SplitLargeRequestPass&lt;br/&gt;read_planner.rs:52]
+        meta[DaftParquetMetadata&lt;br/&gt;metadata_adapter.rs:23]
+    end
+
+    subgraph daft-stats
+        crs[ColumnRangeStatistics&lt;br/&gt;column_stats/mod.rs:15]
+        tv[TruthValue&lt;br/&gt;column_stats/mod.rs:39]
+    end
+
+    client --&gt; os
+    os --&gt; getres
+    getres --&gt; retry
+    os -.impl.-&gt; s3 &amp; gcs &amp; az &amp; http &amp; hf &amp; local &amp; tos &amp; unity &amp; grav &amp; opendal
+    df --&gt; osr --&gt; os
+    st --&gt; ss --&gt; cs
+    st --&gt; pd
+    rp --&gt; coal
+    rp --&gt; split
+    rp --&gt; rc
+    rp --&gt; client
+    st --&gt; rp
+    ss --&gt; meta
+    rp --&gt; crs --&gt; tv
+</div>
+<h3>2.2 三件套类图</h3>
+<div class="mermaid">
+classDiagram
+    class ObjectSource {
+        &lt;&lt;trait&gt;&gt;
+        +supports_range(uri) bool
+        +get(uri, range, io_stats) Result~GetResult~
+        +put(uri, data, io_stats) Result
+        +get_size(uri, io_stats) usize
+        +glob(...) BoxStream~FileMetadata~
+        +ls(...) LSResult
+        +iter_dir(...)
+        +create_multipart_writer(uri) Option~MultipartWriter~
+        +delete(uri, io_stats)
+    }
+
+    class IOClient {
+        -source_type_to_store: RwLock~HashMap~
+        -config: Arc~IOConfig~
+        +get_source_and_path(input) (Source, path)
+        +glob(input) Stream~FileMetadata~
+        +single_url_get(...) GetResult
+        +single_url_put(...)
+    }
+
+    class GetResult {
+        &lt;&lt;enum&gt;&gt;
+        File(LocalFile)
+        Stream(BoxStream, hint, permit, retry)
+        +bytes() Result~Bytes~
+        +with_retry(StreamingRetryParams) Self
+    }
+
+    class SourceType {
+        &lt;&lt;enum&gt;&gt;
+        File
+        Http
+        S3
+        AzureBlob
+        GCS
+        HF
+        Unity
+        Tos
+        Gravitino
+        OpenDAL{scheme}
+    }
+
+    IOClient o-- ObjectSource : 缓存
+    IOClient ..&gt; SourceType : URL → 路由
+    ObjectSource ..&gt; GetResult : 返回
+</div>
+<p>源码定位:</p>
+<ul>
+<li><code>src/daft-io/src/object_io.rs:287</code> — <code>pub trait ObjectSource</code>(9 个 async 方法)</li>
+<li><code>src/daft-io/src/object_io.rs:42</code> — <code>pub enum GetResult { File(...), Stream(...) }</code></li>
+<li><code>src/daft-io/src/object_io.rs:79</code> — <code>impl GetResult::bytes()</code> 内部 retry 循环(3 次,指数退避 + jitter)</li>
+<li><code>src/daft-io/src/lib.rs:216</code> — <code>pub struct IOClient</code></li>
+<li><code>src/daft-io/src/lib.rs:492</code> — <code>pub enum SourceType</code>(10 个 backend)</li>
+<li><code>src/daft-io/src/lib.rs:233-329</code> — <code>IOClient::get_source_and_path</code> URL → backend 路由</li>
+</ul>
+<h3>2.3 ScanTask / Pushdowns 与下游消费者</h3>
+<div class="mermaid">
+flowchart LR
+    Optimizer[&quot;Optimizer&lt;br/&gt;(MaterializeScans batch)&quot;]
+    Pushdowns[&quot;Pushdowns&lt;br/&gt;{filters, columns, limit, ...}&quot;]
+    ScanTask[&quot;ScanTask&lt;br/&gt;+ Vec&amp;lt;ScanSource&amp;gt;&lt;br/&gt;+ pushdowns: Pushdowns&quot;]
+    ScanSource[&quot;ScanSource&lt;br/&gt;+ kind: ScanSourceKind&lt;br/&gt;+ statistics: TableStatistics&quot;]
+    SrcOp[&quot;LocalPhysicalPlan::ScanTaskSource&lt;br/&gt;(执行器接收)&quot;]
+
+    Optimizer --&gt; Pushdowns --&gt; ScanTask
+    ScanTask --&gt; ScanSource
+    ScanTask --&gt; SrcOp
+
+    classDef plan fill:#d5e8d4
+    classDef io fill:#dae8fc
+    class Optimizer,SrcOp plan
+    class ScanTask,ScanSource,Pushdowns io
+</div>
+<hr />
+<h2>3. 关键数据结构</h2>
+<h3>3.1 <code>Pushdowns</code> —— 下推容器</h3>
+<p><code>src/daft-scan/src/pushdowns.rs:16</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">Pushdowns</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> filters: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ExprRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> partition_filters: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ExprRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> columns: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String</span><span style="color: #FF4689">&gt;&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> limit: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">usize</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> sharder: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Sharder</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> pushed_filters: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ExprRef</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> aggregation: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ExprRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>字段</th>
+<th>谁会设?</th>
+<th>谁会用?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>filters</code></td>
+<td><code>PushDownFilter</code> 规则</td>
+<td>行组裁剪 + 解码后 filter</td>
+</tr>
+<tr>
+<td><code>partition_filters</code></td>
+<td>scan operator(从 Hive 风格路径推断)</td>
+<td>LIST 阶段直接跳过分区</td>
+</tr>
+<tr>
+<td><code>columns</code></td>
+<td><code>PushDownProjection</code> 规则</td>
+<td>Parquet column-chunk 选择</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td><code>PushDownLimit</code> 规则</td>
+<td>Source 提前终止</td>
+</tr>
+<tr>
+<td><code>sharder</code></td>
+<td><code>PushDownShard</code> 规则</td>
+<td>多 worker 切分输入</td>
+</tr>
+<tr>
+<td><code>pushed_filters</code></td>
+<td><code>SupportsPushdownFilters</code></td>
+<td>已被存储侧消化,<strong>不需要</strong>再 evaluate</td>
+</tr>
+<tr>
+<td><code>aggregation</code></td>
+<td><code>PushDownAggregation</code> 规则</td>
+<td>行组级 partial count/sum/min/max</td>
+</tr>
+</tbody>
+</table>
+<p><code>SupportsPushdownFilters</code> trait(<code>pushdowns.rs:10</code>):</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">trait</span><span style="color: #F8F8F2"> SupportsPushdownFilters {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">push_filters</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self, filter: </span><span style="color: #66D9EF">&amp;</span><span style="color: #F8F8F2">[ExprRef]) -&gt; (Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ExprRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">, Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ExprRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">);</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">//   → 返回 (可下推的, 必须留在 plan 上的)</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<blockquote>
+<p>命名细节:<code>filters</code> 字段是"全部当前 filter",<code>pushed_filters</code> 是"存储侧已消化掉的子集"。这两组不同,因为有些谓词可被存储部分使用(如 partition col)但 plan 还得保留(残余 column 仍要 filter)。</p>
+</blockquote>
+<h3>3.2 <code>ScanTask</code> 与 <code>ScanSource</code></h3>
+<p><code>src/daft-scan/src/lib.rs:348</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">ScanTask</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> sources: Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ScanSource</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> schema: </span><span style="color: #A6E22E">SchemaRef</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> source_config: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">SourceConfig</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> storage_config: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">StorageConfig</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> pushdowns: </span><span style="color: #A6E22E">Pushdowns</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> size_bytes_on_disk: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">u64</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> metadata: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">TableMetadata</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> statistics: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">TableStatistics</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> generated_fields: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">SchemaRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><code>ScanSource</code>(<code>lib.rs:166</code>)是单个文件 / 数据库的一段:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">ScanSource</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> size_bytes: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">u64</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> metadata: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">TableMetadata</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> statistics: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">TableStatistics</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> partition_spec: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">PartitionSpec</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> kind: </span><span style="color: #A6E22E">ScanSourceKind</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">ScanSourceKind</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    File { path, chunk_spec: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ChunkSpec</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">, iceberg_delete_files, parquet_metadata },</span>
+<span style="color: #F8F8F2">    Database { path },</span>
+<span style="color: #F8F8F2">    PythonFactoryFunction { module, func_name, func_args },</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><code>ChunkSpec</code>(<code>lib.rs:142</code>)是文件内的子选择,有两种粒度:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">ChunkSpec</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    Parquet(Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">i64</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">),                  </span><span style="color: #959077">// 行组下标</span>
+<span style="color: #F8F8F2">    Bytes { start: </span><span style="color: #66D9EF">usize</span><span style="color: #F8F8F2">, end: </span><span style="color: #66D9EF">usize</span><span style="color: #F8F8F2"> }, </span><span style="color: #959077">// JSONL/CSV 的字节区间</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>ASCII 内存布局:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>ScanTask {
+  sources: ┌─ScanSource[0]─────────────────────────────┐
+           │ kind: File {                              │
+           │   path: &quot;s3://b/year=2024/01.parquet&quot;,    │
+           │   chunk_spec: Parquet(vec![0,2,5])  ◄── 仅读 3 个行组
+           │   parquet_metadata: Arc&lt;DaftParquetMetadata&gt;  ◄── 缓存
+           │ }                                         │
+           │ statistics: TableStatistics { ... }       │
+           └───────────────────────────────────────────┘
+  schema:    Arc&lt;Schema&gt;
+  pushdowns: Pushdowns {
+    columns: Some(Arc(vec![&quot;user_id&quot;, &quot;amount&quot;])),
+    filters: Some(amount &gt; 100),
+    limit:   Some(100),
+  }
+}
+</code></pre></div>
+
+<h3>3.3 <code>ColumnRangeStatistics</code> 与 <code>TruthValue</code></h3>
+<p><code>src/daft-stats/src/column_stats/mod.rs:15</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">ColumnRangeStatistics</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    Missing,</span>
+<span style="color: #F8F8F2">    Loaded(Series, Series),  </span><span style="color: #959077">// (lower, upper),长度恒为 1</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">TruthValue</span><span style="color: #F8F8F2"> { False, Maybe, True }   </span><span style="color: #959077">// mod.rs:39</span>
+</code></pre></div>
+
+<p><code>ColumnRangeStatistics::supports_dtype</code>(<code>mod.rs:82</code>)枚举支持范围:数值类型、Bool、Utf8、Binary、Date、Time、Timestamp、Duration、Interval、Decimal128。多模态类型(Image/Tensor/Embedding)<strong>不</strong>支持范围统计——它们要走解码后的 filter 路径。</p>
+<div class="mermaid">
+flowchart LR
+    Filter[&quot;filter: amount &gt; 100&quot;] --&gt;|evaluate over| Stats[&quot;Stats: Loaded(min=50, max=80)&quot;]
+    Stats --&gt; Eval[&quot;80 &gt; 100 → False&quot;]
+    Eval --&gt; Result[&quot;TruthValue::False ✓ 跳过该行组&quot;]
+
+    Filter --&gt;|evaluate over| Stats2[&quot;Stats: Loaded(min=50, max=200)&quot;]
+    Stats2 --&gt; Eval2[&quot;[50,200] vs &gt; 100 → 不能确定&quot;]
+    Eval2 --&gt; Result2[&quot;TruthValue::Maybe → 必须读&quot;]
+
+    classDef skip fill:#f8cecc
+    classDef must fill:#d5e8d4
+    class Result skip
+    class Result2 must
+</div>
+<h3>3.4 <code>ReadPlanner</code> —— 字节范围编排</h3>
+<p><code>src/daft-parquet/src/read_planner.rs:126</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">ReadPlanner</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    source: String,</span>
+<span style="color: #F8F8F2">    ranges: </span><span style="color: #A6E22E">RangeList</span><span style="color: #F8F8F2">,                  </span><span style="color: #959077">// 待读字节区间</span>
+<span style="color: #F8F8F2">    passes: Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Box</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">dyn</span><span style="color: #F8F8F2"> ReadPlanPass</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">, </span><span style="color: #959077">// 优化 pass</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>两个内置 pass:</p>
+<table>
+<thead>
+<tr>
+<th>pass</th>
+<th>行号</th>
+<th>参数</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CoalescePass</code></td>
+<td><code>read_planner.rs:14</code></td>
+<td><code>max_hole_size</code>, <code>max_request_size</code></td>
+<td>合并相邻/几乎相邻的小 range</td>
+</tr>
+<tr>
+<td><code>SplitLargeRequestPass</code></td>
+<td><code>read_planner.rs:52</code></td>
+<td><code>max_request_size</code>, <code>split_threshold</code></td>
+<td>把过大 range 拆成多个并发请求</td>
+</tr>
+</tbody>
+</table>
+<p>合并算法(<code>CoalescePass::run</code>,<code>read_planner.rs:20-49</code>):排序按 start → 双指针扫描 → 满足 <code>range.start &lt;= curr_end + max_hole_size</code> 且 <code>range.end - curr_start &lt; max_request_size</code> 就合并。</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>原始 ranges (Parquet column chunks):
+  [100..200]  [205..300]  [305..380]  [10000..10500]  [12000..12100]
+
+CoalescePass(max_hole_size=10, max_request_size=2_000):
+  ┌─────────────────────┐  ┌──────────┐  ┌──────────┐
+  │ 100..380            │  │10000..10500│ │12000..12100│
+  │ ↑ 合并三段          │  │           │ │            │
+  │ hole 5 &lt; 10        │  │           │ │            │
+  └─────────────────────┘  └──────────┘  └──────────┘
+       1 个 GET                1 个 GET      1 个 GET
+       原本要 5 次 GET → 现在 3 次
+</code></pre></div>
+
+<p><code>RangesContainer</code>(<code>read_planner.rs:199</code>)持有每个 range 的 <code>JoinHandle&lt;Bytes&gt;</code>,真正的数据通过 <code>tokio::spawn</code> 并发拉取(<code>read_planner.rs:177</code>),消费方按需 <code>await</code>。</p>
+<h3>3.5 <code>DaftFile</code> —— 多模态文件单元</h3>
+<p><code>src/daft-file/src/file.rs:13</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">DaftFile</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> media_type: </span><span style="color: #A6E22E">MediaType</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) cursor: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">FileCursor</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) position: </span><span style="color: #66D9EF">usize</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>加载策略(<code>file.rs:21-82</code>,<code>load</code>):</p>
+<div class="mermaid">
+stateDiagram-v2
+    [*] --&gt; get_size: load(file_ref)
+    get_size --&gt; supports_range
+    supports_range --&gt; Eager: !supports_range OR (size ≤ 16MB AND download_small_files)
+    supports_range --&gt; Stream: 否则
+    Eager --&gt; read_full_content: 一次性 read_full_content().await
+    read_full_content --&gt; from_bytes: FileCursor::Memory(Cursor)
+    Stream --&gt; BufReader16M: BufReader::with_capacity(16MB)
+    BufReader16M --&gt; ObjectReader: FileCursor::ObjectReader
+    from_bytes --&gt; [*]
+    ObjectReader --&gt; [*]
+</div>
+<p>阈值常量在 <code>file.rs:65</code>:<code>const DEFAULT_BUFFER_SIZE: usize = 16 * 1024 * 1024;</code></p>
+<hr />
+<h2>4. 关键源码走读</h2>
+<h3>4.1 <code>IOClient::get_source_and_path</code> —— URL 路由</h3>
+<p><code>src/daft-io/src/lib.rs:233-335</code>(节选):</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">async</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">get_source_and_path</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self, input: </span><span style="color: #66D9EF">&amp;str</span><span style="color: #F8F8F2">)</span>
+<span style="color: #F8F8F2">    -&gt; Result</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">(Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">dyn</span><span style="color: #F8F8F2"> ObjectSource</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">, String)</span><span style="color: #FF4689">&gt;</span>
+<span style="color: #F8F8F2">{</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> resolved </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> resolve_url_alias(input, </span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self.config);</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> (source_type, path) </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> parse_url(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">resolved)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// 双重检查 + 写锁(避免重复初始化 backend client)</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">if</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> Some(client) </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> self.source_type_to_store.read().</span><span style="color: #66D9EF">await</span><span style="color: #F8F8F2">.get(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">source_type) {</span>
+<span style="color: #F8F8F2">        </span><span style="color: #66D9EF">return</span><span style="color: #F8F8F2"> Ok((client.clone(), path.to_string()));</span>
+<span style="color: #F8F8F2">    }</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> w_handle </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> self.source_type_to_store.write().</span><span style="color: #66D9EF">await</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">if</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> Some(client) </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> w_handle.get(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">source_type) {</span>
+<span style="color: #F8F8F2">        </span><span style="color: #66D9EF">return</span><span style="color: #F8F8F2"> Ok((client.clone(), path.to_string()));</span>
+<span style="color: #F8F8F2">    }</span>
+
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> new_source </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">match</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">source_type {</span>
+<span style="color: #F8F8F2">        SourceType::File </span><span style="color: #FF4689">=&gt;</span><span style="color: #F8F8F2"> LocalSource::get_client().</span><span style="color: #66D9EF">await</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">as</span><span style="color: #F8F8F2"> Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">dyn</span><span style="color: #F8F8F2"> ObjectSource</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">        SourceType::Http </span><span style="color: #FF4689">=&gt;</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">match</span><span style="color: #F8F8F2"> url.domain() {</span>
+<span style="color: #F8F8F2">            Some(</span><span style="color: #E6DB74">&quot;huggingface.co&quot;</span><span style="color: #F8F8F2">) </span><span style="color: #FF4689">=&gt;</span><span style="color: #F8F8F2"> HFSource::get_client(</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.).</span><span style="color: #66D9EF">await</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">,  </span><span style="color: #959077">// 特判</span>
+<span style="color: #F8F8F2">            _ </span><span style="color: #FF4689">=&gt;</span><span style="color: #F8F8F2"> HttpSource::get_client(</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.).</span><span style="color: #66D9EF">await</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">        },</span>
+<span style="color: #F8F8F2">        SourceType::S3 </span><span style="color: #FF4689">=&gt;</span><span style="color: #F8F8F2"> S3LikeSource::get_client(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self.config.s3).</span><span style="color: #66D9EF">await</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">        </span><span style="color: #959077">// ...</span>
+<span style="color: #F8F8F2">        SourceType::OpenDAL { scheme } </span><span style="color: #FF4689">=&gt;</span><span style="color: #F8F8F2"> { </span><span style="color: #959077">/* 见下 */</span><span style="color: #F8F8F2"> }</span>
+<span style="color: #F8F8F2">    };</span>
+<span style="color: #F8F8F2">    w_handle.insert(source_type, new_source.clone());</span>
+<span style="color: #F8F8F2">    Ok((new_source, path.to_string()))</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><code>OpenDAL</code> 是兜底:任意 URL scheme(<code>cos://</code>, <code>oss://</code>, <code>obs://</code> 等)只要 <code>IOConfig.opendal_backends[scheme]</code> 有配置,都能跑(<code>lib.rs:304-328</code>)。<code>COS</code> 有特别处理——会从 URL 提取 bucket 自动注入 OpenDAL config,这样用户写 <code>cos://my-bucket/foo.parquet</code> 不用手动填 bucket。</p>
+<h3>4.2 <code>GetResult::bytes()</code> —— 重试与续传</h3>
+<p><code>src/daft-io/src/object_io.rs:79-130</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">const</span><span style="color: #F8F8F2"> NUM_TRIES: </span><span style="color: #66D9EF">u64</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> </span><span style="color: #AE81FF">3</span><span style="color: #F8F8F2">;</span>
+<span style="color: #66D9EF">const</span><span style="color: #F8F8F2"> JITTER_MS: </span><span style="color: #66D9EF">u64</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> </span><span style="color: #AE81FF">2_500</span><span style="color: #F8F8F2">;</span>
+<span style="color: #66D9EF">const</span><span style="color: #F8F8F2"> MAX_BACKOFF_MS: </span><span style="color: #66D9EF">u64</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> </span><span style="color: #AE81FF">20_000</span><span style="color: #F8F8F2">;</span>
+
+<span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> result </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> collect_bytes(stream, size, permit).</span><span style="color: #66D9EF">await</span><span style="color: #F8F8F2">;</span>
+<span style="color: #66D9EF">for</span><span style="color: #F8F8F2"> attempt </span><span style="color: #66D9EF">in</span><span style="color: #F8F8F2"> </span><span style="color: #AE81FF">1</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">NUM_TRIES {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">match</span><span style="color: #F8F8F2"> result {</span>
+<span style="color: #F8F8F2">        Err(SocketError {</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">} </span><span style="color: #FF4689">|</span><span style="color: #F8F8F2"> UnableToReadBytes {</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">}</span>
+<span style="color: #F8F8F2">            </span><span style="color: #FF4689">|</span><span style="color: #F8F8F2"> UnableToOpenFile {</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">} </span><span style="color: #FF4689">|</span><span style="color: #F8F8F2"> MiscTransient {</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">})</span>
+<span style="color: #F8F8F2">            </span><span style="color: #66D9EF">if</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> Some(rp) </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">retry_params </span><span style="color: #FF4689">=&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">            </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> jitter </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> rand::rng().random_range(</span><span style="color: #AE81FF">0</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">((</span><span style="color: #AE81FF">1</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">&lt;&lt;</span><span style="color: #F8F8F2"> (attempt </span><span style="color: #FF4689">-</span><span style="color: #F8F8F2"> </span><span style="color: #AE81FF">1</span><span style="color: #F8F8F2">)) </span><span style="color: #FF4689">*</span><span style="color: #F8F8F2"> JITTER_MS));</span>
+<span style="color: #F8F8F2">            </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> jitter </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> jitter.min(MAX_BACKOFF_MS);</span>
+<span style="color: #F8F8F2">            tokio::time::sleep(Duration::from_millis(jitter)).</span><span style="color: #66D9EF">await</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">            </span><span style="color: #959077">// 重新发起 GET</span>
+<span style="color: #F8F8F2">            get_result </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> rp.source.get(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">rp.input, rp.range.clone(), rp.io_stats.clone()).</span><span style="color: #66D9EF">await</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">            </span><span style="color: #66D9EF">if</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> Stream(stream, size, permit, _) </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> get_result {</span>
+<span style="color: #F8F8F2">                result </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> collect_bytes(stream, size, permit).</span><span style="color: #66D9EF">await</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">            }</span>
+<span style="color: #F8F8F2">        }</span>
+<span style="color: #F8F8F2">        _ </span><span style="color: #FF4689">=&gt;</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">break</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    }</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<div class="mermaid">
+sequenceDiagram
+    participant App
+    participant GR as GetResult::bytes()
+    participant Net as ObjectSource::get
+    participant S3
+
+    App-&gt;&gt;GR: bytes()
+    GR-&gt;&gt;Net: 第一次 collect_bytes(stream)
+    Net-&gt;&gt;S3: HTTP GET (range)
+    S3--&gt;&gt;Net: 200 + 部分流
+    Net--&gt;&gt;GR: SocketError(中断)
+    GR-&gt;&gt;GR: jitter ∈ [0, 2_500ms),sleep
+    GR-&gt;&gt;Net: 重发(attempt=1)
+    Net-&gt;&gt;S3: HTTP GET (range)
+    S3--&gt;&gt;Net: 200 + 完整流
+    Net--&gt;&gt;GR: Bytes
+    GR--&gt;&gt;App: Ok(bytes)
+</div>
+<p>注意 jitter 公式 <code>(1 &lt;&lt; (attempt - 1)) * JITTER_MS</code> 是指数退避基数,实际值在 <code>[0, 2_500 &lt;&lt; (attempt-1))</code> 区间随机,再 cap 到 <code>MAX_BACKOFF_MS = 20_000ms</code>。</p>
+<p><code>with_retry</code>(<code>object_io.rs:132-141</code>)产生的 <code>ResumableByteStream</code>(<code>object_io.rs:147-240</code>)更进一步——每读到 <code>n</code> 字节就把 <code>delivered</code> 累加,失败重试时构造新的 <code>range = original.start + delivered</code>,<strong>断点续传</strong>而非重读。</p>
+<h3>4.3 行组裁剪流程</h3>
+<div class="mermaid">
+flowchart TD
+    Start[开始读 Parquet 文件]
+    LoadFooter[读 footer&lt;br/&gt;parse → DaftParquetMetadata]
+    Cache{Arc&amp;lt;DaftParquetMetadata&amp;gt; &lt;br/&gt;已缓存?}
+    Iter[for each row_group i]
+    GetStats[row_group.column_chunks → ColumnRangeStatistics]
+    Eval[evaluate filter on stats]
+    Switch{TruthValue?}
+    Skip[跳过该行组]
+    Keep[加入待读列表]
+    NextRG[next i]
+    BuildPlan[ReadPlanner: 把选中行组的 column-chunk 字节区间加入 ranges]
+    RunPasses[run_passes: Coalesce + Split]
+    Spawn[tokio::spawn 并发 GET]
+
+    Start --&gt; LoadFooter
+    LoadFooter --&gt; Cache
+    Cache --&gt;|是| Iter
+    Cache --&gt;|否| Iter
+    Iter --&gt; GetStats --&gt; Eval --&gt; Switch
+    Switch --&gt;|False| Skip --&gt; NextRG
+    Switch --&gt;|Maybe / True| Keep --&gt; NextRG
+    NextRG --&gt;|done| BuildPlan
+    NextRG --&gt;|更多行组| Iter
+    BuildPlan --&gt; RunPasses --&gt; Spawn
+
+    classDef skip fill:#f8cecc
+    classDef keep fill:#d5e8d4
+    class Skip skip
+    class Keep keep
+</div>
+<p><code>DaftParquetMetadata</code>(<code>src/daft-parquet/src/metadata_adapter.rs:23</code>)缓存了 footer 解析结果,带 <code>clone_with_row_groups</code>(<code>metadata_adapter.rs:75</code>)用于派生「裁剪后」视图,避免重复解析。</p>
+<h3>4.4 字节范围合并/拆分案例</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>原始(假设要读 3 列 × 3 行组 = 9 个 column-chunk):
+col_a/RG0: [   100 ..    300]    72KB
+col_a/RG1: [   500 ..    700]    74KB
+col_a/RG2: [   900 ..   1100]    71KB
+col_b/RG0: [  2000 ..   2150]    63KB
+col_b/RG1: [  2200 ..   2350]    62KB
+col_b/RG2: [  2400 ..   2550]    61KB
+col_c/RG0: [800000.. 900000]   400KB
+col_c/RG1: [900000..1000000]   400KB
+col_c/RG2: [1000000..1100000]  400KB
+
+CoalescePass(max_hole_size=200, max_request_size=2MB):
+[100..1100]                    1 个 GET (含 3 个间隙的 col_a)
+[2000..2550]                   1 个 GET (col_b 整体)
+[800000..1100000]              1 个 GET (col_c 三个 RG 连续)
+
+总计:9 个 GET → 3 个 GET
+</code></pre></div>
+
+<p><code>SplitLargeRequestPass</code> 反向作用:如果合并后有一个 50MB 的巨无霸 range,就拆成多个 ≤ <code>max_request_size</code> 的并发请求,对带宽利用更友好。</p>
+<h3>4.5 <code>ScanTask</code> 接收 <code>Pushdowns</code> 后的执行</h3>
+<p><code>MaterializeScans</code> batch 在 <code>optimizer.rs:228-232</code> 是<strong>最后</strong>才把 <code>Source.scan_state</code> 翻成 <code>Vec&lt;ScanTaskRef&gt;</code>。此时 <code>pushdowns.filters</code> 已经反复被 <code>PushDownFilter</code>、<code>SimplifyExpressionsRule</code>、<code>SimplifyNullFilteredJoin</code> 推/简化好了,实际 evaluate stats 时是相对 <em>简单</em> 的表达式。</p>
+<p>下游 <code>LocalPhysicalPlan::ScanTaskSource</code>(参见 <a href="./04-Swordfish本地执行.html">04 Swordfish 本地执行</a>)拿到 <code>ScanTask</code> 后,按格式分派到 <code>daft-parquet</code>、<code>daft-csv</code>、<code>daft-json</code>、<code>daft-warc</code>,调用 <code>ReadPlanner</code> 走完上述流程。</p>
+<hr />
+<h2>5. 怎么优化的:四个技术点</h2>
+<h3>5.1 行组级裁剪 vs 解码后 filter</h3>
+<div class="mermaid">
+flowchart LR
+    subgraph 无裁剪
+        Bad1[全文件下载] --&gt; Bad2[全部解码 → Series] --&gt; Bad3[Filter] --&gt; Bad4[结果]
+    end
+    subgraph 行组裁剪
+        Good1[footer 8B + footer KB] --&gt; Good2[stats evaluate] --&gt; Good3[只下载选中 column-chunks] --&gt; Good4[解码 → Series] --&gt; Good5[Filter 残余谓词] --&gt; Good6[结果]
+    end
+
+    classDef bad fill:#f8cecc
+    classDef good fill:#d5e8d4
+    class Bad1,Bad2,Bad3 bad
+    class Good1,Good2,Good3,Good4 good
+</div>
+<p>裁剪只能对 <code>ColumnRangeStatistics::supports_dtype</code> 为 true 的列生效。<code>Image</code>/<code>Tensor</code> 等多模态列没有 min/max,只能走 "下载 + 解码 + filter"。</p>
+<h3>5.2 ReadPlanner 的合并/拆分</h3>
+<div class="mermaid">
+flowchart LR
+    subgraph 优化前
+        A1[&quot;7 个零散 ranges:&lt;br/&gt;[100,200] [205,300]&lt;br/&gt;[305,380] [10K,10.5K]&lt;br/&gt;[12K,12.1K] [50K,50.2K]&lt;br/&gt;[1M,1.5M]&quot;]
+    end
+    subgraph 优化后
+        A2[&quot;4 个合并 ranges:&lt;br/&gt;[100,380]&lt;br/&gt;[10K,10.5K]&lt;br/&gt;[12K,50.2K]   ← 跨过 38K 的 hole 因为 &lt; max_hole&lt;br/&gt;[1M,1.5M]&quot;]
+    end
+
+    A1 --&gt; CoalescePass --&gt; A2
+    A2 --&gt; SplitLargePass --&gt; A3[&quot;如果 [1M,1.5M] &gt; max_request_size,&lt;br/&gt;拆成 [1M,1.25M] [1.25M,1.5M]&quot;]
+</div>
+<p>参数典型值:<code>max_hole_size = 1MB</code>、<code>max_request_size = 2MB</code>、<code>split_threshold = 4MB</code>(具体在 caller 处配置)。S3 GET 的固定 RTT 成本在小 range 上摊销不开,所以宁可多读一点点 hole 也要合并。</p>
+<h3>5.3 重试策略对比</h3>
+<table>
+<thead>
+<tr>
+<th>策略</th>
+<th>重试次数</th>
+<th>退避</th>
+<th>续传</th>
+<th>应用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GetResult::bytes()</code></td>
+<td>3</td>
+<td>jitter ∈ [0, 2.5×2^attempt ms) cap 20s</td>
+<td>否,整 range 重读</td>
+<td>一次性下载</td>
+</tr>
+<tr>
+<td><code>ResumableByteStream</code></td>
+<td>3</td>
+<td>同上</td>
+<td>是,从 <code>delivered</code> offset 继续</td>
+<td>流式扫描</td>
+</tr>
+<tr>
+<td>用户层(无)</td>
+<td>—</td>
+<td>—</td>
+<td>—</td>
+<td>直接抛</td>
+</tr>
+</tbody>
+</table>
+<div class="mermaid">
+sequenceDiagram
+    participant Reader
+    participant Stream as ResumableByteStream
+    participant S3
+
+    Reader-&gt;&gt;Stream: poll_next
+    Stream-&gt;&gt;S3: GET (range=[100, 10000])
+    S3--&gt;&gt;Stream: 收到 4000B (delivered=4000)
+    Stream--&gt;&gt;Reader: yield 4000B
+    Reader-&gt;&gt;Stream: poll_next
+    Stream--&gt;&gt;Reader: 等待...
+    S3--xStream: SocketError
+    Stream-&gt;&gt;Stream: attempt=1, jitter ∈ [0, 2500)
+    Stream-&gt;&gt;Stream: make_range = [100+4000, 10000] = [4100, 10000]
+    Stream-&gt;&gt;S3: GET (range=[4100, 10000])
+    S3--&gt;&gt;Stream: 5900B
+    Stream--&gt;&gt;Reader: yield 5900B
+</div>
+<h3>5.4 16MB 阈值:eager vs stream</h3>
+<div class="mermaid">
+flowchart LR
+    File[&quot;DaftFile::load(file_ref)&quot;] --&gt; Q1{supports_range?}
+    Q1 --&gt;|否| Eager[&quot;全量下载 → Cursor&quot;]
+    Q1 --&gt;|是| Q2{size ≤ 16MB?}
+    Q2 --&gt;|是 + download_small_files| Eager
+    Q2 --&gt;|否| Stream[&quot;BufReader 16MB,按 Read 接口分块拉&quot;]
+
+    classDef eager fill:#fff2cc
+    classDef stream fill:#dae8fc
+    class Eager eager
+    class Stream stream
+</div>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>适用文件</th>
+<th>内存</th>
+<th>延迟</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Eager</td>
+<td>&lt; 16MB 图片/JSON 文档/小 Parquet</td>
+<td>O(file_size)</td>
+<td>一次 RTT</td>
+</tr>
+<tr>
+<td>Stream</td>
+<td>大视频/大 Parquet/大 WARC</td>
+<td>O(16MB) buffer</td>
+<td>N 次 RTT,但首字节早</td>
+</tr>
+</tbody>
+</table>
+<p>阈值是 <code>file.rs:65</code> 的 <code>const DEFAULT_BUFFER_SIZE: usize = 16 * 1024 * 1024;</code>。<code>download_small_files</code> 是 caller 控制的开关——某些场景(例如要随机 seek 的大图)即使小也想走 stream,以利用范围请求。</p>
+<hr />
+<h2>6. 端到端案例</h2>
+<h3>6.1 Parquet 字节级追踪</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">df</span> <span style="color: #FF4689">=</span> <span style="color: #F8F8F2">(</span>
+    <span style="color: #F8F8F2">daft</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">read_parquet(</span><span style="color: #E6DB74">&quot;s3://bucket/year=2024/*.parquet&quot;</span><span style="color: #F8F8F2">)</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">where(</span><span style="color: #E6DB74">&quot;amount &gt; 100&quot;</span><span style="color: #F8F8F2">)</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">select(</span><span style="color: #E6DB74">&quot;user_id&quot;</span><span style="color: #F8F8F2">,</span> <span style="color: #E6DB74">&quot;amount&quot;</span><span style="color: #F8F8F2">)</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">limit(</span><span style="color: #AE81FF">100</span><span style="color: #F8F8F2">)</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">collect()</span>
+<span style="color: #F8F8F2">)</span>
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>动作</th>
+<th>字节量级</th>
+<th>S3 GET 数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1. LIST</td>
+<td><code>IOClient.glob("s3://bucket/year=2024/*.parquet")</code></td>
+<td>&lt; 1KB / 文件</td>
+<td>1 LIST</td>
+</tr>
+<tr>
+<td>2. footer</td>
+<td>每文件:GET 最后 8B(magic+footer length)→ GET footer</td>
+<td>~10-100KB / 文件</td>
+<td>2N 个 GET</td>
+</tr>
+<tr>
+<td>3. stats eval</td>
+<td>对 <code>amount &gt; 100</code> 应用每行组的 <code>ColumnRangeStatistics</code>(min/max) → <code>TruthValue</code></td>
+<td>0(纯计算)</td>
+<td>0</td>
+</tr>
+<tr>
+<td>4. plan ranges</td>
+<td><code>ReadPlanner.add_range</code> 加入选中行组的 <code>user_id</code> &amp; <code>amount</code> column-chunks</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>5. coalesce</td>
+<td><code>CoalescePass</code> 合并相邻 range</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>6. fetch data</td>
+<td><code>tokio::spawn</code> 并发 GET 合并后的 range</td>
+<td>~实际数据量(可能只有原始 1%)</td>
+<td>M 个 GET</td>
+</tr>
+<tr>
+<td>7. decode</td>
+<td>parquet 列解码 → Arrow → MicroPartition</td>
+<td>RAM</td>
+<td>0</td>
+</tr>
+<tr>
+<td>8. limit terminate</td>
+<td>累计 100 行后短路,后续 ScanTask 不再 spawn</td>
+<td>0</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<div class="mermaid">
+sequenceDiagram
+    participant py as Python collect()
+    participant opt as Optimizer
+    participant scan as ScanTask
+    participant rp as ReadPlanner
+    participant io as IOClient
+    participant s3 as S3
+
+    py-&gt;&gt;opt: optimize(read_parquet → filter → project → limit)
+    opt-&gt;&gt;opt: PushDownFilter / Projection / Limit → Pushdowns
+    opt-&gt;&gt;opt: MaterializeScans
+    opt-&gt;&gt;io: glob(&quot;s3://b/year=2024/*&quot;)
+    io-&gt;&gt;s3: LIST
+    s3--&gt;&gt;io: 文件清单
+    opt--&gt;&gt;scan: Vec&lt;ScanTask&gt;
+    py-&gt;&gt;scan: 执行
+    scan-&gt;&gt;io: GET footer (range=last 8B)
+    io-&gt;&gt;s3: GET range
+    s3--&gt;&gt;io: footer length
+    scan-&gt;&gt;io: GET footer (full)
+    io-&gt;&gt;s3: GET range
+    s3--&gt;&gt;io: parquet metadata
+    scan-&gt;&gt;scan: ColumnRangeStatistics evaluate amount &gt; 100
+    scan-&gt;&gt;scan: 选中 RG 集 → ChunkSpec::Parquet(vec![...])
+    scan-&gt;&gt;rp: add_range × N
+    rp-&gt;&gt;rp: CoalescePass + SplitPass
+    rp-&gt;&gt;io: 并发 GET (合并后)
+    io-&gt;&gt;s3: GET × M (M ≪ N)
+    s3--&gt;&gt;io: bytes
+    rp--&gt;&gt;scan: RangesContainer
+    scan-&gt;&gt;scan: decode → MicroPartition
+    scan--&gt;&gt;py: limit 100 后短路
+</div>
+<h3>6.2 Iceberg checkpoint 状态机(写侧)</h3>
+<p><code>StageCheckpointKeys</code>(逻辑算子,见 <a href="./03-逻辑计划与优化器.html">03 § 5</a>)在写入路径上配合 <code>daft-checkpoint</code> 实现"写完不一定提交"的事务语义。</p>
+<p><code>src/daft-checkpoint/src/types.rs:11</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">CheckpointStatus</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    Staged,         </span><span style="color: #959077">// keys + files 累积中,reader 看不见</span>
+<span style="color: #F8F8F2">    Checkpointed,   </span><span style="color: #959077">// 已 sealed,key/file 配对可见</span>
+<span style="color: #F8F8F2">    Committed,      </span><span style="color: #959077">// catalog 提交完成,files 清理但 keys 仍在</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<div class="mermaid">
+stateDiagram-v2
+    [*] --&gt; Staged: stage_keys / stage_files
+    Staged --&gt; Staged: 继续 write_data_file
+    Staged --&gt; Checkpointed: checkpoint() 调用
+    Checkpointed --&gt; Committed: mark_committed()
+    Committed --&gt; [*]: 后续 reader 走 catalog
+    Staged --&gt; [*]: 失败回滚 (drop)
+    Checkpointed --&gt; Staged: 不允许(单调推进)
+</div>
+<blockquote>
+<p>这套状态机让 <code>df.write_iceberg(...)</code> 在多 worker 写完所有数据文件后,<strong>集中</strong>地一次性 catalog commit。如果 commit 失败,已写入的物理文件会留在 <code>Staged</code> 状态等待 retry,而不是污染 catalog。详见 <code>src/daft-checkpoint/src/store.rs</code> 的 <code>CheckpointStore</code> trait。</p>
+</blockquote>
+<hr />
+<h2>7. 与同类项目对照</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Daft</th>
+<th>DataFusion</th>
+<th>Polars</th>
+<th>DuckDB</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>抽象层</td>
+<td><code>ObjectSource</code> trait</td>
+<td><code>object_store</code> crate</td>
+<td>内置 + cloud 特性</td>
+<td>自带 + httpfs ext</td>
+</tr>
+<tr>
+<td>后端数</td>
+<td>10(<code>SourceType</code>)</td>
+<td>8</td>
+<td>5</td>
+<td>6</td>
+</tr>
+<tr>
+<td>重试</td>
+<td>3 次 + jitter + 续传</td>
+<td>由 <code>object_store</code> 提供</td>
+<td>5 次基础</td>
+<td>默认 0 次</td>
+</tr>
+<tr>
+<td>行组裁剪</td>
+<td><code>ColumnRangeStatistics::TruthValue</code></td>
+<td><code>PartitionStatistics</code>(arrow)</td>
+<td>row-group statistics</td>
+<td>row-group statistics</td>
+</tr>
+<tr>
+<td>字节范围合并</td>
+<td><code>ReadPlanner + CoalescePass</code></td>
+<td><code>parquet-rs</code> 内部</td>
+<td>内置</td>
+<td>内置</td>
+</tr>
+<tr>
+<td>Pushdown 容器</td>
+<td><code>Pushdowns</code> 单结构</td>
+<td><code>TableProvider::scan</code> 多参</td>
+<td>LazyFrame</td>
+<td>scan params</td>
+</tr>
+<tr>
+<td>Aggregation pushdown</td>
+<td>是(<code>Pushdowns.aggregation</code>)</td>
+<td>部分</td>
+<td>否</td>
+<td>partial agg</td>
+</tr>
+<tr>
+<td>Glob</td>
+<td><code>ObjectSource::glob</code> 流式</td>
+<td>object_store list</td>
+<td>list_with_prefix</td>
+<td>glob</td>
+</tr>
+<tr>
+<td>多模态文件</td>
+<td><code>DaftFile</code>(16MB 阈值)</td>
+<td>无</td>
+<td>无</td>
+<td>无</td>
+</tr>
+<tr>
+<td>Checkpoint 写</td>
+<td>三态状态机</td>
+<td>无</td>
+<td>无</td>
+<td>事务</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>8. 未解之谜</h2>
+<ol>
+<li><strong><code>CoalescePass</code> 参数从哪儿来?</strong><code>max_hole_size</code> / <code>max_request_size</code> 在 <code>read_planner.rs:14-17</code> 是字段,但实际值不是常量——caller 注入。读完后没找到它们与 <code>DaftExecutionConfig</code> 的连接点,可能在 <code>daft-parquet/src/read.rs</code> 的 reader 构造路径。</li>
+<li><strong><code>pushed_filters</code> 与 <code>filters</code> 的失配</strong>:<code>Pushdowns.pushed_filters</code> 是"存储侧已消化"的子集,但当前代码里 <code>MaterializeScans</code> 输出后,<strong>优化器是否会从 <code>filters</code> 中移除 <code>pushed_filters</code> 的部分?</strong> 还是依赖执行器层 dedup?(<code>pushdowns.rs:27-30</code> 的注释说"backward compat",有遗留迹象)</li>
+<li><strong><code>SupportsPushdownFilters</code> 的实现者覆盖度</strong>:trait 定义在 <code>pushdowns.rs:10</code>,但 grep 出的实现者似乎只在 <code>daft-iceberg</code>、<code>daft-delta</code> 等连接器侧。原生 Parquet 是否走这个 trait,还是直接在 <code>read_planner</code> 里识别?</li>
+<li><strong>续传的边界</strong>:<code>ResumableByteStream</code> 重试时(<code>object_io.rs:184-238</code>)如果 <code>inner</code> 已经 drop 但 <code>delivered</code> 还没追上整个 range,新建的 stream 是否会和旧的 partial bytes 冲突?读完代码逻辑上没问题(对 <code>range</code> 做了重写),但缺少端到端测试覆盖。</li>
+<li><strong><code>DaftParquetMetadata</code> 的并发缓存</strong>:每个 <code>ScanSource</code> 持有 <code>Option&lt;Arc&lt;DaftParquetMetadata&gt;&gt;</code>,但 <code>ScanTask</code> 之间是否共享同一文件的 metadata?如果同一文件被多 scan task 切分(<code>ChunkSpec::Parquet</code>),每个 task 的 metadata 是否复用?(<code>scan_source</code> 的 <code>parquet_metadata</code> 字段在 task 切分时是 clone 还是 share Arc?)</li>
+</ol>
+<hr />
+<blockquote>
+<p>下一篇:<a href="./04-Swordfish本地执行.html">04 Swordfish 本地执行</a> — <code>ScanTask</code> 如何被 morsel-driven pipeline 消费,<code>tokio::select!</code> 调度器与动态 batch 大小。</p>
+</blockquote>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>01 · 总览：三层架构与设计取舍 · Databend 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#ff6b6b}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">☁️ <span>Databend 源码深度解析</span></span><nav class="nav"><a href="00-meta.html">元信息与阅读指南</a><a href="01-overview.html" class=on>总览：三层架构与设计取舍</a><a href="02-meta-service.html">Meta Service：客户端层 + 外部 OpenRaft 状态机</a><a href="03-sql-frontend.html">SQL 前端：词法 / 语法 / 绑定</a><a href="04-planner-optimizer.html">Planner / Optimizer：从 SExpr 到最优计划</a><a href="05-pipeline-execution.html">Pipeline 执行：Push-based + Event 状态机</a><a href="06-fuse-storage.html">FUSE 存储引擎：Snapshot / Segment / Block</a><a href="07-io-and-cache.html">IO 与多级缓存：OpenDAL Layer 栈 + CacheManager</a><a href="08-indexes-and-search.html">索引与搜索：Bloom / Inverted / Vector / Range / Page / Spatial</a><a href="09-cluster-and-exchange.html">集群与 Exchange：节点发现 + Flight Shuffle</a><a href="10-extensions.html">扩展：Stream / UDF / Iceberg / Delta</a><a href="99-diagrams.html">Mermaid 图源归档</a></nav></div></header>
+<main class="wrap">
+<h1>01 · 总览：三层架构与设计取舍</h1>
+<blockquote>
+<p>基于 commit <code>fe693bb677</code>。本篇用一个进程视角与一个数据视角，把 Databend 的「为什么是这样的」一次性串清楚，作为后续 10 篇专题文档的索引。</p>
+</blockquote>
+<h2>1. 解决了什么问题</h2>
+<p>Databend 的目标是在<strong>对象存储（S3/GCS/Azure/OSS/HDFS）之上跑 OLAP</strong>，并把分析、向量检索、全文检索、agent 编排（Sandbox UDF + SQL）放进同一个引擎。</p>
+<p>它不是 ClickHouse/Doris 那种「<strong>本地盘 shared-nothing</strong>」体系，也不是 Snowflake 那种<strong>专有云服务</strong>——它的取舍是：</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>本地盘 OLAP                 Snowflake                 Databend
+┌─────────────┐            ┌─────────────┐           ┌─────────────┐
+│ 数据 = 节点  │            │ 数据 = 内部 │           │ 数据 = 客户  │
+│ 关键路径上   │            │ FDN，受厂商 │           │ S3 桶，自托管│
+│ 最快但难弹性 │            │ 控制         │           │ 弹性 + 开放  │
+└─────────────┘            └─────────────┘           └─────────────┘
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>本地盘 OLAP（CK/Doris/StarRocks 共享 Nothing）</th>
+<th>Snowflake</th>
+<th><strong>Databend</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>数据所在位置</td>
+<td>节点本地盘</td>
+<td>厂商云存储（FDN）</td>
+<td>客户对象存储（S3/GCS/Azure/OSS）</td>
+</tr>
+<tr>
+<td>计算节点状态</td>
+<td>有状态（数据 + 元数据 + 计算）</td>
+<td>无状态</td>
+<td><strong>完全无状态</strong></td>
+</tr>
+<tr>
+<td>弹性</td>
+<td>扩缩容需 reshard，慢</td>
+<td>秒级弹性（厂商提供）</td>
+<td>秒级，新 query 节点拉一份 catalog 即可</td>
+</tr>
+<tr>
+<td>元数据</td>
+<td>与计算共置 / 单独服务</td>
+<td>厂商内部</td>
+<td><strong>独立 Raft 服务</strong>（已迁出主仓）</td>
+</tr>
+<tr>
+<td>表格式</td>
+<td>自有列存格式</td>
+<td>专有</td>
+<td><strong>FUSE 引擎 + Parquet</strong>（开放）</td>
+</tr>
+<tr>
+<td>索引</td>
+<td>Bitmap/Bloom/二级索引</td>
+<td>自动微分区</td>
+<td>Bloom + Inverted(Tantivy) + Vector(HNSW) + Range + Spatial</td>
+</tr>
+<tr>
+<td>Time Travel</td>
+<td>部分支持</td>
+<td>支持</td>
+<td><strong>原生 Git-like 链表</strong></td>
+</tr>
+<tr>
+<td>二开难度</td>
+<td>中（C++/Java）</td>
+<td>关闭</td>
+<td><strong>Rust 全栈开源</strong></td>
+</tr>
+</tbody>
+</table>
+<h2>2. 在 Databend 中的位置：进程拓扑</h2>
+<p>Databend 是一个<strong>严格三层</strong>的分布式系统。客户机不直接读写存储；元数据由独立服务承载。</p>
+<div class="mermaid">
+flowchart TB
+    subgraph Client[&quot;Client&quot;]
+      C1[bendsql / mysql client / driver]
+    end
+
+    subgraph QueryCluster[&quot;databend-query 集群（无状态，可水平扩展）&quot;]
+      direction TB
+      Q1[&quot;query node #1\nMySQL/HTTP/FlightSQL\nFlight RPC（节点间）&quot;]
+      Q2[&quot;query node #2&quot;]
+      Q3[&quot;query node #N&quot;]
+    end
+
+    subgraph Meta[&quot;databend-meta 集群（OpenRaft，奇数节点）&quot;]
+      M1[Leader]
+      M2[Follower]
+      M3[Follower]
+    end
+
+    subgraph Storage[&quot;对象存储（OpenDAL 抽象）&quot;]
+      direction LR
+      S3[S3 / GCS / Azure / OSS / HDFS / FS]
+    end
+
+    C1 -- &quot;MySQL 3307 / HTTP 8000 / FlightSQL 8900&quot; --&gt; Q1
+    Q1 &lt;-- &quot;Flight RPC 9091\n(集群发现 + Shuffle)&quot; --&gt; Q2
+    Q1 &lt;-- &quot;Flight RPC&quot; --&gt; Q3
+    Q1 -- &quot;gRPC&quot; --&gt; M1
+    Q2 -- &quot;gRPC&quot; --&gt; M1
+    Q3 -- &quot;gRPC&quot; --&gt; M1
+    M1 &lt;-- &quot;Raft&quot; --&gt; M2
+    M1 &lt;-- &quot;Raft&quot; --&gt; M3
+    Q1 -- &quot;OpenDAL&quot; --&gt; S3
+    Q2 -- &quot;OpenDAL&quot; --&gt; S3
+    Q3 -- &quot;OpenDAL&quot; --&gt; S3
+</div>
+<p>三个关键事实，必须在阅读源码前消化：</p>
+<ol>
+<li><strong>query 节点完全无状态</strong>——没有任何持久化数据落本地盘（除磁盘缓存外）。重启即可。</li>
+<li><strong>meta 服务的核心实现已迁出本仓库</strong>到 <a href="https://github.com/databendlabs/databend-meta"><code>databend-meta</code></a>。本仓库内 <code>src/meta/</code> 只剩客户端类型、protobuf、<code>MetaStore</code> 接口和 <code>metactl/metabench/metaverifier</code> 工具。详见 <a href="./02-meta-service.html">02-meta-service.md</a>。</li>
+<li><strong>embedded meta 模式硬性禁用</strong>——<code>entry.rs::init_services (L≈89)</code> 直接 <code>return Err</code>，不允许把 meta 嵌进 query 进程。</li>
+</ol>
+<h2>3. 关键数据结构：进程内的全局单例</h2>
+<p><code>databend-query</code> 启动时，会把一组全局服务塞进 <code>GlobalInstance</code> 这个伪 IoC 容器（<code>databend-common-base::base::GlobalInstance</code>）。下面这张类图按依赖顺序排列：</p>
+<div class="mermaid">
+classDiagram
+    class GlobalInstance {
+      &lt;&lt;container&gt;&gt;
+      +set/get any Arc~T~
+    }
+    class GlobalConfig {
+      +InnerConfig
+    }
+    class GlobalLogger
+    class GlobalIORuntime
+    class GlobalQueryRuntime
+    class ClusterDiscovery {
+      +register_to_metastore(conf)
+      +discover(conf) Cluster
+    }
+    class CatalogManager {
+      +meta: MetaStore
+      +default_catalog: Arc~dyn Catalog~
+      +catalog_creators: HashMap~CatalogType, CatalogCreator~
+    }
+    class DataOperator {
+      +Operator (OpenDAL)
+    }
+    class CacheManager {
+      +memory + disk + hybrid
+    }
+    class DataExchangeManager {
+      +shuffle / broadcast / merge
+    }
+    class SessionManager
+    class UserApiProvider {
+      +meta-backed RBAC
+    }
+    class HttpQueryManager
+    class TaskService {
+      &lt;&lt;feature task-support&gt;&gt;
+    }
+
+    GlobalInstance --&gt; GlobalConfig
+    GlobalInstance --&gt; GlobalLogger
+    GlobalInstance --&gt; GlobalIORuntime
+    GlobalInstance --&gt; GlobalQueryRuntime
+    GlobalInstance --&gt; ClusterDiscovery
+    GlobalInstance --&gt; CatalogManager
+    GlobalInstance --&gt; DataOperator
+    GlobalInstance --&gt; CacheManager
+    GlobalInstance --&gt; DataExchangeManager
+    GlobalInstance --&gt; SessionManager
+    GlobalInstance --&gt; UserApiProvider
+    GlobalInstance --&gt; HttpQueryManager
+    GlobalInstance --&gt; TaskService
+    CatalogManager ..&gt; ClusterDiscovery : meta 拉 catalog
+    UserApiProvider ..&gt; CatalogManager : 共用 MetaStore
+    CacheManager ..&gt; DataOperator : 缓存层下沉到对象存储
+</div>
+<p>源码：<code>src/query/service/src/global_services.rs::GlobalServices::init_with</code>（L≈77）。代码里有<strong>显式的初始化顺序注释</strong>——这个顺序就是源代码作者明确声明的依赖顺序，不能乱：</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/service/src/global_services.rs:87</span>
+<span style="color: #959077">// The order of initialization is very important</span>
+<span style="color: #959077">// 1. global config init.</span>
+<span style="color: #959077">// 2. log init.</span>
+<span style="color: #959077">// 3. runtime init.</span>
+<span style="color: #959077">// 4. cluster discovery init.</span>
+<span style="color: #959077">// 5. ... (catalog manager, queue, data exchange, session manager, ...)</span>
+<span style="color: #959077">// 6. UserApiProvider, role cache, security policy cache.</span>
+<span style="color: #959077">// 7. DataOperator, ShareTableConfig.</span>
+<span style="color: #959077">// 8. CacheManager, TempDirManager.</span>
+<span style="color: #959077">// 9. Optional: CloudControl, GlobalQueriesExecutor, HistoryLog, TaskService.</span>
+</code></pre></div>
+
+<h2>4. 关键流程：进程从启动到 ready</h2>
+<h3>4.1 启动时序</h3>
+<p>主入口有两个：<code>src/binaries/query/ee_main.rs</code>（企业版）与 <code>oss_main.rs</code>（开源版）。除了 <code>EnterpriseServices::init</code> vs <code>OssLicenseManager::init</code>，几乎一致。</p>
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Main as ee_main.rs::main
+    participant Sig as SignalListener
+    participant RT as Tokio Runtime
+    participant Cmd as Cmd::parse
+    participant Init as init_services
+    participant Glob as GlobalServices::init
+    participant Lic as EnterpriseServices::init
+    participant Start as start_services
+    participant Cluster as ClusterDiscovery
+    participant Servers as RPC/MySQL/HTTP/Metric/Admin/FlightSQL
+
+    Main-&gt;&gt;Sig: pipe_file + set_crash_hook + spawn
+    Main-&gt;&gt;Main: ThreadTracker::init
+    Main-&gt;&gt;RT: Runtime::with_default_worker_threads
+    RT-&gt;&gt;Cmd: parse CLI
+    Cmd--&gt;&gt;RT: InnerConfig
+    RT-&gt;&gt;Init: init_services(conf, ee_mode=true)
+    Init-&gt;&gt;Init: 检查 SSE4.2 / 拒绝 embedded meta
+    Init-&gt;&gt;Glob: GlobalServices::init(conf, BUILD_INFO, ee_mode)
+    Glob--&gt;&gt;Init: 全部全局单例就绪
+    Init-&gt;&gt;Lic: EnterpriseServices::init
+    RT-&gt;&gt;Start: start_services(conf)
+    Start-&gt;&gt;Cluster: register_to_metastore
+    Start-&gt;&gt;Servers: FlightService.start (节点间 RPC)
+    Start-&gt;&gt;Servers: MySQLHandler.start
+    Start-&gt;&gt;Servers: HttpHandler.start
+    Start-&gt;&gt;Servers: MetricService.start
+    Start-&gt;&gt;Servers: AdminService.start
+    Start-&gt;&gt;Servers: FlightSQLServer.start
+    Start-&gt;&gt;Start: 打印就绪信息 + wait_for_termination_request
+</div>
+<h3>4.1.1 进程内部：一个 query node 实际跑什么</h3>
+<div class="mermaid">
+flowchart TB
+  subgraph Process[&quot;databend-query 单进程&quot;]
+    direction TB
+    subgraph Servers[&quot;监听端口&quot;]
+      H[HTTP 8000]
+      M[MySQL 3307]
+      F[Flight RPC 9091]
+      FS[FlightSQL 8900]
+      Met[/metrics 7070]
+      Adm[Admin 8080]
+    end
+    subgraph Globals[&quot;全局单例&quot;]
+      Cat[CatalogManager]
+      Sess[SessionManager]
+      Cl[ClusterDiscovery]
+      DEM[DataExchangeManager]
+      DO[DataOperator (OpenDAL)]
+      CM[CacheManager]
+    end
+    subgraph Runtimes[&quot;专用 tokio runtime&quot;]
+      QR[GlobalQueryRuntime]
+      IO[GlobalIORuntime]
+      AR[Async UDF runtime]
+    end
+    Servers --&gt; Sess
+    Sess --&gt; Cat
+    Sess --&gt; Cl
+    Sess --&gt; DEM
+    Cat --&gt; DO
+    DO --&gt; IO
+    Sess --&gt; QR
+  end
+</div>
+<h3>4.2 服务监听端口与协议（启动顺序就是源码顺序）</h3>
+<div class="mermaid">
+flowchart LR
+    A[&quot;start_services&lt;br/&gt;(entry.rs L≈121)&quot;] --&gt; B[precheck_services]
+    B --&gt; C[ClusterDiscovery.register_to_metastore]
+    C --&gt; D[&quot;FlightService.start&lt;br/&gt;(节点间 RPC, 9091)&quot;]
+    D --&gt; E[&quot;MySQLHandler.start&lt;br/&gt;(3307)&quot;]
+    E --&gt; F[&quot;HttpHandler.start&lt;br/&gt;(8000, poem)&quot;]
+    F --&gt; G[&quot;MetricService.start&lt;br/&gt;(7070, /metrics)&quot;]
+    G --&gt; H[&quot;AdminService.start&lt;br/&gt;(8080)&quot;]
+    H --&gt; I[&quot;FlightSQLServer.start&lt;br/&gt;(8900)&quot;]
+    I --&gt; J[wait_for_termination_request]
+</div>
+<p>源码：<code>src/binaries/query/entry.rs::start_services</code> (L≈121)。请注意：</p>
+<ul>
+<li><strong>FlightService 是节点间 RPC</strong>——<em>不是</em>面向客户端的 FlightSQL。FlightSQL 走另一个端口（<code>flight_sql_handler_port</code>，默认 8900）。</li>
+<li><strong>MetricService 是 Prometheus exporter</strong>，路径 <code>/metrics</code>。</li>
+<li><strong>AdminService 提供 cluster/node 自检 HTTP API</strong>，与 MetricService 端口分开。</li>
+</ul>
+<h2>5. 性能与优化点（贯穿整体设计）</h2>
+<p>下表是后续每篇专题文档的优化要点速览，本节仅起索引作用：</p>
+<table>
+<thead>
+<tr>
+<th>优化点</th>
+<th>在哪一篇文档展开</th>
+<th>一句话原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>列存 <code>DataBlock</code> + SIMD kernel</td>
+<td><a href="./05-pipeline-execution.html">05</a></td>
+<td>向量化 OLAP 的基础</td>
+</tr>
+<tr>
+<td>Push-based Pipeline + Event 状态机</td>
+<td><a href="./05-pipeline-execution.html">05</a></td>
+<td>比 pull 模型省一半状态切换</td>
+</tr>
+<tr>
+<td>Cascades + DPHyp 双轨优化</td>
+<td><a href="./04-planner-optimizer.html">04</a></td>
+<td>规则探索 + 大表 join 动态规划分工</td>
+</tr>
+<tr>
+<td>BlockMeta 上的 min/max + bloom + ngram</td>
+<td><a href="./06-fuse-storage.html">06</a>, <a href="./08-indexes-and-search.html">08</a></td>
+<td>在 read_partitions 阶段就把绝大多数块裁掉</td>
+</tr>
+<tr>
+<td>OpenDAL 多 Layer 栈</td>
+<td><a href="./07-io-and-cache.html">07</a></td>
+<td>重试/超时/限流/指标/重试……一次叠加</td>
+</tr>
+<tr>
+<td>三级缓存（meta in-mem / disk / object）</td>
+<td><a href="./07-io-and-cache.html">07</a></td>
+<td>把 S3 的尾延迟掩盖掉</td>
+</tr>
+<tr>
+<td>Flight RPC 节点间 Shuffle</td>
+<td><a href="./09-cluster-and-exchange.html">09</a></td>
+<td>用 Arrow 列存 zero-copy 跨节点</td>
+</tr>
+<tr>
+<td>增量 Stream（CDC）</td>
+<td><a href="./10-extensions.html">10</a></td>
+<td>在 FUSE 之上做行级增量，不需要 Kafka</td>
+</tr>
+<tr>
+<td>写入路径的 Bloom/Vector 索引旁路构建</td>
+<td><a href="./06-fuse-storage.html">06</a>, <a href="./08-indexes-and-search.html">08</a></td>
+<td>在 commit 前把索引并发打好</td>
+</tr>
+</tbody>
+</table>
+<h3>5.1 心跳与节点上下线（粗粒度）</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Q as Query 节点
+  participant CD as ClusterDiscovery
+  participant Wh as WarehouseApi (meta)
+
+  Q-&gt;&gt;CD: GlobalServices::init → ClusterDiscovery::init
+  CD-&gt;&gt;Wh: register_to_metastore
+  loop 周期续约
+    CD-&gt;&gt;Wh: heartbeat（含 flight_address / cpu / version）
+  end
+  Wh--&gt;&gt;CD: 节点列表变更通知（watch）
+  Q-&gt;&gt;Q: 跑查询时 ClusterDiscovery::discover() 取最新视图
+  Q-&gt;&gt;CD: 关停 → drop heartbeat
+  Wh--&gt;&gt;Wh: TTL 过期 → 节点摘除
+</div>
+<p>详见 09 文档；这里只为了让总览图完整。</p>
+<h2>6. 与同类系统的对照</h2>
+<div class="mermaid">
+flowchart TB
+    subgraph CK[ClickHouse]
+      CK1[本地盘 / shared-nothing]
+      CK2[Merge Tree（强相关）]
+      CK3[ZooKeeper 协调]
+    end
+    subgraph SR[StarRocks/Doris]
+      SR1[本地盘 + 共享存储双模]
+      SR2[FE/BE 分层]
+      SR3[Cascades + 物化视图]
+    end
+    subgraph SF[Snowflake]
+      SF1[FDN 内部存储]
+      SF2[Virtual Warehouse]
+      SF3[Multi-cluster 弹性]
+    end
+    subgraph DB[Databend]
+      DB1[OpenDAL → 客户对象存储]
+      DB2[FUSE Snapshot/Segment/Block]
+      DB3[Cascades + DPHyp]
+      DB4[OpenRaft Meta 独立服务]
+    end
+</div>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>ClickHouse</th>
+<th>StarRocks/Doris</th>
+<th>Snowflake</th>
+<th>Databend</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>默认存储</td>
+<td>MergeTree on local</td>
+<td>local + tablet</td>
+<td>FDN（不可见）</td>
+<td><strong>Parquet on S3 (FUSE)</strong></td>
+</tr>
+<tr>
+<td>元数据</td>
+<td>ZooKeeper / Keeper</td>
+<td>FE 内嵌 BDB</td>
+<td>厂商内部</td>
+<td><strong>OpenRaft 独立</strong></td>
+</tr>
+<tr>
+<td>计算节点状态</td>
+<td>有状态</td>
+<td>有状态</td>
+<td>无状态</td>
+<td><strong>完全无状态</strong></td>
+</tr>
+<tr>
+<td>优化器</td>
+<td>启发式 + 部分 CBO</td>
+<td>Cascades</td>
+<td>私有</td>
+<td><strong>Cascades + DPHyp</strong></td>
+</tr>
+<tr>
+<td>主语言</td>
+<td>C++</td>
+<td>C++ + Java</td>
+<td>私有</td>
+<td><strong>Rust</strong></td>
+</tr>
+<tr>
+<td>查询协议</td>
+<td>TCP/HTTP/MySQL</td>
+<td>MySQL</td>
+<td>JDBC</td>
+<td><strong>MySQL/HTTP/FlightSQL</strong></td>
+</tr>
+<tr>
+<td>Time Travel</td>
+<td>否</td>
+<td>部分</td>
+<td>是</td>
+<td><strong>原生 Git-like</strong></td>
+</tr>
+<tr>
+<td>全文/向量</td>
+<td>部分</td>
+<td>部分（向量为主）</td>
+<td>通过插件</td>
+<td><strong>Tantivy + HNSW 内置</strong></td>
+</tr>
+</tbody>
+</table>
+<h2>7. 端到端案例：<code>SELECT count(*) FROM t WHERE x &gt; 1</code></h2>
+<p>这条 SQL 会在后续每篇文档中被局部展开。这里只画<strong>进程边界</strong>视角，让你看到「请求到底在哪些进程之间流动」。</p>
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Cli as bendsql
+    participant Q as query node
+    participant Meta as meta-service
+    participant S3 as S3 (OpenDAL)
+
+    Cli-&gt;&gt;Q: HTTP POST /v1/query \n {sql: &quot;SELECT count(*) FROM t WHERE x &gt; 1&quot;}
+    Q-&gt;&gt;Q: parse_sql + Binder::bind
+    Q-&gt;&gt;Meta: get_table(&quot;default&quot;, &quot;t&quot;)  (gRPC)
+    Meta--&gt;&gt;Q: TableInfo + 最新 Snapshot location
+    Q-&gt;&gt;Q: Cascades / DPHyp 优化 → PhysicalPlan
+    Q-&gt;&gt;Q: PipelineBuilder::finalize → Pipeline DAG
+    Q-&gt;&gt;S3: GET &lt;snapshot.json&gt;
+    S3--&gt;&gt;Q: TableSnapshot
+    Q-&gt;&gt;S3: GET &lt;segment.json&gt; 数个
+    S3--&gt;&gt;Q: SegmentInfo[]
+    Q-&gt;&gt;Q: 用 BlockMeta(min/max + bloom) 裁块
+    Q-&gt;&gt;S3: 仅对存活的 block 发 GET (parallel)
+    S3--&gt;&gt;Q: Parquet bytes (压缩)
+    Q-&gt;&gt;Q: 解压 → DataBlock → FilterTransform(x&gt;1) → FinalAggregate(count)
+    Q--&gt;&gt;Cli: {data: [[N]]}
+</div>
+<p>注意第 5、7 步：<strong>Snapshot 和 Segment 都是 JSON/二进制小文件</strong>，不是数据本身；真正的列存数据在第 9 步才被并发拉取，且仅拉<strong>通过裁剪后的 block</strong>——这是 Databend 在对象存储上还能压住延迟的根本原因。</p>
+<h2>8. 未解之谜</h2>
+<ul>
+<li><strong><code>Cmd::normalize</code></strong> 做了什么具体规整？本篇仅引用其存在，未深读 (<code>src/binaries/query/cmd.rs</code>)。</li>
+<li><strong><code>set_alloc_error_hook</code></strong> + <code>TrackingGlobalAllocator</code> 的协作细节（OOM 时如何反向通知 query）。</li>
+<li><strong><code>GlobalQueriesExecutor</code></strong> 何时启用？默认关闭，<code>enable_queries_executor</code> 控制；它与普通 <code>PipelineExecutor</code> 的关系将在 05 文档中再尝试澄清。</li>
+<li>关于「Sandbox UDF + agent」，README 描述与本仓库代码的 gap：本仓库内 <strong>没有</strong>「派生子进程跑 Python」的实现，更像是通过 Arrow Flight 与外部 sandbox 服务交互。10 文档将再度核对。</li>
+</ul>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

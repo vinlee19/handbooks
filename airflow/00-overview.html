@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>00 · 概述：Airflow 解决了什么，又为何长成今天这副样子 · Airflow 源码分析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#60a5fa}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">💨 <span>Airflow 源码分析</span></span><nav class="nav"><a href="00-overview.html" class=on>概述：Airflow 解决了什么，又为何长成今天这副样子</a><a href="01-architecture.html">整体架构与组件交互</a></nav></div></header>
+<main class="wrap">
+<h1>00 · 概述：Airflow 解决了什么，又为何长成今天这副样子</h1>
+<blockquote>
+<p>本篇是整套源码分析的总纲。我们先回到 Airflow 立项之初要回答的工程问题，然后说明 Airflow 在工作流编排光谱中的独特定位，再剖析 2.x → 3.x 大幅重构背后的几个核心 AIP（Airflow Improvement Proposal）。读完本篇，您将清楚后续每一章为什么需要存在。</p>
+</blockquote>
+<hr />
+<h2>0.1 起点：批处理工作流编排的本质问题</h2>
+<p>数据工程团队几乎都遇到过同一个问题：业务方需要一组"按时跑、有依赖、能重试、出错有人知道"的离线任务。最早一代用 cron 加 shell 拼凑：</p>
+<ul>
+<li><code>0 2 * * * /opt/etl/extract.sh &amp;&amp; /opt/etl/transform.sh &amp;&amp; /opt/etl/load.sh</code></li>
+<li>出错没人告警，重跑要手动；</li>
+<li>任务依赖靠脚本顺序写死，加一个分支就要改 cron；</li>
+<li>没有可视化，谁也说不清当前哪条流程在跑。</li>
+</ul>
+<p>这套做法在任务数到达两位数时就会崩坏。后来出现了 Luigi（Spotify）和 Pinball（Pinterest）等工具，它们引入了"任务依赖图"和"任务输出（Target）"的概念，但仍然偏向单机、缺少调度集群、UI 简陋。<strong>Airbnb 在 2014 年开源 Airflow 的核心动机</strong>正是要在这种背景下给出一个"程序化、可调度、可观测、可扩展"的工作流编排平台。Airflow <code>README.md</code> 中的定义直截了当：</p>
+<blockquote>
+<p>Apache Airflow (or simply Airflow) is a platform to programmatically author, schedule, and monitor workflows.
+When workflows are defined as code, they become more maintainable, versionable, testable, and collaborative.</p>
+</blockquote>
+<p>把这句话拆开看，里面藏着 Airflow 的全部基因：</p>
+<ol>
+<li><strong>Programmatically author</strong> — 工作流用 Python 代码写，而不是 YAML / GUI；可以版本控制、可以单元测试、可以用任何抽象（循环、参数化、动态生成）。</li>
+<li><strong>Schedule</strong> — 内置中央调度器，根据 <code>schedule</code>（cron 或自定义 timetable）触发执行，并管理"什么时候该跑、跑哪一份历史数据"。</li>
+<li><strong>Monitor</strong> — 内置 Web UI 展示运行状态、日志、依赖图、运行时长、失败原因。</li>
+</ol>
+<p>这就把"调度 + 执行 + 可观测"打包成一个产品。配合"程序化定义"的核心理念，Airflow 在数据工程领域成为事实标准。</p>
+<h3>0.1.1 Airflow 的目标场景与边界</h3>
+<p>Airflow 官方文档 <code>airflow-core/docs/core-concepts/overview.rst</code> 明确指出：</p>
+<blockquote>
+<p>Airflow targets mostly static and slowly changing workflows.</p>
+</blockquote>
+<p>这是一个常被忽视的边界。Airflow 假设工作流的拓扑结构在多次运行之间<strong>相对稳定</strong>——任务 A 永远跑在任务 B 之前，Dag 在每天 02:00 触发的"形状"几乎一样。在这种假设下，提前序列化 Dag、提前在 UI 渲染依赖图、提前为每个 TaskInstance 写入数据库才合理。如果业务真正需要的是"事件驱动、毫秒级、任务图每次都不同"的流式计算，那应当使用 Flink / Kafka Streams / Spark Streaming，而不是 Airflow。</p>
+<p>下图把 Airflow 放回它的同行光谱里：</p>
+<p><img alt="Workflow orchestration landscape" src="diagrams/00-problem-landscape.svg" /></p>
+<ul>
+<li><strong>左端：cron / systemd timer</strong> — 单点、零依赖、零重试。</li>
+<li><strong>中左：Luigi</strong> — 任务依赖 + 输出文件作为状态，去中心化，但缺少调度器和 UI。</li>
+<li><strong>中央：Airflow</strong> — DAG-as-code、中心化 Scheduler、序列化 DAG、Execution API、Provider 生态。</li>
+<li><strong>中右：Prefect</strong> — 函数式 dataflow、强调"流" 与"任务"统一抽象，动态优先。</li>
+<li><strong>右中：Dagster</strong> — Software-defined Asset 思路从一开始就把"数据资产"作为一等公民。</li>
+<li><strong>右端：Flink / Kafka Streams</strong> — 流式、事件驱动、低延迟，工作流定义和编排策略截然不同。</li>
+</ul>
+<p>把 Airflow 称为"批处理工作流编排"是准确的；称它为"调度器"则过于狭窄——调度只是它三大职责之一。</p>
+<h2>0.2 核心理念之一：DAG-as-code</h2>
+<p>Airflow 选择把工作流写成 Python 代码而不是 YAML / DSL，有三重价值：</p>
+<ol>
+<li><strong>可组合性</strong>：循环、条件、函数、类、模块——Python 能做到的，Airflow 的 Dag 全部都能做。</li>
+<li><strong>可版本化、可测试</strong>：Dag 文件就是普通的 <code>.py</code>，可以 <code>pytest</code>，可以 <code>git diff</code>，可以 Code Review。</li>
+<li><strong>可动态生成</strong>：很多业务场景下需要"按某张配置表生成 100 个相似 Dag"，纯文本 YAML 做不到，Python 一行 <code>for</code> 就能。</li>
+</ol>
+<p>举个最小可运行的例子（用 Airflow 3.x 的 TaskFlow API，AIP-31）：</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #FF4689">from</span><span style="color: #F8F8F2"> airflow.sdk </span><span style="color: #FF4689">import</span> <span style="color: #F8F8F2">dag,</span> <span style="color: #F8F8F2">task</span>
+<span style="color: #FF4689">from</span><span style="color: #F8F8F2"> datetime </span><span style="color: #FF4689">import</span> <span style="color: #F8F8F2">datetime</span>
+
+<span style="color: #A6E22E">@dag</span><span style="color: #F8F8F2">(schedule</span><span style="color: #FF4689">=</span><span style="color: #E6DB74">&quot;0 2 * * *&quot;</span><span style="color: #F8F8F2">,</span> <span style="color: #F8F8F2">start_date</span><span style="color: #FF4689">=</span><span style="color: #F8F8F2">datetime(</span><span style="color: #AE81FF">2026</span><span style="color: #F8F8F2">,</span> <span style="color: #AE81FF">1</span><span style="color: #F8F8F2">,</span> <span style="color: #AE81FF">1</span><span style="color: #F8F8F2">),</span> <span style="color: #F8F8F2">catchup</span><span style="color: #FF4689">=</span><span style="color: #66D9EF">False</span><span style="color: #F8F8F2">)</span>
+<span style="color: #66D9EF">def</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">daily_etl</span><span style="color: #F8F8F2">():</span>
+    <span style="color: #A6E22E">@task</span>
+    <span style="color: #66D9EF">def</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">extract</span><span style="color: #F8F8F2">()</span> <span style="color: #FF4689">-&gt;</span> <span style="color: #F8F8F2">dict:</span>
+        <span style="color: #66D9EF">return</span> <span style="color: #F8F8F2">{</span><span style="color: #E6DB74">&quot;rows&quot;</span><span style="color: #F8F8F2">:</span> <span style="color: #F8F8F2">[</span><span style="color: #AE81FF">1</span><span style="color: #F8F8F2">,</span> <span style="color: #AE81FF">2</span><span style="color: #F8F8F2">,</span> <span style="color: #AE81FF">3</span><span style="color: #F8F8F2">]}</span>
+
+    <span style="color: #A6E22E">@task</span>
+    <span style="color: #66D9EF">def</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">transform</span><span style="color: #F8F8F2">(payload:</span> <span style="color: #F8F8F2">dict)</span> <span style="color: #FF4689">-&gt;</span> <span style="color: #F8F8F2">int:</span>
+        <span style="color: #66D9EF">return</span> <span style="color: #F8F8F2">sum(payload[</span><span style="color: #E6DB74">&quot;rows&quot;</span><span style="color: #F8F8F2">])</span>
+
+    <span style="color: #A6E22E">@task</span>
+    <span style="color: #66D9EF">def</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">load</span><span style="color: #F8F8F2">(total:</span> <span style="color: #F8F8F2">int)</span> <span style="color: #FF4689">-&gt;</span> <span style="color: #66D9EF">None</span><span style="color: #F8F8F2">:</span>
+        <span style="color: #F8F8F2">print(</span><span style="color: #E6DB74">f&quot;loaded total={</span><span style="color: #F8F8F2">total</span><span style="color: #E6DB74">}&quot;</span><span style="color: #F8F8F2">)</span>
+
+    <span style="color: #F8F8F2">load(transform(extract()))</span>
+
+<span style="color: #F8F8F2">daily_etl()</span>
+</code></pre></div>
+
+<p>几行代码里就交织了所有 Airflow 概念：</p>
+<ul>
+<li><code>@dag</code> 是 Dag 装饰器，把这个函数注册为一个 Dag；<code>schedule="0 2 * * *"</code> 是 cron 表达式。</li>
+<li><code>@task</code> 把普通函数升格为 Operator；返回值会自动放入 <strong>XCom</strong>，下游可直接接收。</li>
+<li><code>load(transform(extract()))</code> 这条语句<strong>不会真的调用三个函数</strong>，而是建立任务依赖关系图（这是 TaskFlow API 的魔法，依赖通过参数传递隐式建立）。</li>
+<li><code>airflow.sdk</code> 是 Airflow 3.x 引入的公共 SDK 命名空间（AIP-72），独立于 <code>airflow-core</code> 内部模块。</li>
+</ul>
+<p>这种"看着像普通 Python，跑起来构造一个 DAG"的写法，正是 Airflow 区别于其他工具最显著的认知优势。</p>
+<h2>0.3 三原则：Dynamic / Extensible / Flexible</h2>
+<p><code>README.md:90-94</code> 显式列出 Airflow 三条核心原则：</p>
+<blockquote>
+<p><strong>Dynamic</strong>: Airflow pipelines are configuration as code (Python), allowing for dynamic pipeline generation.
+<strong>Extensible</strong>: Easily define your own operators, executors and extend the library so it fits the level of abstraction that suits your environment.
+<strong>Flexible</strong>: Pipelines are parameterized, utilizing the powerful Jinja templating engine.</p>
+</blockquote>
+<p>这三条不是口号，而是直接对应代码组织：</p>
+<table>
+<thead>
+<tr>
+<th>原则</th>
+<th>对应能力</th>
+<th>源码体现</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Dynamic</td>
+<td>动态生成 Dag、动态映射任务（dynamic task mapping）</td>
+<td><code>task-sdk/src/airflow/sdk/definitions/decorators/</code>、<code>task-mapping</code> 相关模块</td>
+</tr>
+<tr>
+<td>Extensible</td>
+<td>自定义 Operator / Hook / Executor / Auth Manager / Secrets Backend</td>
+<td><code>providers/</code> 90+ 包，<code>shared/secrets_backend/</code>，多 Executor 路由</td>
+</tr>
+<tr>
+<td>Flexible</td>
+<td>Jinja 模板渲染（<code>{{ ds }}</code>、<code>{{ ti.xcom_pull(...) }}</code>）、Param、Variable</td>
+<td><code>shared/template_rendering/</code>、<code>task-sdk/.../definitions/param.py</code></td>
+</tr>
+</tbody>
+</table>
+<p>我们将在第 5 篇（Task SDK）展开 <em>Dynamic</em>、第 10 篇（Provider）展开 <em>Extensible</em>、第 5 / 7 篇展开 <em>Flexible</em>。</p>
+<h2>0.4 与 Prefect / Dagster / Luigi 的差异</h2>
+<p>下表是一份偏工程视角的对比（不试图全面，仅强调 Airflow 的特异点）：</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Airflow</th>
+<th>Prefect 2.x/3.x</th>
+<th>Dagster</th>
+<th>Luigi</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>工作流抽象</td>
+<td>DAG (任务图)</td>
+<td>Flow + Task（函数式）</td>
+<td>Job + Op-Graph + Asset</td>
+<td>Task + Target</td>
+</tr>
+<tr>
+<td>一等公民</td>
+<td>Task（任务）</td>
+<td>Flow / Task</td>
+<td>Software-defined Asset</td>
+<td>Target（输出文件）</td>
+</tr>
+<tr>
+<td>调度</td>
+<td>中心 Scheduler 进程，cron / Timetable</td>
+<td>API 服务器轮询 / 推送</td>
+<td>Daemon + Sensor</td>
+<td>去中心，靠外部触发</td>
+</tr>
+<tr>
+<td>用户代码隔离</td>
+<td>DFP 独立解析，Scheduler 不执行用户代码</td>
+<td>Flow 在执行时编译</td>
+<td>Op 在 daemon 编排，op 函数在 worker 跑</td>
+<td>单机执行</td>
+</tr>
+<tr>
+<td>数据资产</td>
+<td>Asset（AIP-60、AIP-76），可作为调度触发</td>
+<td>不主推</td>
+<td>Asset 优先</td>
+<td>Target 类似但缺少血缘</td>
+</tr>
+<tr>
+<td>长等待操作</td>
+<td>Deferrable Operator + Triggerer，事件驱动</td>
+<td><code>await</code> 语义</td>
+<td>Sensor</td>
+<td>阻塞执行</td>
+</tr>
+<tr>
+<td>多租户</td>
+<td>Multi-Team（AIP-67，Bundle 归属）</td>
+<td>工作池 / 工作队列</td>
+<td>Code Location</td>
+<td>不支持</td>
+</tr>
+<tr>
+<td>Provider 生态</td>
+<td>90+ 独立包</td>
+<td>较少集成包</td>
+<td>集成多但偏官方</td>
+<td>极少</td>
+</tr>
+<tr>
+<td>部署形态</td>
+<td>Local / Docker / Celery / Kubernetes / Edge</td>
+<td>Cloud 主推、Self-host 可</td>
+<td>OSS + Cloud</td>
+<td>Self-host</td>
+</tr>
+</tbody>
+</table>
+<p>最关键的几条差异：</p>
+<ol>
+<li><strong>Airflow 把"任务"作为一等公民，Dagster 把"资产"作为一等公民</strong>。Airflow 在 AIP-60 后引入 Asset，但 Asset 是任务的"产物"，而不是"工作流的中心"。Dagster 反过来——Asset 先于 Job 存在，Op 是为 Asset 服务的。两条路径各有取舍：Airflow 的方式对存量"过程式 ETL"友好；Dagster 的方式对"数据血缘 + 数据契约"导向友好。</li>
+<li><strong>Airflow 是唯一明确把"长等待"独立成进程的</strong>。这就是 Triggerer（AIP-48）：成千上万个传感器或定时器，如果占着 worker slot，资源浪费极大。Airflow 把它们抽出来用 asyncio 跑。Prefect / Dagster 的 sensor 也是异步的，但抽象层级不同。</li>
+<li><strong>Airflow 的 Provider 生态是最大的优势</strong>。90+ 独立版本号的包（amazon、google、databricks、snowflake、slack 等等）使得集成市面上几乎任何系统都"开箱即用"。</li>
+</ol>
+<h2>0.5 Airflow 2.x → 3.x 架构演进</h2>
+<p>Airflow 3.0 于 2025 年 4 月发布，是自 1.x → 2.x 之后最大的一次架构变化。其根本驱动力是<strong>安全隔离与多租户</strong>。下图对比两个版本：</p>
+<p><img alt="Airflow 2.x vs 3.x" src="diagrams/00-airflow-2-vs-3.svg" /></p>
+<p>差异要点（每一条都对应后续章节）：</p>
+<h3>0.5.1 Webserver → API Server</h3>
+<ul>
+<li>2.x：Webserver 由 Flask-AppBuilder 实现，承担 UI 渲染 + REST API + 认证。</li>
+<li>3.x：API Server 由 FastAPI 实现，分为 <strong>Public REST API</strong>（UI 和外部客户端用）和 <strong>Execution API</strong>（Worker / Triggerer / DFP 用）。</li>
+<li>UI 完全前后端分离：React 19 + Vite + Chakra UI + TanStack Query，OpenAPI 自动生成 TypeScript 客户端。</li>
+<li>详见第 7 篇 <a href="./07-execution-api.html"><code>07-execution-api.md</code></a>。</li>
+</ul>
+<h3>0.5.2 Scheduler 不再执行用户代码</h3>
+<ul>
+<li>2.x：Scheduler 在内部启动 DAG File Processor 子进程，但它们共享配置、共享 DB 连接，逻辑上仍有耦合。</li>
+<li>3.x：DAG Processor 完全独立进程（甚至独立部署，AIP-43），Scheduler 只读取 <code>SerializedDagModel</code> 表中的 JSON 表示；用户 Python 代码绝不会在 Scheduler 上下文中 import、import 失败也不会让 Scheduler 崩溃。</li>
+<li>详见第 2 篇 <a href="./02-dag-processing.html"><code>02-dag-processing.md</code></a> 和第 3 篇 <a href="./03-scheduler.html"><code>03-scheduler.md</code></a>。</li>
+</ul>
+<h3>0.5.3 Worker 不再连接元数据库</h3>
+<ul>
+<li>2.x：CeleryExecutor、KubernetesExecutor 启动的 worker 进程持有数据库凭据，可以直接 <code>SELECT * FROM task_instance</code> 或 <code>UPDATE task_instance SET state=...</code>。如果用户代码恶意（或仅仅是写错），可以污染整个系统。</li>
+<li>3.x：Worker 通过 <strong>Execution API + JWT</strong> 与 API Server 通信。每个 TaskInstance 启动时，Scheduler 下发的 JWT 仅作用于这一个 TI（claim <code>sub = task_instance_id</code>，scope <code>ti:self</code>）；API Server 校验 JWT 后才允许 XCom / Variable / Connection 读写。</li>
+<li>进一步，<strong>Worker 内部还分为 Supervisor（持 JWT）+ Task Runner（用户代码，无 JWT）</strong>。两者通过 <code>comms.py</code> 中定义的二进制 msgpack 协议在本机管道通信。即使用户代码 <code>os.environ</code> 也读不到 JWT。</li>
+<li>详见第 5 篇 <a href="./05-task-sdk-runtime.html"><code>05-task-sdk-runtime.md</code></a> 和第 7 篇 <a href="./07-execution-api.html"><code>07-execution-api.md</code></a>。</li>
+</ul>
+<h3>0.5.4 DAG Bundle 抽象（AIP-66）</h3>
+<ul>
+<li>2.x：Dag 文件存储位置由 <code>dags_folder</code> 配置决定，单点单路径。</li>
+<li>3.x：<strong>Bundle</strong> 是 Dag 文件的逻辑容器。可以是本地路径、Git 仓库（自动 pull / checkout 不同分支）、S3、自定义实现。每个 Bundle 有自己的版本号、刷新策略。</li>
+<li>与 Multi-Team（AIP-67）配合：不同团队拥有不同 Bundle，调度时按 Bundle 隔离资源。</li>
+<li>详见第 2 篇。</li>
+</ul>
+<h3>0.5.5 Asset 取代 Dataset（AIP-60 → AIP-76）</h3>
+<ul>
+<li>2.4 引入 Dataset，作为数据驱动调度的初步实现。</li>
+<li>3.x 把 Dataset 重命名为 <strong>Asset</strong>，并扩展出 <code>AssetAlias</code>、<code>AssetWatcher</code>、运行时分区（AIP-76）、<code>AssetDagRunQueue</code> 表。</li>
+<li>详见第 8 篇 <a href="./08-asset-scheduling.html"><code>08-asset-scheduling.md</code></a>。</li>
+</ul>
+<h2>0.6 主要 AIP 速览</h2>
+<p>下图按时间排列了 Airflow 2.0 至 3.x 期间最重要的几个 AIP：</p>
+<p><img alt="Airflow AIP timeline" src="diagrams/00-aip-timeline.svg" /></p>
+<p>逐一展开说明每个 AIP 的"动机—成果"：</p>
+<h3>AIP-31 — TaskFlow API（2.0，2020）</h3>
+<p><strong>动机</strong>：传统 Airflow 写 Dag 要先 <code>from airflow.operators.python import PythonOperator</code>，再用 <code>PythonOperator(task_id="x", python_callable=fn, op_kwargs={...})</code>，依赖关系用 <code>&gt;&gt;</code> 写，啰嗦。</p>
+<p><strong>成果</strong>：<code>@dag</code> / <code>@task</code> 装饰器；返回值通过 XCom 自动传递；调用即建立依赖（<code>load(transform(extract()))</code>）。代码长度通常缩减 40~60%。源码：<code>task-sdk/src/airflow/sdk/definitions/decorators/</code>。</p>
+<h3>AIP-39 — Logical Date（2.2，2021）</h3>
+<p><strong>动机</strong>：早期的 <code>execution_date</code> 既表示"这次跑的逻辑时间窗口"，又被当成"实际触发时间"，语义混淆。</p>
+<p><strong>成果</strong>：把"逻辑时间"称为 <code>logical_date</code>，"实际开始时间"称为 <code>data_interval_start</code> / <code>data_interval_end</code>，"调度触发时间"称为 <code>run_after</code>。Timetable 接口（<code>airflow.timetables.*</code>）允许自定义"何时算一次新运行"。</p>
+<h3>AIP-43 — DAG Processor 独立化（2.3+，2022）</h3>
+<p><strong>动机</strong>：Scheduler 进程内执行 Dag 解析，意味着用户的 <code>import xxx</code> 失败、循环 import、长耗时 import 都会拖垮调度器。</p>
+<p><strong>成果</strong>：DAG Processor 作为独立进程，可以在与 Scheduler 不同的机器上运行，甚至面向多团队部署多个 DFP。源码：<code>airflow-core/src/airflow/dag_processing/manager.py</code>、<code>processor.py</code>、<code>airflow-core/src/airflow/jobs/dag_processor_job_runner.py</code>。</p>
+<h3>AIP-48 — Deferrable Operators（2.2，2021）</h3>
+<p><strong>动机</strong>：传感器（Sensor）要等外部条件——比如某张表是否到达、某个文件是否生成。早期 Sensor 是 worker 上一个进程一直阻塞，几千个 Sensor 就要几千个 worker slot，浪费极大。</p>
+<p><strong>成果</strong>：Operator 可以抛出 <code>TaskDeferred</code> 异常，把一个 <code>Trigger</code> 对象交给 Triggerer 进程；Triggerer 用 asyncio 在一个进程内同时托管几百上千个 Trigger；事件到达后再恢复 TaskInstance。源码：<code>airflow-core/src/airflow/jobs/triggerer_job_runner.py</code>、<code>airflow-core/src/airflow/triggers/base.py</code>、<code>airflow-core/src/airflow/models/trigger.py</code>。</p>
+<h3>AIP-44 → AIP-72 — Internal API / Task SDK（2.5 → 3.0）</h3>
+<p><strong>动机</strong>：worker 与控制平面之间最初是直接共享 DB。AIP-44 试图引入"内部 RPC"层。经过几年迭代，最终演化为 <strong>Task SDK + Execution API</strong> 的二元结构。</p>
+<p><strong>成果</strong>：
+- <code>airflow.sdk</code> 是公共 API 命名空间，DAG 作者只导入这个；与 <code>airflow-core</code> 内部完全解耦。
+- Execution API 是 worker / triggerer / DFP 与控制平面之间唯一的接口，JWT 隔离。
+- 这是 Airflow 3.x 最大的架构变化。</p>
+<p>源码：<code>task-sdk/</code>、<code>airflow-core/src/airflow/api_fastapi/execution_api/</code>。</p>
+<h3>AIP-60 → AIP-76 — Asset 模型与分区资产（2.4 → 3.x）</h3>
+<p><strong>动机</strong>：让"数据"成为调度的一等公民——上游任务"产出"某资产时，"消费"该资产的 Dag 自动触发，比传统 Sensor 更自然。</p>
+<p><strong>成果</strong>：
+- AIP-60 引入 Dataset（后改名 Asset），增加 <code>AssetEvent</code>、<code>AssetDagRunQueue</code> 等表。
+- AIP-76 引入分区资产——例如 <code>customer_orders / partition=2026-05-24</code> 才被视为一个具体资产，触发只需关心相关分区。
+- 源码：<code>airflow-core/src/airflow/models/asset.py</code>、<code>task-sdk/src/airflow/sdk/definitions/asset.py</code>。</p>
+<h3>AIP-66 — DAG Bundles（2.10，2024）</h3>
+<p><strong>动机</strong>：原本 <code>dags_folder</code> 只能指向一个目录。如果不同团队的 Dag 想分仓库管理、不同版本回滚、不同 Git 分支并存——做不到。</p>
+<p><strong>成果</strong>：Bundle 抽象，可以是本地、Git、S3、ZIP 等；每个 Bundle 有 <code>version</code>，DFP 可以并行管理多个 Bundle，调度时记录 TI 所属 Bundle 版本。源码：<code>airflow-core/src/airflow/dag_processing/bundles/</code>。</p>
+<h3>AIP-67 — Multi-Team（3.x）</h3>
+<p><strong>动机</strong>：单个 Airflow 实例如何同时服务多个产品团队？Variables、Connections、Secrets、Bundle 都需要隔离。</p>
+<p><strong>成果</strong>：把 Bundle 归属到 Team，DAG 调度路由到该 Team 的资源池。注意 Airflow 的 Multi-Team <strong>不是</strong>完全的多租户（不是 K8s 那种 namespace 隔离），而是逻辑级别的隔离。AIP-67 落地仍在持续推进，相关代码散落在 <code>airflow-core/src/airflow/auth/</code> 和 <code>airflow-core/src/airflow/models/</code>。</p>
+<h3>AIP-79 — 移除 FAB 作为核心依赖（3.x）</h3>
+<p><strong>动机</strong>：Flask-AppBuilder 是 Airflow 2.x 的 UI / Auth / RBAC 基础，但它是 Flask 2 体系下的产物，迭代缓慢，且把 UI 和后端高度耦合。</p>
+<p><strong>成果</strong>：FAB 移到可选 provider，核心 UI 改为 React + FastAPI；Auth 抽象出 <code>AuthManager</code> 接口（<code>airflow-core/src/airflow/auth/managers/</code>），FAB Auth 只是其中一种实现。</p>
+<h3>AIP-99 / AIP-103 — Agentic / Task State Backend（进行中）</h3>
+<p><strong>动机</strong>：随着 LLM Agent 进入工作流（Anthropic / OpenAI 等供应商纷纷推出 MCP），Airflow 需要原生支持"长时间运行、多轮、可中断、可恢复"的任务。</p>
+<p><strong>成果</strong>：目前仍在 RFC 阶段，相关原型代码可在 <code>task-sdk/src/airflow/sdk/definitions/</code> 与 <code>providers/</code> 下看到。</p>
+<h2>0.7 整个生态怎么拼起来</h2>
+<p>下图把 Airflow <code>main</code> 分支当前的代码组织划成四个圈层：</p>
+<p><img alt="Airflow 3.x ecosystem" src="diagrams/00-ecosystem-overview.svg" /></p>
+<ul>
+<li><strong>用户编写层（黄）</strong>：DAG 作者只接触 <code>airflow.sdk</code>、Dag 文件、Bundle 配置、可选 Plugin、UI。这是 Airflow 的"公共契约"。</li>
+<li><strong>控制平面（蓝）</strong>：Scheduler / DFP / API Server / Models / Executor 五大件，能直接访问 metadata DB。CLAUDE.md 中明确写："Workers do not receive database credentials and genuinely cannot access the metadata database directly。"</li>
+<li><strong>执行平面（绿）</strong>：Worker、Triggerer、远程 Edge worker。不连 DB，仅通过 Execution API。</li>
+<li><strong>共享库（紫）</strong>：<code>shared/</code> 下 17 个独立分发，跨控制平面 / SDK / 执行平面共享，但每方可以独立升级。</li>
+<li><strong>扩展层（红）</strong>：<code>providers/</code> 90+ 独立版本号包，按需安装；<code>chart/</code>、<code>docker/</code>、<code>airflow-ctl/</code>、<code>devel-common/</code> 各司其职。</li>
+</ul>
+<p><code>uv workspace</code> 把这些子分发组织成一个 monorepo，但每个子分发依然有自己的 <code>pyproject.toml</code>、自己的版本号、自己的发布周期。这就是 Airflow 在"巨型 monorepo"与"独立组件"两种诉求之间的工程化平衡。</p>
+<h2>0.8 后续章节如何展开</h2>
+<p>到此，您应当对 Airflow 的定位、设计哲学、版本演进有了完整的鸟瞰。下面 10 篇会按以下逻辑深入：</p>
+<table>
+<thead>
+<tr>
+<th>章节</th>
+<th>您将学到</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>01 架构</td>
+<td>9 大架构边界、5 类主进程、4 种部署形态、安全边界、HA 模型</td>
+</tr>
+<tr>
+<td>02 DAG Processor</td>
+<td>从 Bundle 取文件 → 子进程解析 → 写 SerializedDagModel 的完整流水线</td>
+</tr>
+<tr>
+<td>03 Scheduler</td>
+<td><code>_do_scheduling</code> 主循环、<code>FOR UPDATE SKIP LOCKED</code> HA 行锁、Pool slot 模型</td>
+</tr>
+<tr>
+<td>04 Executor</td>
+<td>BaseExecutor 抽象、LocalExecutor、CeleryExecutor、KubernetesExecutor 各自的派发流程</td>
+</tr>
+<tr>
+<td>05 Task SDK + Worker</td>
+<td><code>@task</code> 装饰器原理、Supervisor / Task Runner 双进程、msgpack 协议</td>
+</tr>
+<tr>
+<td>06 Triggerer</td>
+<td>Asyncio + greenback 的事件循环结构、defer/resume 完整时序</td>
+</tr>
+<tr>
+<td>07 Execution API</td>
+<td>FastAPI + Cadwyn 版本控制、JWT <code>ti:self</code> 校验、自动续期 middleware</td>
+</tr>
+<tr>
+<td>08 Asset</td>
+<td>Asset / AssetEvent / AssetDagRunQueue 三件套、资产驱动调度</td>
+</tr>
+<tr>
+<td>09 模型</td>
+<td>17 张核心表、关键索引、迁移演进、状态枚举</td>
+</tr>
+<tr>
+<td>10 Provider</td>
+<td>provider.yaml schema、entry points 发现、Hook / Operator / Executor 扩展点</td>
+</tr>
+</tbody>
+</table>
+<p>读完这套文档，您应能在任意一个 Airflow 主进程崩溃日志、任意一段 scheduler 慢查询、任意一个 worker 报错时，知道"这是哪一层、应该看哪个文件、为什么是这样设计的"。</p>
+<hr />
+<p>下一篇：<a href="./01-architecture.html"><code>01-architecture.md</code></a> — 我们把 9 大架构边界逐条展开，画清楚物理部署图（K8s、Celery 两种形态），并梳理高可用模型。</p>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

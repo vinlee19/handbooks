@@ -1,0 +1,903 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>03 · 逻辑计划与优化器 · Daft 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#a3e635}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">🐡 <span>Daft 源码深度解析</span></span><nav class="nav"><a href="index.html">总览</a><a href="00-总览.html">Daft 总览:从 `df.collect()` 到 Arrow Buffer</a><a href="01-核心类型与多模态.html">核心类型与多模态:Series / RecordBatch / MicroPartition / Image</a><a href="02-表达式DSL与函数.html">表达式 DSL 与函数:三阶段列解析、`Expr` 枚举、`FunctionRegistry`</a><a href="03-逻辑计划与优化器.html" class=on>逻辑计划与优化器</a><a href="04-Swordfish本地执行.html">Swordfish 本地执行</a><a href="05-分布式执行.html">分布式执行</a><a href="06-IO与扫描下推.html">IO 与扫描下推</a><a href="07-SQL与Python桥.html">SQL 与 Python 桥</a></nav></div></header>
+<main class="wrap">
+<h1>03 · 逻辑计划与优化器</h1>
+<blockquote>
+<p>基准 commit: <code>fa0d066204eae630962af7b22a5ab559ecd454fb</code> (v0.7.10-13)
+文档版本: v0.3.0-dev0 / Rust 2024
+阅读前置: <a href="./00-总览.html">00 总览</a> · <a href="./02-表达式DSL与函数.html">02 表达式DSL与函数</a></p>
+</blockquote>
+<hr />
+<h2>1. 解决了什么问题</h2>
+<p>DataFrame / SQL 的"声明式"前端,落到执行器之前必须先变成一棵<strong>可重写、可推理、可比较代价</strong>的中间表示。Daft 选择<strong>自研 LogicalPlan IR</strong>(不依赖 DataFusion),原因有三:</p>
+<ol>
+<li><strong>多模态算子不在 DataFusion 词汇表里</strong>——<code>UDFProject</code>、<code>VLLMProject</code>、<code>Window</code>、<code>MonotonicallyIncreasingId</code>、<code>StageCheckpointKeys</code>、<code>Shard</code>、<code>AsofJoin</code> 都需要专用变体;</li>
+<li><strong>Push-down 边界更激进</strong>——Daft 的 <code>Pushdowns</code> 把 filter / projection / limit / aggregation / sharder 一并下到 <code>ScanTask</code>,而不是只下投影和 filter;</li>
+<li><strong>优化是 Python 可观测的</strong>——<code>LogicalPlanBuilder.optimize_async</code> 接受一个 <code>observer</code> 回调,每个 batch 的中间快照都能 dump 给 dashboard。</li>
+</ol>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>DataFusion <code>LogicalPlan</code></th>
+<th>Spark Catalyst</th>
+<th>Daft <code>LogicalPlan</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>多模态算子</td>
+<td>无</td>
+<td>无</td>
+<td><code>UDFProject</code> / <code>VLLMProject</code> / <code>Explode</code> / <code>Window</code></td>
+</tr>
+<tr>
+<td>Pushdown 单元</td>
+<td>filter+projection</td>
+<td>Catalyst rules</td>
+<td><code>Pushdowns { filters, partition_filters, columns, limit, sharder, aggregation }</code></td>
+</tr>
+<tr>
+<td>Join 重排</td>
+<td>DP-CCP / heuristic</td>
+<td>DP / GOO</td>
+<td>DP-CCP(可选)+ 启发式左深</td>
+</tr>
+<tr>
+<td>子查询消除</td>
+<td>unnest pass</td>
+<td>rewrite rules</td>
+<td><code>UnnestScalarSubquery</code> + <code>UnnestPredicateSubquery</code></td>
+</tr>
+<tr>
+<td>Stats 注入</td>
+<td>在物理层</td>
+<td>在物理层</td>
+<td><code>EnrichWithStats</code> 是逻辑层 batch</td>
+</tr>
+<tr>
+<td>Cycle 检测</td>
+<td>否</td>
+<td>否</td>
+<td><code>LogicalPlanTracker</code> 哈希去重</td>
+</tr>
+</tbody>
+</table>
+<p><strong>问题空间地图</strong>(逻辑层职责)</p>
+<div class="mermaid">
+flowchart LR
+    A[DataFrame Python API] --&gt;|method calls| B[LogicalPlanBuilder]
+    SQL[daft.sql] --&gt;|parse| B
+    B --&gt; C[Arc&amp;lt;LogicalPlan&amp;gt; 树]
+    C --&gt;|Optimizer 11 batches| D[优化后 LogicalPlan]
+    D --&gt;|translate.rs| E[LocalPhysicalPlan / DistributedPhysicalPlan]
+
+    style C fill:#fff2cc
+    style D fill:#d5e8d4
+</div>
+<hr />
+<h2>2. 整体设计</h2>
+<h3>2.1 模块拓扑</h3>
+<div class="mermaid">
+flowchart TD
+    subgraph &quot;外部输入&quot;
+        py[daft / dataframe.py]
+        sql[daft-sql]
+    end
+
+    subgraph &quot;daft-logical-plan crate&quot;
+        builder[builder/&lt;br/&gt;LogicalPlanBuilder]
+        plan[logical_plan.rs&lt;br/&gt;LogicalPlan enum]
+        ops[ops/&lt;br/&gt;Source/Project/Filter/...]
+        treenode[treenode.rs&lt;br/&gt;impl TreeNode for LogicalPlan]
+        opt[optimization/&lt;br/&gt;optimizer.rs]
+        rules[optimization/rules/&lt;br/&gt;30+ rules]
+        tracker[optimization/&lt;br/&gt;logical_plan_tracker.rs]
+        stats[stats.rs&lt;br/&gt;PlanStats]
+    end
+
+    subgraph &quot;common crates&quot;
+        tn[common/treenode&lt;br/&gt;TreeNode trait]
+        algebra[daft-algebra&lt;br/&gt;boolean ops + simplify]
+    end
+
+    subgraph &quot;下游&quot;
+        local[daft-local-plan]
+        dist[daft-distributed]
+    end
+
+    py --&gt; builder
+    sql --&gt; builder
+    builder --&gt; plan
+    plan --&gt; ops
+    plan --&gt; treenode
+    treenode --&gt; tn
+    builder --&gt; opt
+    opt --&gt; rules
+    opt --&gt; tracker
+    rules --&gt; algebra
+    rules --&gt; plan
+    plan --&gt; stats
+    builder --&gt; local
+    builder --&gt; dist
+
+    style plan fill:#d5e8d4
+    style opt fill:#fff2cc
+    style rules fill:#fff2cc
+</div>
+<h3>2.2 关键 trait/类型类图</h3>
+<div class="mermaid">
+classDiagram
+    class LogicalPlan {
+        +schema() SchemaRef
+        +children() Vec~&amp;Self~
+        +with_new_children(&amp;[Arc~Self~]) Self
+        +required_columns() RequiredCols
+        +stats_state() &amp;StatsState
+        +name() &amp;&#x27;static str
+        +plan_id() &amp;Option~usize~
+    }
+
+    class TreeNode {
+        &lt;&lt;trait&gt;&gt;
+        +apply(f) Result~TreeNodeRecursion~
+        +transform_down(f) Result~Transformed~Self~~
+        +transform_up(f) Result~Transformed~Self~~
+        +rewrite(rewriter) Result~Transformed~Self~~
+    }
+
+    class OptimizerRule {
+        &lt;&lt;trait&gt;&gt;
+        +try_optimize(Arc~LogicalPlan~) DaftResult~Transformed~Arc~LogicalPlan~~~
+    }
+
+    class Optimizer {
+        +rule_batches: Vec~RuleBatch~
+        +config: OptimizerConfig
+        +optimize(plan, observer) DaftResult~Arc~LogicalPlan~~
+    }
+
+    class RuleBatch {
+        +rules: Vec~Box~dyn OptimizerRuleInBatch~~
+        +strategy: RuleExecutionStrategy
+        +max_passes(&amp;OptimizerConfig) usize
+    }
+
+    class RuleExecutionStrategy {
+        &lt;&lt;enum&gt;&gt;
+        Once
+        FixedPoint(Option~usize~)
+    }
+
+    class LogicalPlanTracker {
+        -seen_hashes: HashSet~u64~
+        +add_plan(&amp;LogicalPlan) bool
+    }
+
+    LogicalPlan ..|&gt; TreeNode
+    Optimizer &quot;1&quot; o-- &quot;*&quot; RuleBatch
+    RuleBatch &quot;1&quot; o-- &quot;*&quot; OptimizerRule
+    RuleBatch o-- RuleExecutionStrategy
+    Optimizer ..&gt; LogicalPlanTracker : 检测 cycle
+</div>
+<p>源码基准:</p>
+<ul>
+<li><code>src/daft-logical-plan/src/logical_plan.rs:35</code> — <code>LogicalPlan</code> 枚举(28 变体,含 <code>Source/Shard/Project/UDFProject/Filter/IntoBatches/Limit/Offset/Explode/Unpivot/Sort/Repartition/IntoPartitions/Distinct/Aggregate/Pivot/Concat/Intersect/Union/Join/AsofJoin/Sink/Sample/Shuffle/MonotonicallyIncreasingId/StageCheckpointKeys/SubqueryAlias/Window/TopN/VLLMProject</code>)</li>
+<li><code>src/daft-logical-plan/src/logical_plan.rs:78</code> — <code>pub type LogicalPlanRef = Arc&lt;LogicalPlan&gt;;</code></li>
+<li><code>src/daft-logical-plan/src/treenode.rs</code> — <code>impl TreeNode for LogicalPlan</code></li>
+<li><code>src/daft-logical-plan/src/optimization/optimizer.rs:302</code> — <code>pub struct Optimizer</code></li>
+<li><code>src/daft-logical-plan/src/optimization/optimizer.rs:60</code> — <code>pub struct RuleBatch</code></li>
+<li><code>src/daft-logical-plan/src/optimization/optimizer.rs:96</code> — <code>pub enum RuleExecutionStrategy</code></li>
+<li><code>src/daft-logical-plan/src/optimization/rules/rule.rs:9</code> — <code>pub trait OptimizerRule</code></li>
+<li><code>src/common/treenode/src/lib.rs:92</code> — <code>pub trait TreeNode</code></li>
+</ul>
+<h3>2.3 LogicalPlan 物理结构</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">              </span><span style="color: #ED007E; background-color: #1E0010">┌────────────────────────────────────────┐</span>
+<span style="color: #F8F8F2">              </span><span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">  LogicalPlan  (</span><span style="color: #AE81FF">28</span><span style="color: #F8F8F2"> variants, </span><span style="color: #66D9EF">large</span><span style="color: #F8F8F2"> enum)</span><span style="color: #ED007E; background-color: #1E0010">│</span>
+<span style="color: #F8F8F2">              </span><span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">  </span><span style="color: #ED007E; background-color: #1E0010">#</span><span style="color: #FF4689">[</span><span style="color: #F8F8F2">allow(clippy::large_enum_variant)</span><span style="color: #FF4689">]</span><span style="color: #F8F8F2">  </span><span style="color: #ED007E; background-color: #1E0010">│</span>
+<span style="color: #F8F8F2">              </span><span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   Always Arc</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">wrapped </span><span style="color: #FF4689">in</span><span style="color: #F8F8F2"> practice       </span><span style="color: #ED007E; background-color: #1E0010">│</span>
+<span style="color: #F8F8F2">              </span><span style="color: #ED007E; background-color: #1E0010">└────────────────────────────────────────┘</span>
+<span style="color: #F8F8F2">                              </span><span style="color: #ED007E; background-color: #1E0010">│</span>
+<span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">┌──────────────────────────┼──────────────────────────┐</span>
+<span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">▼</span><span style="color: #F8F8F2">                          </span><span style="color: #ED007E; background-color: #1E0010">▼</span><span style="color: #F8F8F2">                          </span><span style="color: #ED007E; background-color: #1E0010">▼</span>
+<span style="color: #FF4689">[</span><span style="color: #F8F8F2">Source</span><span style="color: #FF4689">]</span><span style="color: #F8F8F2">                 </span><span style="color: #FF4689">[</span><span style="color: #F8F8F2">Project/UDFProject</span><span style="color: #FF4689">]</span><span style="color: #F8F8F2">        </span><span style="color: #FF4689">[</span><span style="color: #F8F8F2">Join/AsofJoin</span><span style="color: #FF4689">]</span>
+<span style="color: #F8F8F2">plan_id, node_id         </span><span style="color: #66D9EF">input</span><span style="color: #ED007E; background-color: #1E0010">:</span><span style="color: #F8F8F2"> LogicalPlanRef       </span><span style="color: #A6E22E">left</span><span style="color: #F8F8F2">, </span><span style="color: #A6E22E">right</span><span style="color: #ED007E; background-color: #1E0010">:</span><span style="color: #F8F8F2"> LogicalPlanRef</span>
+<span style="color: #F8F8F2">output_schema            projection: Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ExprRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">    </span><span style="color: #66D9EF">on</span><span style="color: #ED007E; background-color: #1E0010">:</span><span style="color: #F8F8F2"> BoundExpr</span>
+<span style="color: #F8F8F2">scan_state               projected_schema: SchemaRef join_type, strategy</span>
+<span style="color: #F8F8F2">pushdowns: Pushdowns     stats_state: StatsState     output_schema</span>
+<span style="color: #F8F8F2">stats_state              </span><span style="color: #ED007E; background-color: #1E0010">↑──</span><span style="color: #F8F8F2"> 表达式塔挂在节点上 </span><span style="color: #ED007E; background-color: #1E0010">──↑</span><span style="color: #F8F8F2">   stats_state</span>
+</code></pre></div>
+
+<p>每个变体都同构:<code>plan_id</code> (Python 用) + <code>node_id</code> (执行器用) + 子树指针 + 算子参数 + <code>stats_state</code>。<code>schema()</code> / <code>children()</code> / <code>with_new_children()</code>(<code>logical_plan.rs:153/558/595</code>)是 <code>TreeNode</code> 的三件套基础。</p>
+<hr />
+<h2>3. 关键数据结构</h2>
+<h3>3.1 <code>LogicalPlan</code> 28 变体一览</h3>
+<div class="mermaid">
+flowchart LR
+    subgraph 源/汇
+        Source
+        Sink
+    end
+    subgraph 行选择/投影
+        Project
+        UDFProject
+        VLLMProject
+        Filter
+        Explode
+        Unpivot
+    end
+    subgraph 行控制
+        Limit
+        Offset
+        Sample
+        TopN
+        IntoBatches
+    end
+    subgraph 分区/洗牌
+        Repartition
+        IntoPartitions
+        Shuffle
+        Shard
+    end
+    subgraph 聚合/窗口
+        Aggregate
+        Distinct
+        Pivot
+        Window
+        MonotonicallyIncreasingId
+    end
+    subgraph 集合/连接
+        Concat
+        Intersect
+        Union
+        Join
+        AsofJoin
+    end
+    subgraph 元
+        Sort
+        SubqueryAlias
+        StageCheckpointKeys
+    end
+
+    style Project fill:#d5e8d4
+    style Filter fill:#d5e8d4
+    style Aggregate fill:#d5e8d4
+    style Join fill:#d5e8d4
+</div>
+<p>按 <code>children()</code> 元数(<code>logical_plan.rs:558-593</code>):</p>
+<table>
+<thead>
+<tr>
+<th>变体类型</th>
+<th>子节点数</th>
+<th>例子</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0 子(叶子)</td>
+<td>0</td>
+<td><code>Source</code></td>
+</tr>
+<tr>
+<td>1 子(线性)</td>
+<td>1</td>
+<td><code>Project</code>、<code>Filter</code>、<code>Limit</code>、<code>Aggregate</code>、<code>Sort</code>、...</td>
+</tr>
+<tr>
+<td>2 子(双臂)</td>
+<td>2</td>
+<td><code>Concat</code>、<code>Join</code>、<code>AsofJoin</code>、<code>Intersect</code>、<code>Union</code></td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>设计取舍:<code>Join</code> 变体非常大(2 个 <code>Arc&lt;LogicalPlan&gt;</code> + <code>BoundExpr</code> + <code>Vec</code> 字段),作者特意 <code>#[allow(clippy::large_enum_variant)]</code>(<code>logical_plan.rs:32-34</code>),理由是 box 化要改 20+ 文件,而 <code>LogicalPlan</code> 永远 <code>Arc</code> 包裹,本身在堆上,enum 体积放大没成本。</p>
+</blockquote>
+<h3>3.2 <code>Source</code> 节点的两态</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #A6E22E">Source</span><span style="color: #F8F8F2">.</span><span style="color: #A6E22E">scan_state</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">在优化前是</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">unmaterialized</span>
+<span style="color: #F8F8F2">                       </span><span style="color: #ED007E; background-color: #1E0010">↓</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">经过</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">RewriteCheckpointSource</span><span style="color: #F8F8F2"> (</span><span style="color: #A6E22E">可能改写</span><span style="color: #F8F8F2">)</span>
+<span style="color: #F8F8F2">                       </span><span style="color: #ED007E; background-color: #1E0010">↓</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">经过</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">SimplifyExpressionsRule</span><span style="color: #F8F8F2"> (</span><span style="color: #A6E22E">可能简化下推谓词</span><span style="color: #F8F8F2">)</span>
+<span style="color: #F8F8F2">                       </span><span style="color: #ED007E; background-color: #1E0010">↓</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">经过</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">MaterializeScans</span><span style="color: #F8F8F2">  (</span><span style="color: #A6E22E">产生具体</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">ScanTask</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">列表</span><span style="color: #F8F8F2">)</span>
+<span style="color: #F8F8F2">                  </span><span style="color: #A6E22E">scan_state</span><span style="color: #F8F8F2">: </span><span style="color: #A6E22E">Materialized</span><span style="color: #F8F8F2">(</span><span style="color: #A6E22E">Vec</span><span style="color: #F8F8F2">&lt;</span><span style="color: #A6E22E">ScanTaskLikeRef</span><span style="color: #F8F8F2">&gt;)</span>
+<span style="color: #F8F8F2">                  </span><span style="color: #A6E22E">pushdowns</span><span style="color: #F8F8F2">: </span><span style="color: #A6E22E">Pushdowns</span><span style="color: #F8F8F2"> { </span><span style="color: #A6E22E">filters</span><span style="color: #F8F8F2">, </span><span style="color: #A6E22E">columns</span><span style="color: #F8F8F2">, </span><span style="color: #A6E22E">limit</span><span style="color: #F8F8F2">, </span><span style="color: #FF4689">...</span><span style="color: #F8F8F2"> }</span>
+</code></pre></div>
+
+<p>源码:<code>src/daft-logical-plan/src/source_info.rs</code>(枚举),<code>src/daft-logical-plan/src/optimization/rules/materialize_scans.rs:2</code>(<code>MaterializeScans</code> 规则)。</p>
+<h3>3.3 <code>RequiredCols</code> —— 投影下推的核心</h3>
+<p><code>logical_plan.rs:115</code> 定义:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">RequiredCols</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) required_cols: </span><span style="color: #A6E22E">IndexSet</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) opt_right_cols: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">IndexSet</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,  </span><span style="color: #959077">// 双臂算子用</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><code>logical_plan.rs:196-398</code> 的 <code>LogicalPlan::required_columns()</code> 是投影下推算法的"输入"——给一个节点,返回它<strong>自己消费</strong>的列。结合自底向上访问,<code>PushDownProjection</code> 就能算出"在 Source 处只需要哪几列"。</p>
+<div class="mermaid">
+flowchart BT
+    Sink[&quot;Sink (consumes: 全部)&quot;]
+    Proj[&quot;Project [a, b+c → x] (consumes: a,b,c)&quot;]
+    Filter[&quot;Filter (consumes: predicate cols)&quot;]
+    Source[&quot;Source { columns = ? }&quot;]
+
+    Source --&gt; Filter --&gt; Proj --&gt; Sink
+
+    Sink -. &quot;下推: ∅&quot; .-&gt; Proj
+    Proj -. &quot;下推: a,b,c&quot; .-&gt; Filter
+    Filter -. &quot;下推: a,b,c + predicate&quot; .-&gt; Source
+</div>
+<h3>3.4 <code>OptimizerConfig</code> / <code>RuleBatch</code> / <code>RuleExecutionStrategy</code></h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// optimizer.rs:23</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">OptimizerConfig</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> default_max_optimizer_passes: </span><span style="color: #66D9EF">usize</span><span style="color: #F8F8F2">, </span><span style="color: #959077">// 默认 20</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> strict_pushdown: </span><span style="color: #66D9EF">bool</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #959077">// optimizer.rs:60</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">RuleBatch</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> rules: Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Box</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">dyn</span><span style="color: #F8F8F2"> OptimizerRuleInBatch</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> strategy: </span><span style="color: #A6E22E">RuleExecutionStrategy</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #959077">// optimizer.rs:96</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">RuleExecutionStrategy</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    Once,</span>
+<span style="color: #F8F8F2">    FixedPoint(Option</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">usize</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">),  </span><span style="color: #959077">// None = 用 config.default_max_optimizer_passes</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><code>max_passes</code> 由 <code>RuleBatch::max_passes</code>(<code>optimizer.rs:84</code>)从 strategy 读出:<code>Once → 1</code>,<code>FixedPoint(Some(n)) → n</code>,<code>FixedPoint(None) → config.default_max_optimizer_passes</code>。</p>
+<h3>3.5 <code>LogicalPlanTracker</code> —— cycle 检测</h3>
+<p><code>src/daft-logical-plan/src/optimization/logical_plan_tracker.rs</code>:用 <code>HashSet&lt;u64&gt;</code> 缓存每次 pass 后 plan 的哈希。如果新 plan 的哈希已经见过,则该 batch <strong>立即终止</strong>——不一定是真的"等价",而是"我们刚才已经造出过同一个 plan",意味着进入了重复循环。<code>optimizer.rs:355-365</code> 是触发点。</p>
+<p>这是 Daft 比 DataFusion 更激进的一个细节:<code>PushDownProjection</code> ↔ <code>PushDownLimit</code> 容易互相回滚(参见 <code>optimizer.rs:175-186</code> 的 TODO 注释),<code>LogicalPlanTracker</code> 提供了硬保护。</p>
+<hr />
+<h2>4. 关键源码走读</h2>
+<h3>4.1 <code>LogicalPlanBuilder</code> 流式 API</h3>
+<p><code>src/daft-logical-plan/src/builder/mod.rs:61</code> 的 <code>LogicalPlanBuilder</code> 是 Python 调用的主入口。每个方法都返回 <code>DaftResult&lt;Self&gt;</code>,本质是把当前 <code>Arc&lt;LogicalPlan&gt;</code> 包一层新算子后返回新 builder:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// builder/mod.rs:440 (节选)</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">filter</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self, predicate: </span><span style="color: #A6E22E">ExprRef</span><span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">DaftResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Self</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> new_plan </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> LogicalPlan::Filter(Filter::try_new(self.plan.clone(), predicate)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">);</span>
+<span style="color: #F8F8F2">    Ok(Self::new(new_plan.arced(), self.config.clone()))</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>调用链(以 <code>daft.read_parquet(...).where(...).select(...).limit(100).collect()</code> 为例):</p>
+<div class="mermaid">
+sequenceDiagram
+    participant py as Python: dataframe.py
+    participant pb as PyLogicalPlanBuilder
+    participant b as LogicalPlanBuilder (Rust)
+    participant lp as LogicalPlan tree
+
+    py-&gt;&gt;pb: __init__(read_parquet 路径)
+    pb-&gt;&gt;b: table_scan(...)  builder/mod.rs:203
+    b-&gt;&gt;lp: Source { scan_state, pushdowns: default }
+    py-&gt;&gt;pb: where(col(a) &gt; 10)
+    pb-&gt;&gt;b: filter(predicate)  builder/mod.rs:440
+    b-&gt;&gt;lp: Filter { input: Source, predicate }
+    py-&gt;&gt;pb: select(a, b)
+    pb-&gt;&gt;b: select(...)  builder/mod.rs:254
+    b-&gt;&gt;lp: Project { input: Filter, projection, projected_schema }
+    py-&gt;&gt;pb: limit(100)
+    pb-&gt;&gt;b: limit(100, false)  builder/mod.rs:454
+    b-&gt;&gt;lp: Limit { input: Project, limit: 100, eager: false }
+    py-&gt;&gt;pb: collect()
+    pb-&gt;&gt;b: optimize(execution_config) builder/mod.rs:1094
+    b--&gt;&gt;py: 优化后的 LogicalPlanRef → 交给 Runner
+</div>
+<h3>4.2 <code>Optimizer::optimize</code> 主循环</h3>
+<p><code>src/daft-logical-plan/src/optimization/optimizer.rs:318-332</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">optimize</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">F</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self, plan: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">LogicalPlan</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">, </span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> observer: </span><span style="color: #A6E22E">F</span><span style="color: #F8F8F2">)</span>
+<span style="color: #F8F8F2">    -&gt; </span><span style="color: #A6E22E">DaftResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">LogicalPlan</span><span style="color: #FF4689">&gt;&gt;</span>
+<span style="color: #66D9EF">where</span><span style="color: #F8F8F2"> F: FnMut(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">LogicalPlan, </span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">RuleBatch, </span><span style="color: #66D9EF">usize</span><span style="color: #F8F8F2">, </span><span style="color: #66D9EF">bool</span><span style="color: #F8F8F2">, </span><span style="color: #66D9EF">bool</span><span style="color: #F8F8F2">),</span>
+<span style="color: #F8F8F2">{</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> plan_tracker </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> LogicalPlanTracker::new(self.config.default_max_optimizer_passes);</span>
+<span style="color: #F8F8F2">    plan_tracker.add_plan(plan.as_ref());</span>
+<span style="color: #F8F8F2">    self.rule_batches.iter().try_fold(plan, </span><span style="color: #FF4689">|</span><span style="color: #F8F8F2">plan, batch</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">        self.optimize_with_rule_batch(batch, plan, </span><span style="color: #FF4689">&amp;</span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> observer, </span><span style="color: #FF4689">&amp;</span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> plan_tracker)</span>
+<span style="color: #F8F8F2">    })</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>单批执行:<code>optimize_with_rule_batch</code>(<code>optimizer.rs:335-386</code>)做三件事:</p>
+<ol>
+<li>在 <code>0..batch.max_passes()</code> 循环内反复调用 <code>optimize_with_rules</code>;</li>
+<li>每次产出 plan 都送进 <code>plan_tracker.add_plan</code>,看是否进入 cycle;</li>
+<li>调 <code>observer(...)</code> 把当前快照、batch、pass index、是否变换、是否 cycle 报给上层。</li>
+</ol>
+<div class="mermaid">
+stateDiagram-v2
+    [*] --&gt; Pass0
+    Pass0 --&gt; Pass1: rule applied &amp; 新 plan
+    Pass1 --&gt; PassN: rule applied &amp; 新 plan
+    Pass0 --&gt; Done: rule 未变换
+    PassN --&gt; Done: rule 未变换 / 达到 max_passes
+    PassN --&gt; CycleStop: plan_tracker 命中
+    CycleStop --&gt; Done
+    Done --&gt; [*]
+</div>
+<h3>4.3 单条规则的访问模式</h3>
+<p>每条规则实现 <code>OptimizerRule::try_optimize</code>,签名固定。<strong>绝大多数</strong>规则内部 <code>plan.transform_down(|node| ...)</code> 或 <code>transform_up</code>,基于 <code>TreeNode</code> trait(<code>src/common/treenode/src/lib.rs:92</code>)。</p>
+<p><code>PushDownFilter</code> 的骨架(<code>src/daft-logical-plan/src/optimization/rules/push_down_filter.rs:36-44</code>):</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">impl</span><span style="color: #F8F8F2"> OptimizerRule </span><span style="color: #66D9EF">for</span><span style="color: #F8F8F2"> PushDownFilter {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">try_optimize</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self, plan: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">LogicalPlan</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">DaftResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Transformed</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">LogicalPlan</span><span style="color: #FF4689">&gt;&gt;&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">        plan.transform_down_with_subqueries(</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.).and_then(</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2">t</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">            t.transform_data(</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2">p</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2"> p.transform_down(</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2">node</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2"> Self::try_optimize_node(node, </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.)))</span>
+<span style="color: #F8F8F2">        })</span>
+<span style="color: #F8F8F2">    }</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><code>Transformed&lt;T&gt;</code> 的语义见 <code>src/common/treenode/src/lib.rs:1500+</code>(枚举,<code>Yes(T) | No(T)</code>),其中 <code>Yes</code> 表示"我改了树,优化器请再来一遍",<code>No</code> 表示"已是不动点"。</p>
+<h3>4.4 <code>transform_down</code> 访问顺序</h3>
+<p><code>src/common/treenode/src/lib.rs:213-330</code> 给出 transform_down 的语义:<strong>先访问当前节点,再递归访问子节点</strong>。这是大部分 push-down 规则的默认顺序——先在父节点上识别 <code>Filter(child)</code> 模式,再尝试把 <code>Filter</code> 推进 <code>child</code> 内部。</p>
+<div class="mermaid">
+flowchart TD
+    A[&quot;transform_down(Filter)&quot;] --&gt; A1[&quot;f(Filter) — 尝试合并/下推&quot;]
+    A1 --&gt; B[&quot;transform_down(Project)&quot;]
+    B --&gt; B1[&quot;f(Project)&quot;]
+    B1 --&gt; C[&quot;transform_down(Source)&quot;]
+    C --&gt; C1[&quot;f(Source) — 终点&quot;]
+
+    classDef visit fill:#fff2cc,stroke:#333
+    class A,B,C visit
+</div>
+<p><code>transform_up</code> 语义相反:先递归访问子,再访问当前节点。两者的 macro <code>handle_transform_recursion!</code> 在 <code>src/common/treenode/src/lib.rs:31-37</code>。</p>
+<hr />
+<h2>5. 怎么优化的:11 个 batch 的执行顺序</h2>
+<p><code>src/daft-logical-plan/src/optimization/optimizer.rs:124-238</code> 的 <code>OptimizerBuilder::with_default_optimizations()</code> 把规则编排成 11 个 batch,<strong>顺序敏感</strong>。</p>
+<div class="mermaid">
+flowchart TD
+    B1[&quot;Batch 1: Rewrites (FixedPoint)&lt;br/&gt;LiftProjectFromAgg&lt;br/&gt;RewriteCountDistinct&lt;br/&gt;UnnestScalarSubquery&lt;br/&gt;UnnestPredicateSubquery&lt;br/&gt;EliminateSubqueryAliasRule&lt;br/&gt;ExtractWindowFunction&lt;br/&gt;SplitExplodeFromProject&quot;]
+    B2[&quot;Batch 2: Simplify (FixedPoint)&lt;br/&gt;SimplifyExpressionsRule&quot;]
+    B3[&quot;Batch 3: FilterNullJoinKey (Once)&quot;]
+    B4[&quot;Batch 4: PushDownAntiSemiJoin (FixedPoint)&quot;]
+    B5[&quot;Batch 5: 主下推 (FixedPoint)&lt;br/&gt;DropRepartition / DropIntoBatches&lt;br/&gt;PushDownFilter / PushDownProjection&lt;br/&gt;EliminateCrossJoin / SimplifyNullFilteredJoin&lt;br/&gt;PushDownJoinPredicate / EliminateOffsets&quot;]
+    B6[&quot;Batch 6: Limit/Offset (FixedPoint, max=3)&lt;br/&gt;RewriteOffset / PushDownLimit&quot;]
+    B7[&quot;Batch 7: UDF/Monotonic (Once)&lt;br/&gt;SplitUDFsFromFilters / SplitUDFs / SplitVLLM&lt;br/&gt;PushDownProjection / DetectMonotonicId&quot;]
+    B8[&quot;Batch 8: PushDownProjection 收尾 (FixedPoint)&quot;]
+    B9[&quot;Batch 9: PushDownAggregation (Once)&quot;]
+    B10[&quot;Batch 10: PushDownShard (Once)&quot;]
+    B11[&quot;Batch 11: RewriteCheckpointSource (Once)&quot;]
+    B12[&quot;Batch 12: SimplifyExpressionsRule (FixedPoint)&quot;]
+    B13[&quot;Batch 13: MaterializeScans (Once)&quot;]
+    B14[&quot;Batch 14: ShardScans (Once)&quot;]
+
+    B1 --&gt; B2 --&gt; B3 --&gt; B4 --&gt; B5 --&gt; B6 --&gt; B7 --&gt; B8 --&gt; B9 --&gt; B10 --&gt; B11 --&gt; B12 --&gt; B13 --&gt; B14
+</div>
+<blockquote>
+<p>注:<code>with_default_optimizations</code> 共 14 个 batch(原计划文档简化为"11 个");后续的 <code>reorder_joins</code> / <code>enrich_with_stats</code> / <code>simplify_expressions</code> / <code>split_granular_projections</code> 通过 builder 链式可选追加(<code>optimizer.rs:242-282</code>)。</p>
+</blockquote>
+<p><strong>为什么 batch 顺序固定?</strong> 几个例子:</p>
+<table>
+<thead>
+<tr>
+<th>现象</th>
+<th>必须的顺序</th>
+<th>原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FilterNullJoinKey</code> 在主下推之前</td>
+<td>Batch 3 &lt; Batch 5</td>
+<td>否则 <code>Filter</code> 已经被推到 <code>Source</code> 下,识别不到 join key</td>
+</tr>
+<tr>
+<td><code>PushDownAntiSemiJoin</code> 单独成 batch</td>
+<td>Batch 4 与 Batch 5 分开</td>
+<td>与 <code>PushDownProjection</code> 同 batch 会出现交换-回滚(注释 <code>optimizer.rs:151-153</code>)</td>
+</tr>
+<tr>
+<td><code>RewriteOffset</code> + <code>PushDownLimit</code> 单独成 batch</td>
+<td>Batch 6 max=3</td>
+<td>否则 limit 与 projection 交替交换永远无法收敛(issue #2616,注释 <code>optimizer.rs:177-179</code>)</td>
+</tr>
+<tr>
+<td><code>SplitUDFs</code> 在主下推之后</td>
+<td>Batch 7 &gt; Batch 5</td>
+<td>普通投影下推完成后再切 UDF,避免每条规则都要特判 UDF</td>
+</tr>
+<tr>
+<td><code>MaterializeScans</code> 是最后</td>
+<td>Batch 13</td>
+<td>把 <code>Pushdowns</code> 实际烧到 ScanTask;之前的规则只改 <code>Pushdowns</code> 字段</td>
+</tr>
+</tbody>
+</table>
+<h3>5.1 谓词下推前后对比</h3>
+<div class="mermaid">
+flowchart TD
+    subgraph 优化前
+        S1[Source columns=*] --&gt; P1[Project a,b]
+        P1 --&gt; F1[&quot;Filter a &gt; 10&quot;]
+        F1 --&gt; Sink1[Sink]
+    end
+    subgraph 优化后
+        S2[&quot;Source&lt;br/&gt;pushdowns.filters = a &gt; 10&lt;br/&gt;pushdowns.columns = [a, b]&quot;] --&gt; Sink2[Sink]
+    end
+
+    style S2 fill:#d5e8d4
+</div>
+<p>实际执行下来,Filter + Project 节点都被 PushDownFilter / PushDownProjection 吸进 <code>Source.pushdowns</code> 字段,树缩减到只剩 <code>Source → Sink</code> 两节点,执行器层根本看不到这些算子(参见 <code>src/daft-scan/src/pushdowns.rs:16</code> 的 <code>Pushdowns</code> 结构,详见 <a href="./06-IO与扫描下推.html">06 IO与扫描下推</a>)。</p>
+<h3>5.2 投影下推:列在树中的"染色"</h3>
+<div class="mermaid">
+flowchart BT
+    Sink[&quot;Sink (consumed: a, total)&quot;]
+    Proj[&quot;Project [a, b+c AS total] (consumed: a, b, c)&quot;]
+    Agg[&quot;Aggregate sum(c) → total (consumed: a, c)&quot;]
+    Filter[&quot;Filter b &gt; 0 (consumed: b)&quot;]
+    Source[&quot;Source columns = [a, b, c]&quot;]
+
+    Source --&gt; Filter --&gt; Agg --&gt; Proj --&gt; Sink
+</div>
+<p><code>PushDownProjection</code>(<code>push_down_projection.rs:21</code>)自顶向下递归:每个节点根据它消费的列(<code>required_columns()</code>)和它所有祖先消费的列,<strong>回写</strong>子节点的"必要列集",并最终落到 <code>Source.pushdowns.columns</code> 上。</p>
+<h3>5.3 PushDownAggregation 的 partial+final 拆分</h3>
+<div class="mermaid">
+flowchart TD
+    subgraph 优化前
+        A1[Source] --&gt; B1[&quot;Aggregate count(*) GROUP BY u&quot;]
+    end
+    subgraph 优化后
+        A2[&quot;Source&lt;br/&gt;pushdowns.aggregation = partial count(*)&quot;] --&gt; B2[&quot;Aggregate sum(_partial) GROUP BY u&quot;]
+    end
+
+    style A2 fill:#d5e8d4
+</div>
+<p>源码:<code>push_down_aggregation.rs:25</code> 的 <code>try_optimize</code>。这一步把 <em>能在扫描端就预聚合</em> 的部分下推到 <code>ScanTask</code>(尤其是 Parquet 行组级 count/sum/min/max),然后顶部 <code>Aggregate</code> 改写成"reduce 阶段"(<code>sum(_partial)</code>)。详见 <a href="./04-Swordfish本地执行.html">04 Swordfish 本地执行</a> 中的两阶段聚合数据流图。</p>
+<h3>5.4 DP-CCP Join 重排</h3>
+<p><code>ReorderJoins</code> 是 <code>with_default_optimizations</code> <strong>不</strong>包含的可选 batch,需调 <code>OptimizerBuilder::reorder_joins(cfg, use_dp_ccp)</code>(<code>optimizer.rs:242-257</code>)。源码在 <code>src/daft-logical-plan/src/optimization/rules/reorder_joins/</code>:</p>
+<table>
+<thead>
+<tr>
+<th>文件</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mod.rs:27</code></td>
+<td><code>pub struct ReorderJoins</code> 入口</td>
+</tr>
+<tr>
+<td><code>join_graph.rs</code></td>
+<td>把级联 Join 树压平成无向图(节点=表,边=join 谓词)</td>
+</tr>
+<tr>
+<td><code>dp_ccp_join_order.rs</code></td>
+<td>DP over Connected Subgraph-Complement Pairs(Moerkotte &amp; Neumann 2006)</td>
+</tr>
+<tr>
+<td><code>naive_left_deep_join_order.rs</code></td>
+<td>朴素左深启发式(行数升序)</td>
+</tr>
+<tr>
+<td><code>brute_force_join_order.rs</code></td>
+<td>仅小规模(≤6 表)用,暴力枚举</td>
+</tr>
+<tr>
+<td><code>relation_set.rs</code></td>
+<td>用 bitmask 表示连接关系子集</td>
+</tr>
+</tbody>
+</table>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>DP-CCP 搜索空间(3 表 A,B,C 全连接):
+                {A,B,C}
+               /   |   \
+        {A,B}∪{C} {A,C}∪{B} {B,C}∪{A}
+           |        |          |
+          AB×C    AC×B       BC×A
+           |        |          |
+        ((A,B),C) ((A,C),B) ((B,C),A)
+</code></pre></div>
+
+<p>DP-CCP 的关键不变量:每个 csg(connected subgraph)与其 complement 都连通时才组合,n 表关系图的 csg-cmp 对数 ≪ n!,把搜索空间从超指数缩成多项式。</p>
+<h3>5.5 CNF/DNF —— <code>daft-algebra</code></h3>
+<p><code>src/daft-algebra/src/boolean.rs</code> 提供布尔表达式的范式工具,被多条规则(尤其是 <code>PushDownFilter</code>、<code>SimplifyNullFilteredJoin</code>、<code>FilterNullJoinKey</code>)调用:</p>
+<table>
+<thead>
+<tr>
+<th>函数</th>
+<th>行号</th>
+<th>语义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>split_conjunction</code></td>
+<td>11</td>
+<td>把 <code>a AND b AND c</code> 拆成 <code>vec![a, b, c]</code></td>
+</tr>
+<tr>
+<td><code>split_disjunction</code></td>
+<td>29</td>
+<td>把 <code>a OR b OR c</code> 拆成 <code>vec![a, b, c]</code></td>
+</tr>
+<tr>
+<td><code>combine_conjunction</code></td>
+<td>47</td>
+<td>反向折叠成 AND</td>
+</tr>
+<tr>
+<td><code>combine_disjunction</code></td>
+<td>51</td>
+<td>反向折叠成 OR</td>
+</tr>
+<tr>
+<td><code>to_cnf</code></td>
+<td>56</td>
+<td>DNF → 取反 → DNF → 取反(De Morgan 翻转)</td>
+</tr>
+<tr>
+<td><code>to_dnf</code></td>
+<td>63</td>
+<td>应用 De Morgan + 分配律(<code>transform_up</code>)</td>
+</tr>
+<tr>
+<td><code>apply_de_morgans</code></td>
+<td>98</td>
+<td>把否定推到原子层 + 消双重否定</td>
+</tr>
+<tr>
+<td><code>predicate_removes_nulls</code></td>
+<td>144</td>
+<td>给定一组列设为 NULL,检查谓词是否一定为 false/null(<code>SimplifyNullFilteredJoin</code> 用)</td>
+</tr>
+</tbody>
+</table>
+<p>CNF 转换示例:<code>(A ∧ B) ∨ C</code></p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>Step 1  (A ∧ B) ∨ C                 input
+Step 2  ¬(¬((A ∧ B) ∨ C))           包入双重否定(to_cnf 借道 to_dnf)
+Step 3  ¬(¬(A ∧ B) ∧ ¬C)            De Morgan 推入
+Step 4  ¬((¬A ∨ ¬B) ∧ ¬C)
+Step 5  ¬(¬A ∧ ¬C ∨ ¬B ∧ ¬C)        DNF 内部展开
+Step 6  (A ∨ C) ∧ (B ∨ C)            最外取反 + De Morgan
+</code></pre></div>
+
+<p><code>to_dnf</code> 内部一行核心(<code>boolean.rs:67-92</code>):用 <code>transform_up</code> 自底向上,遇到 <code>AND</code> 节点就把左右两边按 OR 拆成 <code>Vec</code>,做笛卡尔积,合并成 OR-of-ANDs。</p>
+<hr />
+<h2>6. 端到端案例:同一个 SQL 走完多个 batch</h2>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">SELECT</span><span style="color: #F8F8F2"> user_id, </span><span style="color: #66D9EF">count</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">*</span><span style="color: #F8F8F2">)</span>
+<span style="color: #66D9EF">FROM</span><span style="color: #F8F8F2"> logs</span>
+<span style="color: #66D9EF">WHERE</span><span style="color: #F8F8F2"> ts </span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">&#39;2024-01-01&#39;</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">AND</span><span style="color: #F8F8F2"> status </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">&#39;OK&#39;</span>
+<span style="color: #66D9EF">GROUP</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">BY</span><span style="color: #F8F8F2"> user_id</span>
+<span style="color: #66D9EF">LIMIT</span><span style="color: #F8F8F2"> </span><span style="color: #AE81FF">100</span>
+</code></pre></div>
+
+<p>入口:<code>daft.sql(...)</code> 内部走 <code>daft-sql/src/planner.rs:165</code> 的 <code>SQLPlanner</code>,产出与 DataFrame 同一棵 <code>LogicalPlanBuilder</code> 中的 <code>Arc&lt;LogicalPlan&gt;</code>(详见 <a href="./07-SQL与Python桥.html">07 SQL与Python桥</a>)。</p>
+<h3>快照 0:刚构建出的逻辑计划</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">Sink</span>
+<span style="color: #ED007E; background-color: #1E0010">└─</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">Limit</span><span style="color: #F8F8F2">(</span><span style="color: #AE81FF">100</span><span style="color: #F8F8F2">)</span>
+<span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">└─</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">Aggregate</span><span style="color: #ED007E; background-color: #1E0010">{</span><span style="color: #F8F8F2">groupby</span><span style="color: #FF4689">=[</span><span style="color: #F8F8F2">user_id</span><span style="color: #FF4689">]</span><span style="color: #F8F8F2">, aggs</span><span style="color: #FF4689">=[</span><span style="color: #F8F8F2">count(*) AS c</span><span style="color: #FF4689">]</span><span style="color: #ED007E; background-color: #1E0010">}</span>
+<span style="color: #F8F8F2">      </span><span style="color: #ED007E; background-color: #1E0010">└─</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">Filter</span><span style="color: #ED007E; background-color: #1E0010">{</span><span style="color: #F8F8F2">predicate </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> ts </span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">&#39;2024-01-01&#39;</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">AND</span><span style="color: #F8F8F2"> status </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">&#39;OK&#39;</span><span style="color: #ED007E; background-color: #1E0010">}</span>
+<span style="color: #F8F8F2">         </span><span style="color: #ED007E; background-color: #1E0010">└─</span><span style="color: #F8F8F2"> Source</span><span style="color: #ED007E; background-color: #1E0010">{</span><span style="color: #F8F8F2">logs, columns</span><span style="color: #FF4689">=*</span><span style="color: #F8F8F2">, pushdowns</span><span style="color: #FF4689">=</span><span style="color: #66D9EF">default</span><span style="color: #ED007E; background-color: #1E0010">}</span>
+</code></pre></div>
+
+<h3>快照 1:Batch 2 (SimplifyExpressionsRule)</h3>
+<p><code>ts &gt; '2024-01-01'</code> 中的字符串字面量被强转成 <code>Timestamp</code> literal(类型推断在 simplify 内做)。结构不变。</p>
+<h3>快照 2:Batch 5 主下推(PushDownFilter + PushDownProjection)</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">Sink</span>
+<span style="color: #ED007E; background-color: #1E0010">└─</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">Limit</span><span style="color: #F8F8F2">(</span><span style="color: #AE81FF">100</span><span style="color: #F8F8F2">)</span>
+<span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">└─</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">Aggregate</span><span style="color: #ED007E; background-color: #1E0010">{</span><span style="color: #F8F8F2">groupby</span><span style="color: #FF4689">=[</span><span style="color: #F8F8F2">user_id</span><span style="color: #FF4689">]</span><span style="color: #F8F8F2">, aggs</span><span style="color: #FF4689">=[</span><span style="color: #F8F8F2">count(*)</span><span style="color: #FF4689">]</span><span style="color: #ED007E; background-color: #1E0010">}</span>
+<span style="color: #F8F8F2">      </span><span style="color: #ED007E; background-color: #1E0010">└─</span><span style="color: #F8F8F2"> Source</span><span style="color: #ED007E; background-color: #1E0010">{</span>
+<span style="color: #F8F8F2">           logs,</span>
+<span style="color: #F8F8F2">           pushdowns: </span><span style="color: #ED007E; background-color: #1E0010">{</span>
+<span style="color: #F8F8F2">             filters: ts </span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">&#39;2024-01-01&#39;</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">AND</span><span style="color: #F8F8F2"> status </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">&#39;OK&#39;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">             columns: </span><span style="color: #FF4689">[</span><span style="color: #F8F8F2">user_id, ts, status, ...投影列</span><span style="color: #FF4689">]</span>
+<span style="color: #F8F8F2">           </span><span style="color: #ED007E; background-color: #1E0010">}</span>
+<span style="color: #F8F8F2">         </span><span style="color: #ED007E; background-color: #1E0010">}</span>
+</code></pre></div>
+
+<p><code>Filter</code> 节点消失,谓词进 <code>pushdowns.filters</code>;但 <code>PushDownProjection</code> 暂时<strong>不能</strong>只保留 <code>[user_id]</code>,因为谓词仍引用 <code>ts, status</code>。</p>
+<h3>快照 3:Batch 6 (PushDownLimit)</h3>
+<p><code>Aggregate</code> 之上的 <code>Limit(100)</code> <strong>不能</strong>直接推过 <code>Aggregate</code>(GROUP BY 的输出行数与扫描行数无关),因此 <code>PushDownLimit</code> 只能在 <code>Limit → 非聚合</code> 边界生效,这一步无变化。</p>
+<h3>快照 4:Batch 9 (PushDownAggregation)</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">Sink</span>
+<span style="color: #ED007E; background-color: #1E0010">└─</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">Limit</span><span style="color: #F8F8F2">(</span><span style="color: #AE81FF">100</span><span style="color: #F8F8F2">)</span>
+<span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">└─</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">Aggregate</span><span style="color: #ED007E; background-color: #1E0010">{</span><span style="color: #F8F8F2">groupby</span><span style="color: #FF4689">=[</span><span style="color: #F8F8F2">user_id</span><span style="color: #FF4689">]</span><span style="color: #F8F8F2">, aggs</span><span style="color: #FF4689">=[</span><span style="color: #F8F8F2">sum(_partial_count) AS c</span><span style="color: #FF4689">]</span><span style="color: #ED007E; background-color: #1E0010">}</span>
+<span style="color: #F8F8F2">      </span><span style="color: #ED007E; background-color: #1E0010">└─</span><span style="color: #F8F8F2"> Source</span><span style="color: #ED007E; background-color: #1E0010">{</span>
+<span style="color: #F8F8F2">           logs,</span>
+<span style="color: #F8F8F2">           pushdowns: </span><span style="color: #ED007E; background-color: #1E0010">{</span>
+<span style="color: #F8F8F2">             filters: ts </span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">&#39;2024-01-01&#39;</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">AND</span><span style="color: #F8F8F2"> status </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> </span><span style="color: #E6DB74">&#39;OK&#39;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">             columns: </span><span style="color: #FF4689">[</span><span style="color: #F8F8F2">user_id, ts, status</span><span style="color: #FF4689">]</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">             aggregation: </span><span style="color: #66D9EF">partial</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">count</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">*</span><span style="color: #F8F8F2">) per </span><span style="color: #66D9EF">file</span>
+<span style="color: #F8F8F2">           </span><span style="color: #ED007E; background-color: #1E0010">}</span>
+<span style="color: #F8F8F2">         </span><span style="color: #ED007E; background-color: #1E0010">}</span>
+</code></pre></div>
+
+<p>scan 阶段顺手做行组级 count,顶部 <code>Aggregate</code> 退化成 <code>sum(_partial_count)</code>。</p>
+<h3>快照 5:Batch 13 (MaterializeScans)</h3>
+<p><code>Source.scan_state</code> 从 unmaterialized 变成 <code>Materialized(Vec&lt;ScanTaskRef&gt;)</code>——具体的 S3 文件清单与每个文件的 row group 元数据被读出来。<strong>至此,所有 11+ 个 batch 跑完。</strong></p>
+<h3>端到端时序</h3>
+<div class="mermaid">
+sequenceDiagram
+    participant py as daft.sql(...)
+    participant sqlp as SQLPlanner
+    participant b as LogicalPlanBuilder
+    participant opt as Optimizer
+    participant track as PlanTracker
+
+    py-&gt;&gt;sqlp: parse SQL → AST
+    sqlp-&gt;&gt;b: 构造 Source/Filter/Aggregate/Limit
+    py-&gt;&gt;b: collect()
+    b-&gt;&gt;opt: optimize(execution_config)
+    loop 14 个 batch
+        opt-&gt;&gt;opt: optimize_with_rule_batch
+        loop 单 batch FixedPoint
+            opt-&gt;&gt;opt: optimize_with_rules
+            opt-&gt;&gt;track: add_plan(new)
+            alt 新 plan / 未见过
+                track--&gt;&gt;opt: true,继续
+            else 见过 (cycle)
+                track--&gt;&gt;opt: false,break
+            end
+        end
+    end
+    opt--&gt;&gt;b: optimized Arc&lt;LogicalPlan&gt;
+    b--&gt;&gt;py: LogicalPlanBuilder(包装)→ Runner
+</div>
+<hr />
+<h2>7. 与同类项目对照</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Daft <code>daft-logical-plan</code></th>
+<th>DataFusion <code>LogicalPlan</code></th>
+<th>Spark Catalyst</th>
+<th>Polars LP</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IR 节点数</td>
+<td>28(<code>logical_plan.rs:35</code>)</td>
+<td>24</td>
+<td>~30</td>
+<td>~25</td>
+</tr>
+<tr>
+<td>自研 vs 复用</td>
+<td>自研</td>
+<td>自研</td>
+<td>自研</td>
+<td>自研</td>
+</tr>
+<tr>
+<td>多模态算子</td>
+<td><code>UDFProject</code>/<code>VLLMProject</code>/<code>Window</code></td>
+<td>无</td>
+<td>无</td>
+<td>无</td>
+</tr>
+<tr>
+<td>Pushdown 容器</td>
+<td><code>Pushdowns { filters, columns, limit, aggregation, sharder }</code></td>
+<td><code>TableProvider::scan(filters, projection, limit)</code></td>
+<td>DataSourceV2 SupportsPush*</td>
+<td>在 <code>Lazy</code> 里</td>
+</tr>
+<tr>
+<td>规则编排</td>
+<td>14 个 batch + 可选 batch</td>
+<td>rule chain</td>
+<td>rule batches</td>
+<td>passes</td>
+</tr>
+<tr>
+<td>Cycle 检测</td>
+<td><code>LogicalPlanTracker</code>(plan hash)</td>
+<td>passes 上限</td>
+<td>iteration cap</td>
+<td>passes 上限</td>
+</tr>
+<tr>
+<td>Join 重排</td>
+<td>DP-CCP / 启发式</td>
+<td>DP-CCP</td>
+<td>CBO + DP</td>
+<td>简单启发式</td>
+</tr>
+<tr>
+<td>子查询消除</td>
+<td>UnnestScalar/PredicateSubquery</td>
+<td>unnest pass</td>
+<td>多个规则</td>
+<td>不支持</td>
+</tr>
+<tr>
+<td>Stats 注入</td>
+<td>是逻辑层 batch (<code>EnrichWithStats</code>)</td>
+<td>物理层</td>
+<td>CBO 模块</td>
+<td>物理层</td>
+</tr>
+<tr>
+<td>Optimizer observer hook</td>
+<td>有(Python 可订阅)</td>
+<td>无</td>
+<td>listener</td>
+<td>无</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>8. 未解之谜</h2>
+<blockquote>
+<p>写作过程中没完全摸透的点,记录如下,留待后续细读。</p>
+</blockquote>
+<ol>
+<li><strong><code>reorder_joins/dp_ccp_join_order.rs</code> 的代价模型</strong>:DP-CCP 的"代价"取自 <code>EnrichWithStats</code> 注入的 row count,但 cardinality 估计来源(<code>stats.rs</code>)还没看清楚——选择度(selectivity)是用 column histograms 还是 plain row count 估?(待精读 <code>daft-stats</code> 与 <code>enrich_with_stats.rs</code>)</li>
+<li><strong><code>UnnestScalarSubquery</code> / <code>UnnestPredicateSubquery</code> 的支持边界</strong>:当前仅在 SQL 路径产生 <code>Subquery</code> 节点(参见 02 章 <code>SubqueryExpr</code>),DataFrame API 的 <code>df1.where(col("a").is_in(df2.select("a")))</code> 路径是否会构造同一种节点?</li>
+<li><strong><code>StageCheckpointKeys</code> 的语义</strong>:这一变体是为了 checkpoint 写入下"上游已成功的 key 集合"的状态机引入的,但读完 <code>RewriteCheckpointSource</code> 仍不完全清楚它如何在 retry 后被 reuse(参见 06 章 checkpoint 状态机)。</li>
+<li><strong><code>PushDownShard</code> 与 <code>ShardScans</code> 的边界</strong>:都涉及 sharding,但前者在 batch 10、后者在 batch 14。两者职责差异需要更具体的输入示例才能讲清。</li>
+<li><strong><code>#[allow(clippy::large_enum_variant)]</code> 的隐性成本</strong>:<code>LogicalPlan</code> 当前栈大小 ≈ <code>Join</code> 变体大小;在 fuzzer / 深递归路径上是否产生过 stack overflow?(<code>logical_plan.rs:32-34</code> 注释只说"box 化代价大",未给基准数据)</li>
+</ol>
+<hr />
+<blockquote>
+<p>下一篇:<a href="./04-Swordfish本地执行.html">04 Swordfish 本地执行</a> — 优化后的 LogicalPlan 怎么 lower 成 LocalPhysicalPlan,morsel 模型与 <code>tokio::select!</code> 调度器。</p>
+</blockquote>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>05 · 分布式执行 · Daft 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#a3e635}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">🐡 <span>Daft 源码深度解析</span></span><nav class="nav"><a href="index.html">总览</a><a href="00-总览.html">Daft 总览:从 `df.collect()` 到 Arrow Buffer</a><a href="01-核心类型与多模态.html">核心类型与多模态:Series / RecordBatch / MicroPartition / Image</a><a href="02-表达式DSL与函数.html">表达式 DSL 与函数:三阶段列解析、`Expr` 枚举、`FunctionRegistry`</a><a href="03-逻辑计划与优化器.html">逻辑计划与优化器</a><a href="04-Swordfish本地执行.html">Swordfish 本地执行</a><a href="05-分布式执行.html" class=on>分布式执行</a><a href="06-IO与扫描下推.html">IO 与扫描下推</a><a href="07-SQL与Python桥.html">SQL 与 Python 桥</a></nav></div></header>
+<main class="wrap">
+<h1>05 · 分布式执行</h1>
+<blockquote>
+<p>基准 commit: <code>fa0d066204eae630962af7b22a5ab559ecd454fb</code> (v0.7.10-13)
+文档版本: v0.3.0-dev0 / Rust 2024
+阅读前置: <a href="./04-Swordfish本地执行.html">04 Swordfish 本地执行</a></p>
+</blockquote>
+<hr />
+<h2>1. 解决了什么问题</h2>
+<p>Daft 想跑在 Ray 上,但又坚决<strong>不</strong>像 Spark 一样写一个独立的物理 Stage IR。两个原则:</p>
+<ol>
+<li><strong>算子语义是统一的</strong>:<code>Filter</code>、<code>Aggregate</code>、<code>Join</code> 不该有"local 版"和"distributed 版"两份实现。</li>
+<li><strong>shuffle 落地策略要可换</strong>:Spark 风格的"sort &amp; spill"不一定最优,Daft 选<strong>磁盘 IPC 缓存 + Arrow Flight pull</strong>。</li>
+</ol>
+<div class="mermaid">
+flowchart LR
+    LP[LogicalPlan 优化后] --&gt; R{Runner?}
+    R --&gt;|Native| LE[daft-local-execution&lt;br/&gt;单机 Swordfish]
+    R --&gt;|Ray| DD[daft-distributed&lt;br/&gt;+ daft-shuffles]
+    DD --&gt; Tasks[Ray remote tasks]
+    Tasks --&gt; Workers[Ray worker = Swordfish 实例]
+    Workers --&gt; Shuffle[InProgressShuffleCache + Flight]
+    Shuffle --&gt; Workers
+
+    classDef native fill:#d5e8d4
+    classDef ray fill:#dae8fc
+    class LE native
+    class DD,Tasks,Workers,Shuffle ray
+</div>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Native Runner</th>
+<th>Ray Runner</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>实例</td>
+<td>单进程 1 个 NativeExecutor</td>
+<td>N 个 Ray actor / task,每个内嵌 1 个 NativeExecutor(<code>is_flotilla_worker=true</code>)</td>
+</tr>
+<tr>
+<td>调度</td>
+<td><code>tokio::select!</code> 事件循环</td>
+<td><code>daft-distributed</code> 的 SchedulerActor + Ray.remote</td>
+</tr>
+<tr>
+<td>Shuffle</td>
+<td>进程内 channel</td>
+<td>磁盘 IPC + Arrow Flight pull</td>
+</tr>
+<tr>
+<td>Plan</td>
+<td>直接 lower 成 LocalPhysicalPlan</td>
+<td><code>DistributedPhysicalPlan</code> 描述符 + 按 PipelineNode 切片</td>
+</tr>
+<tr>
+<td>Session</td>
+<td>单进程 <code>Session</code></td>
+<td>主进程 <code>Session</code> 序列化下发</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>2. 整体设计</h2>
+<h3>2.1 模块拓扑</h3>
+<div class="mermaid">
+flowchart TD
+    subgraph daft-runners
+        runner[Runner enum&lt;br/&gt;runners.rs:67]
+        rcfg[RunnerConfig&lt;br/&gt;runners.rs:150]
+        det[detect_ray_state&lt;br/&gt;runners.rs:175]
+    end
+
+    subgraph daft-context
+        ctx[DaftContext&lt;br/&gt;lib.rs:56]
+    end
+
+    subgraph daft-session
+        sess[Session&lt;br/&gt;session.rs:25]
+        ss[SessionState&lt;br/&gt;session.rs:33]
+    end
+
+    subgraph daft-distributed
+        dpp[DistributedPhysicalPlan&lt;br/&gt;plan/mod.rs:35]
+        prun[PlanRunner&lt;br/&gt;plan/runner.rs:143]
+        pec[PlanExecutionContext&lt;br/&gt;plan/runner.rs:48]
+        pn[&quot;pipeline_node/&lt;br/&gt;30+ DistributedPipelineNode 算子&quot;]
+        sched[&quot;scheduling/&lt;br/&gt;SchedulerActor + Worker&quot;]
+        stat[&quot;statistics/&lt;br/&gt;StatisticsManager&quot;]
+    end
+
+    subgraph daft-shuffles
+        ipsc[InProgressShuffleCache&lt;br/&gt;shuffle_cache.rs:41]
+        flightS[server/]
+        flightC[client/]
+    end
+
+    subgraph daft-local-execution
+        nativeexec[NativeExecutor&lt;br/&gt;run.rs:373]
+    end
+
+    subgraph Ray Python 侧
+        ray[ray_runner.py]
+    end
+
+    runner --&gt; ctx
+    ctx --&gt; sess
+    rcfg --&gt; runner
+    det --&gt; rcfg
+    runner -.Native.-&gt; nativeexec
+    runner -.Ray.-&gt; ray
+    ray --&gt; dpp
+    dpp --&gt; prun
+    prun --&gt; pec
+    prun --&gt; pn
+    pn --&gt; sched
+    pn --&gt; stat
+    pn --&gt; ipsc
+    ipsc --&gt; flightS
+    flightC --&gt; flightS
+    sched --&gt; nativeexec
+
+    style runner fill:#fff2cc
+    style dpp fill:#dae8fc
+    style ipsc fill:#d5e8d4
+</div>
+<h3>2.2 关键决策:<code>DistributedPhysicalPlan</code> 不是物理树</h3>
+<p><code>src/daft-distributed/src/plan/mod.rs:35</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">DistributedPhysicalPlan</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    query_idx: </span><span style="color: #A6E22E">QueryIdx</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    query_id: </span><span style="color: #A6E22E">QueryID</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    logical_plan: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">LogicalPlan</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,   </span><span style="color: #959077">// ← 仍然是 LogicalPlan!</span>
+<span style="color: #F8F8F2">    config: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">DaftExecutionConfig</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<blockquote>
+<p>注意它持有的是 <strong><code>Arc&lt;LogicalPlan&gt;</code></strong>,而不是某种 <code>DistributedOp</code> 树。"distributed plan" 其实只是一个<strong>惰性描述符</strong>,真正的物理化(切 pipeline、决定 shuffle 边界)发生在 <code>pipeline_node::translate</code> 这一步,<strong>按 PipelineNode 流式产生 SwordfishTask</strong>。</p>
+</blockquote>
+<p>这一设计避免了"一份 logical + 一份 local physical + 一份 distributed physical"三份 IR 的同步成本。</p>
+<hr />
+<h2>3. 关键数据结构</h2>
+<h3>3.1 <code>Runner</code> 枚举</h3>
+<p><code>src/daft-runners/src/runners.rs:67</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">Runner</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    Ray(RayRunner),</span>
+<span style="color: #F8F8F2">    Native(NativeRunner),</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<div class="mermaid">
+classDiagram
+    class Runner {
+        &lt;&lt;enum&gt;&gt;
+        +Ray(RayRunner)
+        +Native(NativeRunner)
+        +from_pyobj(PyAny) PyResult~Self~
+        +run_iter_tables(py, lp, buffer_size) Iterator
+        +is_native() bool
+        +is_ray() bool
+    }
+    class RayRunner {
+        +pyobj: Arc~Py~PyAny~~
+        +try_new(address, force_client_mode) DaftResult~Self~
+        const NAME = &quot;ray&quot;
+    }
+    class NativeRunner {
+        +pyobj: Arc~Py~PyAny~~
+        +try_new(num_threads) DaftResult~Self~
+        const NAME = &quot;native&quot;
+    }
+    class RunnerConfig {
+        &lt;&lt;enum&gt;&gt;
+        +Native{num_threads}
+        +Ray{address, force_client_mode}
+        +create_runner() DaftResult~Runner~
+    }
+
+    Runner &lt;|-- RayRunner
+    Runner &lt;|-- NativeRunner
+    RunnerConfig ..&gt; Runner : create_runner
+</div>
+<p><code>Runner::run_iter_tables</code>(<code>runners.rs:102</code>)统一接口——不管 Ray 还是 Native,Python 端都拿到同一种 <code>MicroPartition</code> 迭代器。</p>
+<h3>3.2 决策路径 <code>get_runner_config_from_env</code></h3>
+<p><code>runners.rs:226-250</code>:</p>
+<div class="mermaid">
+flowchart TD
+    Start[get_runner_config_from_env]
+    GetEnv[读 DAFT_RUNNER 环境变量]
+    Sw{value?}
+    SwN[Native]
+    SwR[Ray]
+    SwPy[&quot;py 已废弃 → 报错&quot;]
+    SwEmpty[空]
+    Detect[detect_ray_state]
+    Ray{在 Ray 环境?}
+    UseRay[Ray runner]
+    UseNative[Native runner]
+    SwOther[其它字符串 → 报错]
+
+    Start --&gt; GetEnv --&gt; Sw
+    Sw --&gt;|&quot;native&quot;| SwN --&gt; UseNative
+    Sw --&gt;|&quot;ray&quot;| SwR --&gt; UseRay
+    Sw --&gt;|&quot;py&quot;| SwPy
+    Sw --&gt;|&quot;&quot;| SwEmpty
+    Sw --&gt;|其它| SwOther
+    SwEmpty --&gt; Detect --&gt; Ray
+    Ray --&gt;|是| UseRay
+    Ray --&gt;|否| UseNative
+
+    classDef err fill:#f8cecc
+    class SwPy,SwOther err
+</div>
+<p><code>detect_ray_state</code>(<code>runners.rs:175-183</code>)实际是 Python 调用——查 <code>daft.utils.detect_ray_state()</code>,该函数检查 <code>ray.is_initialized()</code> 和 worker 进程标识。</p>
+<h3>3.3 <code>PlanRunner</code> 与 <code>PlanExecutionContext</code></h3>
+<p><code>src/daft-distributed/src/plan/runner.rs:143</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">PlanRunner</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">W: </span><span style="color: #A6E22E">Worker</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Task </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> SwordfishTask</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    worker_manager: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">dyn</span><span style="color: #F8F8F2"> WorkerManager</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Worker </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> W</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><code>run_plan</code>(<code>runner.rs:152-176</code>)的展开:</p>
+<div class="mermaid">
+sequenceDiagram
+    participant Caller
+    participant PR as PlanRunner
+    participant Sched as spawn_scheduler_actor
+    participant PEC as PlanExecutionContext
+    participant Stream as TaskBuilderStream
+    participant WMgr as WorkerManager
+    participant Worker as Ray Worker (Swordfish)
+
+    Caller-&gt;&gt;PR: run_plan(query_idx, pipeline_node, stats)
+    PR-&gt;&gt;Sched: spawn_scheduler_actor(worker_manager, joinset)
+    Sched--&gt;&gt;PR: SchedulerHandle
+    PR-&gt;&gt;PEC: new(query_idx, scheduler_handle)
+    PR-&gt;&gt;Stream: pipeline_node.produce_tasks(&amp;mut PEC)
+    Stream--&gt;&gt;PR: TaskBuilderStream
+    loop 流式产出 task
+        Stream-&gt;&gt;PR: next builder
+        PR-&gt;&gt;Sched: dispatch SwordfishTask
+        Sched-&gt;&gt;WMgr: assign_task(worker_id)
+        WMgr-&gt;&gt;Worker: ray.remote(execute_task)(plan, scan_task)
+        Worker--&gt;&gt;WMgr: MaterializedOutput
+        WMgr--&gt;&gt;Sched: result
+        Sched--&gt;&gt;PR: forward
+    end
+    PR--&gt;&gt;Caller: PlanResult (stream)
+</div>
+<p><code>PlanExecutionContext.shuffle_dirs</code>(<code>runner.rs:53</code>)记录所有 shuffle 目录,在 plan 结束后调 Python <code>clear_shuffle_dirs_on_all_nodes</code> 清理(<code>runner.rs:198-204</code>)——避免磁盘泄漏。</p>
+<h3>3.4 <code>InProgressShuffleCache</code></h3>
+<p><code>src/daft-shuffles/src/shuffle_cache.rs:41</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">InProgressShuffleCache</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    state: </span><span style="color: #A6E22E">Mutex</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">InProgressShuffleCacheState</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    writer_sender_weak: </span><span style="color: #A6E22E">async_channel</span><span style="color: #F8F8F2">::WeakSender</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">MicroPartition</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    partition_ref_id: </span><span style="color: #66D9EF">u64</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    schema: </span><span style="color: #A6E22E">SchemaRef</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>文件布局(<code>shuffle_cache.rs:10-20</code> 的 <code>get_shuffle_dirs</code> / <code>get_partition_dir</code>):</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>{base_dir}/                     ← 可配置多目录(磁盘负载均衡)
+├── daft_shuffle/{shuffle_id}/
+│   ├── partition_ref_0/
+│   │   ├── 0.ipc               ← Arrow IPC 文件
+│   │   ├── 1.ipc
+│   │   └── ...
+│   ├── partition_ref_1/
+│   ├── ...
+└── ...
+</code></pre></div>
+
+<p><code>partition_ref_id</code> 用 <code>(input_id &lt;&lt; 32) | partition_idx</code>(<code>shuffle_cache.rs:22</code>)编码,保证全局唯一。多目录(<code>dirs.len() &gt; 1</code>)时按 <code>partition_ref_id % dirs.len()</code> 取模分散到不同磁盘(<code>shuffle_cache.rs:18</code>),避免单盘 IO 瓶颈。</p>
+<h3>3.5 <code>Session</code> 与全局态</h3>
+<p><code>src/daft-session/src/session.rs:25</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">Session</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    state: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">RwLock</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">SessionState</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">SessionState</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    _id: String,</span>
+<span style="color: #F8F8F2">    options: </span><span style="color: #A6E22E">Options</span><span style="color: #F8F8F2">,            </span><span style="color: #959077">// current catalog/schema</span>
+<span style="color: #F8F8F2">    catalogs: </span><span style="color: #A6E22E">Bindings</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">CatalogRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    providers: </span><span style="color: #A6E22E">Bindings</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ProviderRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    tables: </span><span style="color: #A6E22E">Bindings</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">TableRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    functions: </span><span style="color: #A6E22E">Bindings</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ScalarFunction</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    agg_functions: </span><span style="color: #A6E22E">Bindings</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">AggFnHandle</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<div class="mermaid">
+flowchart TD
+    GC[全局 DaftContext&lt;br/&gt;daft-context/src/lib.rs:56]
+    SES[Session&lt;br/&gt;session.rs:25]
+    OPT[Options]
+    CAT[Catalogs]
+    UDF[Session-scoped Functions]
+    GR[Global Function Registry&lt;br/&gt;daft-dsl/src/functions/mod.rs]
+
+    GC --&gt; SES
+    SES --&gt; OPT
+    SES --&gt; CAT
+    SES --&gt; UDF
+    SES -.fallback.-&gt; GR
+
+    classDef shared fill:#d5e8d4
+    classDef local fill:#dae8fc
+    class GR shared
+    class SES,OPT,CAT,UDF local
+</div>
+<blockquote>
+<p>Ray 模式下,主进程的 <code>Session.options</code> / <code>catalogs</code> / Python UDF 通过 PyO3 序列化随 Ray task 下发。Rust-原生 <code>FUNCTION_REGISTRY</code>(全局静态)在 worker 进程启动时由 <code>pylib::daft()</code> 模块初始化(详见 <a href="./00-总览.html">00 总览</a> § PyO3 聚合树),<strong>不需要</strong>网络传输。</p>
+</blockquote>
+<hr />
+<h2>4. 关键源码走读</h2>
+<h3>4.1 Native vs Ray 选择</h3>
+<p><code>src/daft-runners/src/runners.rs:226-250</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">get_runner_config_from_env</span><span style="color: #F8F8F2">() -&gt; </span><span style="color: #A6E22E">PyResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">RunnerConfig</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">match</span><span style="color: #F8F8F2"> get_runner_type_from_env().as_str() {</span>
+<span style="color: #F8F8F2">        NativeRunner::NAME </span><span style="color: #FF4689">=&gt;</span><span style="color: #F8F8F2"> Ok(RunnerConfig::Native { num_threads: None }),</span>
+<span style="color: #F8F8F2">        RayRunner::NAME </span><span style="color: #FF4689">=&gt;</span><span style="color: #F8F8F2"> Ok(get_ray_runner_config_from_env()),</span>
+<span style="color: #F8F8F2">        </span><span style="color: #E6DB74">&quot;py&quot;</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">=&gt;</span><span style="color: #F8F8F2"> Err(PyValueError::new_err(</span><span style="color: #E6DB74">&quot;PyRunner removed since v0.5.0&quot;</span><span style="color: #F8F8F2">)),</span>
+<span style="color: #F8F8F2">        </span><span style="color: #E6DB74">&quot;&quot;</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">=&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">            </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> (on_ray, _) </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> detect_ray_state();</span>
+<span style="color: #F8F8F2">            Ok(</span><span style="color: #66D9EF">if</span><span style="color: #F8F8F2"> on_ray {</span>
+<span style="color: #F8F8F2">                get_ray_runner_config_from_env()</span>
+<span style="color: #F8F8F2">            } </span><span style="color: #66D9EF">else</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">                RunnerConfig::Native { num_threads: None }</span>
+<span style="color: #F8F8F2">            })</span>
+<span style="color: #F8F8F2">        }</span>
+<span style="color: #F8F8F2">        other </span><span style="color: #FF4689">=&gt;</span><span style="color: #F8F8F2"> Err(PyValueError::new_err(</span><span style="color: #A6E22E">format!</span><span style="color: #F8F8F2">(</span><span style="color: #E6DB74">&quot;Invalid runner type {other}&quot;</span><span style="color: #F8F8F2">))),</span>
+<span style="color: #F8F8F2">    }</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #959077">// runners.rs:256</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">crate</span><span style="color: #F8F8F2">) </span><span style="color: #66D9EF">static</span><span style="color: #F8F8F2"> DAFT_RUNNER: </span><span style="color: #A6E22E">OnceLock</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Runner</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> OnceLock::new();</span>
+
+<span style="color: #959077">// runners.rs:261</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">get_or_create_runner</span><span style="color: #F8F8F2">() -&gt; </span><span style="color: #A6E22E">DaftResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Runner</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    DAFT_RUNNER.get_or_try_init(</span><span style="color: #FF4689">||</span><span style="color: #F8F8F2"> { </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">. }).cloned()</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<blockquote>
+<p><code>OnceLock</code>:<strong>runner 只能初始化一次</strong>——Python 端 <code>daft.context.set_runner_*()</code> 不能多次切换,设计上是为了避免一个进程同时 hold Ray client 和单机 worker 池(资源混乱)。</p>
+</blockquote>
+<h3>4.2 <code>Runner::run_iter_tables</code></h3>
+<p><code>src/daft-runners/src/runners.rs:102-132</code>:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">run_iter_tables</span><span style="color: #FF4689">&lt;&#39;</span><span style="color: #A6E22E">py</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self, py: </span><span style="color: #A6E22E">Python</span><span style="color: #FF4689">&lt;&#39;</span><span style="color: #A6E22E">py</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">, lp: </span><span style="color: #A6E22E">LogicalPlanBuilder</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">                            results_buffer_size: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">usize</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">)</span>
+<span style="color: #F8F8F2">    -&gt; </span><span style="color: #A6E22E">DaftResult</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">impl</span><span style="color: #F8F8F2"> Iterator</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Item </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> DaftResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">MicroPartitionRef</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">+</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">&#39;</span><span style="color: #A6E22E">py</span><span style="color: #FF4689">&gt;</span>
+<span style="color: #F8F8F2">{</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> pyobj </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> self.get_runner_ref();</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> py_lp </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> PyLogicalPlanBuilder::new(lp);</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> builder </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> py.import(intern</span><span style="color: #FF4689">!</span><span style="color: #F8F8F2">(py, </span><span style="color: #E6DB74">&quot;daft.logical.builder&quot;</span><span style="color: #F8F8F2">))</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> builder </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> builder.getattr(intern</span><span style="color: #FF4689">!</span><span style="color: #F8F8F2">(py, </span><span style="color: #E6DB74">&quot;LogicalPlanBuilder&quot;</span><span style="color: #F8F8F2">))</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> builder </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> builder.call((py_lp,), None)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> result </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> pyobj.call_method(py,</span>
+<span style="color: #F8F8F2">        intern</span><span style="color: #FF4689">!</span><span style="color: #F8F8F2">(py, </span><span style="color: #E6DB74">&quot;run_iter_tables&quot;</span><span style="color: #F8F8F2">), (builder, results_buffer_size), None)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> iter </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> PyIterator::from_object(result.bind(py))</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> iter </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> iter.map(</span><span style="color: #66D9EF">move</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">|</span><span style="color: #F8F8F2">item</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">        </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> item </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> item</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">        </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> partition </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> item.getattr(intern</span><span style="color: #FF4689">!</span><span style="color: #F8F8F2">(py, </span><span style="color: #E6DB74">&quot;_micropartition&quot;</span><span style="color: #F8F8F2">))</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">        </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> partition </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> partition.extract::</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">PyMicroPartition</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">()</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">        Ok::</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">_, DaftError</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">(partition.inner)</span>
+<span style="color: #F8F8F2">    });</span>
+<span style="color: #F8F8F2">    Ok(iter)</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<div class="mermaid">
+sequenceDiagram
+    participant App as Python App
+    participant Rust as Rust Runner::run_iter_tables
+    participant PyR as Python Runner.run_iter_tables
+    participant Exec as NativeExecutor / Ray actor
+
+    App-&gt;&gt;Rust: collect()
+    Rust-&gt;&gt;Rust: 包装 LogicalPlanBuilder → Python 对象
+    Rust-&gt;&gt;PyR: pyobj.call_method(&quot;run_iter_tables&quot;)
+    PyR-&gt;&gt;Exec: 实际执行
+    Exec--&gt;&gt;PyR: yield daft.runners.partitioning.PartitionT
+    Rust-&gt;&gt;Rust: getattr(_micropartition).extract::&lt;PyMicroPartition&gt;()
+    Rust--&gt;&gt;App: yield MicroPartitionRef
+</div>
+<blockquote>
+<p>注意 Python ↔ Rust 边界并不是"Rust 主导"。<strong>Python 才是协调者</strong>:Native 模式下 Python 端 <code>NativeRunner.run_iter_tables</code>(在 <code>daft/runners/native_runner.py</code>)再调回 Rust 的 <code>NativeExecutor::run</code>。Ray 模式则 Python 端调 <code>ray.remote(...).remote(...)</code> 把任务派给 Ray cluster。</p>
+</blockquote>
+<h3>4.3 一次分布式查询的 Ray 任务 DAG</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">df</span> <span style="color: #FF4689">=</span> <span style="color: #F8F8F2">(daft</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">read_parquet(</span><span style="color: #E6DB74">&quot;s3://b/year=2024/*&quot;</span><span style="color: #F8F8F2">)</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">where(</span><span style="color: #E6DB74">&quot;amount &gt; 0&quot;</span><span style="color: #F8F8F2">)</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">groupby(</span><span style="color: #E6DB74">&quot;user_id&quot;</span><span style="color: #F8F8F2">)</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">agg(col(</span><span style="color: #E6DB74">&quot;amount&quot;</span><span style="color: #F8F8F2">)</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">sum())</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">write_parquet(</span><span style="color: #E6DB74">&quot;s3://b/output/&quot;</span><span style="color: #F8F8F2">))</span>
+</code></pre></div>
+
+<div class="mermaid">
+flowchart TD
+    subgraph Ray Driver
+        D[Optimizer]
+        DPP[DistributedPhysicalPlan]
+        SCH[SchedulerActor]
+    end
+
+    subgraph &quot;Map 阶段(N 并行)&quot;
+        M0[Worker_0&lt;br/&gt;scan + filter + partial_agg]
+        M1[Worker_1&lt;br/&gt;...]
+        M2[Worker_2&lt;br/&gt;...]
+    end
+
+    subgraph Shuffle 边界
+        S0[shuffle_cache_0&lt;br/&gt;磁盘 IPC]
+        S1[shuffle_cache_1]
+        S2[shuffle_cache_2]
+    end
+
+    subgraph &quot;Reduce 阶段(M 并行)&quot;
+        R0[Worker_X&lt;br/&gt;flight_pull + merge_agg + write]
+        R1[Worker_Y&lt;br/&gt;...]
+    end
+
+    D --&gt; DPP --&gt; SCH
+    SCH --&gt; M0 &amp; M1 &amp; M2
+    M0 --&gt; S0
+    M1 --&gt; S1
+    M2 --&gt; S2
+    SCH --&gt; R0 &amp; R1
+    S0 -.flight.-&gt; R0
+    S1 -.flight.-&gt; R0
+    S2 -.flight.-&gt; R1
+
+    style S0 fill:#fff2cc
+    style S1 fill:#fff2cc
+    style S2 fill:#fff2cc
+</div>
+<h3>4.4 Shuffle 数据落盘 + Flight Pull</h3>
+<div class="mermaid">
+sequenceDiagram
+    participant MapWorker as Map Worker (Swordfish)
+    participant Cache as InProgressShuffleCache
+    participant Disk as 本地磁盘 IPC
+    participant Server as ShuffleFlightServer
+    participant Client as ShuffleFlightClient
+    participant ReduceWorker as Reduce Worker
+
+    MapWorker-&gt;&gt;Cache: 给 partition_ref_id 写 morsel
+    Cache-&gt;&gt;Disk: AsyncFileWriter.write_ipc
+    MapWorker-&gt;&gt;Cache: Flush
+    Cache-&gt;&gt;Cache: writer_task.await → 收集 file_paths
+    Cache--&gt;&gt;MapWorker: 完成
+    MapWorker-&gt;&gt;SchedulerActor: report partition_ref_id 就绪
+    SchedulerActor-&gt;&gt;ReduceWorker: 派发 task,附 partition_ref_id 列表
+    ReduceWorker-&gt;&gt;Client: pull(partition_ref_id × N)
+    Client-&gt;&gt;Server: Flight DoGet (ticket = partition_ref_id)
+    Server-&gt;&gt;Disk: 读取本地 IPC 文件
+    Server--&gt;&gt;Client: stream Arrow batches
+    Client--&gt;&gt;ReduceWorker: MicroPartition
+    ReduceWorker-&gt;&gt;ReduceWorker: merge / probe / 继续 pipeline
+</div>
+<blockquote>
+<p><strong>为什么不直接 Ray object store?</strong> Ray 的 in-memory object store 在大 shuffle 量下要 spill 到磁盘,但暴露给程序的接口仍是 "object_ref"。Daft 选择<strong>显式管理磁盘 + Flight 协议</strong>,好处:
+- 直接复用现成的 Arrow Flight server / client(行话说叫 zero-copy IPC)
+- 失败重试时只需重读磁盘,不需要重算 map 阶段
+- 避免 Ray object store 的 LRU 淘汰把 shuffle 数据回收掉</p>
+</blockquote>
+<h3>4.5 Map 侧 partial 聚合 → Shuffle → Reduce 侧 final 聚合</h3>
+<p><code>PushDownAggregation</code> 优化(见 <a href="./03-逻辑计划与优化器.html">03 § 5.3</a>)把 <code>count(*) GROUP BY u</code> 拆成 partial+final。在分布式下,这一拆分天然映射到 shuffle 边界:</p>
+<div class="mermaid">
+flowchart TB
+    subgraph &quot;Map 端 (在每个 worker 内)&quot;
+        Scan1[Source 行组裁剪] --&gt; Filter1[Filter] --&gt; Partial1[Partial Aggregate&lt;br/&gt;per-worker hashtable]
+    end
+    subgraph &quot;Shuffle 边界&quot;
+        Sh[hash(user_id) % N → 落盘 IPC&lt;br/&gt;同 user_id 路由到同一目标]
+    end
+    subgraph &quot;Reduce 端 (按 user_id 分组到目标 worker)&quot;
+        FlightR[Flight pull 自己负责的 user_id 区间] --&gt; Final[Final Aggregate&lt;br/&gt;sum(_partial_count)]
+        Final --&gt; Write[PhysicalWrite + CommitWrite]
+    end
+
+    Partial1 --&gt; Sh --&gt; FlightR
+</div>
+<hr />
+<h2>5. 怎么优化的:四个权衡点</h2>
+<h3>5.1 PipelineNode 镜像 Swordfish 算子</h3>
+<p><code>src/daft-distributed/src/pipeline_node/</code> 下每个文件镜像 <code>daft-local-execution</code> 的同名算子,但<strong>不在本地执行</strong>——而是产生 <code>SwordfishTask</code>(<code>scheduling/task.rs</code>)给 SchedulerActor 派发。</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">local</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">execution               daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">distributed</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">pipeline_node</span><span style="color: #FF4689">/</span>
+<span style="color: #ED007E; background-color: #1E0010">─────────────────────</span><span style="color: #F8F8F2">              </span><span style="color: #ED007E; background-color: #1E0010">──────────────────────────────</span>
+<span style="color: #F8F8F2">sources</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">scan_task.rs    </span><span style="color: #ED007E; background-color: #1E0010">←镜像→</span><span style="color: #F8F8F2">     scan_source.rs</span>
+<span style="color: #F8F8F2">intermediate_ops</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">filter </span><span style="color: #ED007E; background-color: #1E0010">←镜像→</span><span style="color: #F8F8F2">     filter.rs</span>
+<span style="color: #F8F8F2">sinks</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">grouped_aggregate </span><span style="color: #ED007E; background-color: #1E0010">←镜像→</span><span style="color: #F8F8F2">     aggregate.rs</span>
+<span style="color: #F8F8F2">sinks</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">sort.rs           </span><span style="color: #ED007E; background-color: #1E0010">←镜像→</span><span style="color: #F8F8F2">     sort.rs</span>
+<span style="color: #F8F8F2">streaming_sink</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">limit.rs </span><span style="color: #ED007E; background-color: #1E0010">←镜像→</span><span style="color: #F8F8F2">     limit.rs</span>
+<span style="color: #F8F8F2">sinks</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">write.rs          </span><span style="color: #ED007E; background-color: #1E0010">←镜像→</span><span style="color: #F8F8F2">     sink.rs</span>
+<span style="color: #66D9EF">join</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">                   </span><span style="color: #ED007E; background-color: #1E0010">←镜像→</span><span style="color: #F8F8F2">     </span><span style="color: #66D9EF">join</span><span style="color: #FF4689">/</span>
+<span style="color: #F8F8F2">sinks</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">repartition.rs    </span><span style="color: #ED007E; background-color: #1E0010">←镜像→</span><span style="color: #F8F8F2">     shuffles</span><span style="color: #FF4689">/</span>
+<span style="color: #F8F8F2">                                   in_memory_source.rs (</span><span style="color: #ED007E; background-color: #1E0010">新增</span><span style="color: #F8F8F2">)</span>
+</code></pre></div>
+
+<p>每个 <code>DistributedPipelineNode</code> 的 <code>produce_tasks(&amp;mut plan_context)</code> 方法返回一个 <code>TaskBuilderStream</code>,惰性产生子任务——这就是为什么 <code>DistributedPhysicalPlan</code> 不需要"提前切 stage"。</p>
+<h3>5.2 工作窃取 vs 静态分配</h3>
+<p><code>src/daft-distributed/src/scheduling/scheduler/</code>(子目录)定义了基于"任务优先级 + worker 心跳"的动态调度器。具体策略:</p>
+<table>
+<thead>
+<tr>
+<th>调度方式</th>
+<th>Daft 是否使用</th>
+<th>优点</th>
+<th>缺点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>静态分配(map_id % N)</td>
+<td>否</td>
+<td>简单</td>
+<td>慢节点拖整个 stage</td>
+</tr>
+<tr>
+<td>Eager 窃取</td>
+<td>部分(map 阶段)</td>
+<td>平衡</td>
+<td>窃取开销</td>
+</tr>
+<tr>
+<td>Lazy 拉取(Flight pull)</td>
+<td>是(reduce 阶段)</td>
+<td>reduce 端按需读,自然平衡</td>
+<td>实现复杂</td>
+</tr>
+</tbody>
+</table>
+<p><code>statistics/</code>(<code>stats.rs</code> + <code>task_lifecycle.rs</code>)持续收集每个 worker 的吞吐 / 错误,SchedulerActor 据此调整后续派发。</p>
+<h3>5.3 与 Spark / Ray Data Shuffle 对比</h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Daft</th>
+<th>Spark</th>
+<th>Ray Data</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>落地位置</td>
+<td>本地磁盘 IPC</td>
+<td>本地磁盘(sort &amp; spill)</td>
+<td>Ray object store(可能 spill)</td>
+</tr>
+<tr>
+<td>协议</td>
+<td>Arrow Flight (DoGet)</td>
+<td>Netty 自定义</td>
+<td>Ray internal</td>
+</tr>
+<tr>
+<td>序列化</td>
+<td>Arrow IPC(零拷贝读)</td>
+<td>Java serializer / Arrow</td>
+<td>Pickle / Arrow</td>
+</tr>
+<tr>
+<td>失败恢复</td>
+<td>重算 map task / 重读磁盘</td>
+<td>重算 stage</td>
+<td>重算 actor lineage</td>
+</tr>
+<tr>
+<td>Push vs Pull</td>
+<td>Reduce pull</td>
+<td>两者皆有</td>
+<td>Pull</td>
+</tr>
+<tr>
+<td>多盘负载</td>
+<td><code>dirs[idx % len]</code> 取模</td>
+<td>配置 spill dir</td>
+<td>同</td>
+</tr>
+<tr>
+<td>清理</td>
+<td><code>clear_shuffle_dirs_on_all_nodes</code> 收尾</td>
+<td>Spark cleanup hook</td>
+<td>Ray TTL</td>
+</tr>
+</tbody>
+</table>
+<div class="mermaid">
+flowchart LR
+    subgraph Daft
+        D1[Map worker] --&gt; D2[本地磁盘 IPC] --&gt; D3[Flight DoGet] --&gt; D4[Reduce worker]
+    end
+    subgraph Spark
+        S1[Map task] --&gt; S2[本地磁盘&lt;br/&gt;sort &amp; spill] --&gt; S3[Netty fetch] --&gt; S4[Reduce task]
+    end
+    subgraph &quot;Ray Data&quot;
+        R1[Map block] --&gt; R2[Ray object store] --&gt; R3[ray.get] --&gt; R4[Reduce block]
+    end
+</div>
+<h3>5.4 Session 跨进程同步</h3>
+<div class="mermaid">
+flowchart LR
+    Driver[Ray Driver Python&lt;br/&gt;Session.options/catalogs/UDF] --&gt;|cloudpickle| Task[ray task argv]
+    Task --&gt;|env init| Worker[Ray Worker Python&lt;br/&gt;Session 重建]
+    Worker --&gt;|PyO3| RustWorker[Rust NativeExecutor]
+    RustWorker -.全局静态.- FR[FUNCTION_REGISTRY&lt;br/&gt;(每进程独立初始化)]
+
+    classDef shared fill:#d5e8d4
+    classDef perprocess fill:#dae8fc
+    class FR perprocess
+</div>
+<p><code>FUNCTION_REGISTRY</code> 在每个 Ray worker 进程<strong>独立</strong>初始化(因为它是 Rust 的全局静态,模块加载时填充)。Python UDF 不在 registry 里——它走 <code>cloudpickle</code> 序列化走 Ray task argv 路径。</p>
+<hr />
+<h2>6. 端到端案例:Native vs Ray 对照</h2>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">df</span> <span style="color: #FF4689">=</span> <span style="color: #F8F8F2">(daft</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">read_parquet(</span><span style="color: #E6DB74">&quot;s3://b/*.parquet&quot;</span><span style="color: #F8F8F2">)</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">where(</span><span style="color: #E6DB74">&quot;amount &gt; 100&quot;</span><span style="color: #F8F8F2">)</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">groupby(</span><span style="color: #E6DB74">&quot;user_id&quot;</span><span style="color: #F8F8F2">)</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">count()</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">collect())</span>
+</code></pre></div>
+
+<h3>Native 路径</h3>
+<div class="mermaid">
+sequenceDiagram
+    participant App as Python App
+    participant Rust as Rust Runner::run_iter_tables
+    participant Native as NativeRunner.py
+    participant Exec as NativeExecutor::run
+    participant Pipe as Pipeline (单进程)
+
+    App-&gt;&gt;Rust: collect
+    Rust-&gt;&gt;Native: pyobj.call_method(&quot;run_iter_tables&quot;)
+    Native-&gt;&gt;Exec: PyNativeExecutor.run
+    Exec-&gt;&gt;Pipe: build_pipeline
+    Pipe-&gt;&gt;Pipe: Source → Filter → HashAgg → ...&lt;br/&gt;(同进程多 worker)
+    Pipe--&gt;&gt;Exec: MicroPartition stream
+    Exec--&gt;&gt;Native: yield
+    Native--&gt;&gt;Rust: yield
+    Rust--&gt;&gt;App: yield MicroPartitionRef
+</div>
+<h3>Ray 路径</h3>
+<div class="mermaid">
+sequenceDiagram
+    participant App as Python App
+    participant Rust as Rust Runner
+    participant Ray as RayRunner.py
+    participant Driver as Ray Driver
+    participant W1 as Ray Worker 1 (NativeExecutor)
+    participant Disk as 本地磁盘
+    participant W2 as Ray Worker 2 (NativeExecutor)
+
+    App-&gt;&gt;Rust: collect
+    Rust-&gt;&gt;Ray: pyobj.call_method(&quot;run_iter_tables&quot;)
+    Ray-&gt;&gt;Driver: DistributedPhysicalPlan.run_plan
+    Driver-&gt;&gt;W1: ray.remote map_task(scan_task_0)
+    Driver-&gt;&gt;W1: ray.remote map_task(scan_task_1)
+    par 并行 map
+        W1-&gt;&gt;Disk: shuffle_cache.write_ipc(part_ref_0_user_a)
+        and
+        W1-&gt;&gt;Disk: shuffle_cache.write_ipc(part_ref_1_user_b)
+    end
+    W1--&gt;&gt;Driver: 完成
+    Driver-&gt;&gt;W2: ray.remote reduce_task(part_refs=[user_a])
+    W2-&gt;&gt;Disk: Flight DoGet(part_ref_0_user_a)
+    Disk--&gt;&gt;W2: Arrow batches
+    W2-&gt;&gt;W2: Final HashAgg
+    W2--&gt;&gt;Driver: MaterializedOutput
+    Driver--&gt;&gt;Ray: yield
+    Ray--&gt;&gt;Rust: yield
+    Rust--&gt;&gt;App: yield MicroPartitionRef
+</div>
+<blockquote>
+<p>注意两条路径在 <em>Rust 这边的入口(<code>run_iter_tables</code>)</em> 是同一个签名;Python 层也是同一个 <code>run_iter_tables</code> 协议。<strong>不同</strong>的只是 Python 端 <code>RayRunner</code> 把任务进一步切片下发到 Ray cluster,而 <code>NativeRunner</code> 直接同进程跑。</p>
+</blockquote>
+<hr />
+<h2>7. 与同类项目对照</h2>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Daft Distributed</th>
+<th>Spark</th>
+<th>Ray Data</th>
+<th>Dask</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>物理 IR</td>
+<td>无独立 IR(<code>DistributedPhysicalPlan</code> 是惰性描述符)</td>
+<td>RDD + DAG Scheduler + Stages</td>
+<td>Block-based</td>
+<td>Task graph</td>
+</tr>
+<tr>
+<td>任务粒度</td>
+<td>per-PipelineNode → SwordfishTask</td>
+<td>per-stage 多 task</td>
+<td>per-block</td>
+<td>per-future</td>
+</tr>
+<tr>
+<td>Shuffle</td>
+<td>磁盘 IPC + Flight</td>
+<td>磁盘 sort &amp; spill + Netty</td>
+<td>object store</td>
+<td>自定义</td>
+</tr>
+<tr>
+<td>Worker = 单机引擎</td>
+<td>是(NativeExecutor <code>is_flotilla_worker=true</code>)</td>
+<td>JVM Executor</td>
+<td>Ray actor (Python)</td>
+<td>dask worker</td>
+</tr>
+<tr>
+<td>调度</td>
+<td>SchedulerActor + 动态</td>
+<td>DAG Scheduler</td>
+<td>Ray scheduler</td>
+<td>distributed</td>
+</tr>
+<tr>
+<td>Session 序列化</td>
+<td>Python cloudpickle + Rust 重建</td>
+<td>SparkContext.broadcast</td>
+<td>Ray serializer</td>
+<td>client/scheduler</td>
+</tr>
+<tr>
+<td>失败恢复</td>
+<td>重算 map task / Flight 续读</td>
+<td>stage retry</td>
+<td>Lineage replay</td>
+<td>retry</td>
+</tr>
+<tr>
+<td>是否需要 master 节点</td>
+<td>否(Ray driver 即 master)</td>
+<td>是</td>
+<td>否(Ray)</td>
+<td>是(scheduler)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>8. 未解之谜</h2>
+<ol>
+<li><strong><code>SwordfishTask</code> 的具体 payload</strong>:在 <code>scheduling/task.rs</code> 里定义的任务结构包含哪些字段?是携带 <code>LocalPhysicalPlanRef</code> 还是只描述符?是否每个 task 都重新 build 一遍 pipeline?(待精读 <code>scheduling/task.rs</code>)</li>
+<li><strong>Flight server 的认证 / TLS</strong>:跨 Ray cluster shuffle 时 Flight 端口暴露给 Worker IP,production 部署如何鉴权?目前看 <code>server/</code> 没有显著的 auth 钩子,可能依赖 cluster 内网保护。</li>
+<li><strong>Map 阶段的局部性</strong>:<code>scan_source.rs</code> 是否会把 ScanTask 路由到 <em>最接近数据所在 region</em> 的 worker(类似 HDFS data locality)?Ray 本身不感知 S3 region,可能完全靠 worker 池随机分布。</li>
+<li><strong><code>is_flotilla_worker</code> 这个名字</strong>:<code>NativeExecutor::new(is_flotilla_worker, ip)</code>(<code>run.rs:382</code>)中"flotilla"指 Daft 内部对分布式 NativeExecutor 集群的代号,但代码里未集中定义术语。从上下文看,"Flotilla = Native runner 的多实例集群版"。</li>
+<li><strong>Statistics 反向回流</strong>:<code>statistics/task_lifecycle.rs</code> 收集 worker 端运行时统计,这些统计如何回到 Optimizer 层?是否会触发 reoptimize(类似 Spark AQE)?目前看是单向的(供调度用),<strong>未启用</strong> AQE 等价机制。</li>
+</ol>
+<hr />
+<blockquote>
+<p>下一篇:<a href="./07-SQL与Python桥.html">07 SQL 与 Python 桥</a> — sqlparser 怎么生成同一棵 LogicalPlan;PyO3 50+ crate 怎么聚合成单 cdylib。</p>
+</blockquote>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>00 · 元信息与阅读指南 · Databend 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#ff6b6b}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">☁️ <span>Databend 源码深度解析</span></span><nav class="nav"><a href="00-meta.html" class=on>元信息与阅读指南</a><a href="01-overview.html">总览：三层架构与设计取舍</a><a href="02-meta-service.html">Meta Service：客户端层 + 外部 OpenRaft 状态机</a><a href="03-sql-frontend.html">SQL 前端：词法 / 语法 / 绑定</a><a href="04-planner-optimizer.html">Planner / Optimizer：从 SExpr 到最优计划</a><a href="05-pipeline-execution.html">Pipeline 执行：Push-based + Event 状态机</a><a href="06-fuse-storage.html">FUSE 存储引擎：Snapshot / Segment / Block</a><a href="07-io-and-cache.html">IO 与多级缓存：OpenDAL Layer 栈 + CacheManager</a><a href="08-indexes-and-search.html">索引与搜索：Bloom / Inverted / Vector / Range / Page / Spatial</a><a href="09-cluster-and-exchange.html">集群与 Exchange：节点发现 + Flight Shuffle</a><a href="10-extensions.html">扩展：Stream / UDF / Iceberg / Delta</a><a href="99-diagrams.html">Mermaid 图源归档</a></nav></div></header>
+<main class="wrap">
+<h1>00 · 元信息与阅读指南</h1>
+<blockquote>
+<p>本系列是对 Databend 的深度源码剖析。本篇是元文件，记录分析基线、术语、阅读顺序与文档间的交叉引用，让后续 11 篇文档有一个可校验的锚。</p>
+</blockquote>
+<h2>1. 分析基线</h2>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>取值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>仓库</td>
+<td><a href="https://github.com/databendlabs/databend">https://github.com/databendlabs/databend</a></td>
+</tr>
+<tr>
+<td>本地路径</td>
+<td><code>/Users/xiaowenli/rust_workspace/databend/</code></td>
+</tr>
+<tr>
+<td>Commit</td>
+<td><code>fe693bb677670b09a0aae1fee8d446b1ef99b982</code></td>
+</tr>
+<tr>
+<td>Commit 标题</td>
+<td><code>refactor(storage): compact/recluster flow and clustering stats derivation (#19754)</code></td>
+</tr>
+<tr>
+<td>Commit 日期</td>
+<td>2026-04-30</td>
+</tr>
+<tr>
+<td>分支</td>
+<td><code>main</code></td>
+</tr>
+<tr>
+<td>Cargo <code>edition</code></td>
+<td><code>2024</code> (<code>Cargo.toml</code> <code>[workspace.package]</code>)</td>
+</tr>
+<tr>
+<td>Rust toolchain</td>
+<td><code>nightly-2025-12-11</code>（来自 <code>rust-toolchain.toml</code>）</td>
+</tr>
+<tr>
+<td>外部子仓</td>
+<td><code>databend-meta</code>（<code>/tmp/databend-meta</code>，<code>crates/{client,common,server}/...</code>，OpenRaft 状态机居于此处）</td>
+</tr>
+</tbody>
+</table>
+<p>后续文档的所有源码引用都以本 commit 为准。Main 分支持续推进，行号会偏移；引用形式统一为 <code>path/to/file.rs::symbol_name (L≈NNN)</code>，函数/结构体名比行号更稳定。</p>
+<h2>2. workspace 实际 crate 列表</h2>
+<p>下图按职能而非目录归类，所有节点都对应 <code>find src -name Cargo.toml</code> 的真实输出（不含 fuzz/visit_derive 等小辅助 crate）。</p>
+<div class="mermaid">
+flowchart TB
+    subgraph Bin[&quot;二进制 src/binaries/, src/meta/binaries/, src/bendsave/, src/bendpy/&quot;]
+      B1[&quot;databend-query (ee_main / oss_main)&quot;]
+      B2[&quot;databend-meta\n(实际实现迁出至外部仓)&quot;]
+      B3[&quot;databend-metactl / metabench / metaverifier&quot;]
+      B4[&quot;bendsave&quot;]
+      B5[&quot;bendpy (Python 绑定)&quot;]
+    end
+
+    subgraph Query[&quot;Query 引擎 src/query/&quot;]
+      direction TB
+      Q_AST[&quot;ast&quot;]
+      Q_SQL[&quot;sql\n(planner/binder/optimizer)&quot;]
+      Q_PIPE[&quot;pipeline + pipeline/transforms&quot;]
+      Q_EXPR[&quot;expression&quot;]
+      Q_FN[&quot;functions&quot;]
+      Q_CAT[&quot;catalog&quot;]
+      Q_SVC[&quot;service&quot;]
+      Q_CFG[&quot;config / settings&quot;]
+      Q_USERS[&quot;users / management&quot;]
+      Q_FMT[&quot;formats&quot;]
+      Q_SCRIPT[&quot;script / script_udf_support / task_support / storage_stage_support&quot;]
+      Q_EE[&quot;ee + ee_features/*&quot;]
+    end
+
+    subgraph Storage[&quot;存储 src/query/storages/&quot;]
+      S_BASIC[&quot;basic\n(memory/null/random/view/result_cache)&quot;]
+      S_FUSE[&quot;fuse&quot;]
+      S_FACT[&quot;factory&quot;]
+      S_COMMON[&quot;common/{blocks,cache,index,io,pruner,session,stage,table_meta}&quot;]
+      S_EXT[&quot;delta / iceberg / hive(无独立 crate) / parquet / orc / stage / stream / system / information_schema&quot;]
+    end
+
+    subgraph Meta[&quot;Meta 客户端层 src/meta/&quot;]
+      M_APP[&quot;app + app-storage&quot;]
+      M_PROTO[&quot;protos + proto-conv&quot;]
+      M_API[&quot;api + store&quot;]
+      M_RUNTIME[&quot;runtime + plugins/{cache,semaphore} + admin + control + process&quot;]
+      M_EE[&quot;ee&quot;]
+    end
+
+    subgraph Common[&quot;公共基础 src/common/&quot;]
+      C_BASE[&quot;base / exception / tracing / metrics / telemetry&quot;]
+      C_STORE[&quot;storage(OpenDAL 工厂) / io / native / column / vector / hashtable&quot;]
+      C_NET[&quot;grpc / http / cloud_control&quot;]
+      C_MISC[&quot;cache / compress / license / timezone / version / building / statistics / frozen_api&quot;]
+    end
+
+    Bin --&gt; Query
+    Bin --&gt; Meta
+    Query --&gt; Storage
+    Query --&gt; Meta
+    Query --&gt; Common
+    Storage --&gt; Common
+    Meta --&gt; Common
+</div>
+<h2>3. 文档清单与阅读顺序</h2>
+<div class="mermaid">
+flowchart LR
+    M00[&quot;00 · 元信息（本篇）&quot;] --&gt; O01[&quot;01 · 总览&quot;]
+    O01 --&gt; F06[&quot;06 · FUSE 存储\n(最有形)&quot;]
+    F06 --&gt; S03[&quot;03 · SQL 前端&quot;]
+    S03 --&gt; P04[&quot;04 · Planner / Optimizer&quot;]
+    P04 --&gt; E05[&quot;05 · Pipeline 执行&quot;]
+    E05 --&gt; I07[&quot;07 · IO 与 Cache&quot;]
+    I07 --&gt; X08[&quot;08 · 索引与搜索&quot;]
+    X08 --&gt; M02[&quot;02 · Meta Service\n(含外部仓库)&quot;]
+    M02 --&gt; C09[&quot;09 · 集群与 Exchange&quot;]
+    C09 --&gt; X10[&quot;10 · 扩展\n(Stream/UDF/Iceberg/Delta)&quot;]
+    X10 --&gt; D99[&quot;99 · 图源归档&quot;]
+</div>
+<p>选这个顺序的理由：先建立最具象的文件布局直觉（FUSE 三层），再走「SQL → Plan → Pipeline」的上行链路，再补横切的 IO/Cache 与索引，最后处理跨进程协作（Meta、Cluster Exchange）和扩展点。</p>
+<h2>4. 各文档主题与源码锚点</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>文件</th>
+<th>主题</th>
+<th>主要源码锚点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>00</td>
+<td><a href="./00-meta.html">00-meta.md</a></td>
+<td>元信息、术语、阅读顺序</td>
+<td><code>Cargo.toml</code>、<code>rust-toolchain.toml</code></td>
+</tr>
+<tr>
+<td>01</td>
+<td><a href="./01-overview.html">01-overview.md</a></td>
+<td>三层架构总览 + 同类系统对比</td>
+<td><code>src/binaries/query/{ee_main,oss_main,entry}.rs</code>、<code>service/src/global_services.rs</code></td>
+</tr>
+<tr>
+<td>02</td>
+<td><a href="./02-meta-service.html">02-meta-service.md</a></td>
+<td>meta 客户端层 + 外部 raft 状态机</td>
+<td><code>src/meta/{app,protos,proto-conv,api,store}/</code>、外部 <code>crates/server/{raft-store,sled-store,service}</code></td>
+</tr>
+<tr>
+<td>03</td>
+<td><a href="./03-sql-frontend.html">03-sql-frontend.md</a></td>
+<td>nom parser + AST + Binder</td>
+<td><code>src/query/ast/src/parser/parser.rs</code>、<code>sql/src/planner/binder/binder.rs</code></td>
+</tr>
+<tr>
+<td>04</td>
+<td><a href="./04-planner-optimizer.html">04-planner-optimizer.md</a></td>
+<td>SExpr / Cascades / DPHyp / RBO</td>
+<td><code>sql/src/planner/optimizer/{optimizer.rs, optimizers/{cascades,hyper_dp,rule}}</code></td>
+</tr>
+<tr>
+<td>05</td>
+<td><a href="./05-pipeline-execution.html">05-pipeline-execution.md</a></td>
+<td>Processor + Event 状态机 + 调度</td>
+<td><code>pipeline/src/core/{processor,pipe,pipeline,port}.rs</code>、<code>service/src/pipelines/{pipeline_builder.rs, executor/}</code></td>
+</tr>
+<tr>
+<td>06</td>
+<td><a href="./06-fuse-storage.html">06-fuse-storage.md</a></td>
+<td>Snapshot/Segment/Block + 操作</td>
+<td><code>storages/common/table_meta/src/meta/v4/{snapshot,segment}.rs</code>、<code>storages/fuse/src/{fuse_table.rs, operations/}</code></td>
+</tr>
+<tr>
+<td>07</td>
+<td><a href="./07-io-and-cache.html">07-io-and-cache.md</a></td>
+<td>OpenDAL Operator + Layer + 多级缓存</td>
+<td><code>common/storage/src/operator.rs</code>、<code>storages/common/cache/src/</code></td>
+</tr>
+<tr>
+<td>08</td>
+<td><a href="./08-indexes-and-search.html">08-indexes-and-search.md</a></td>
+<td>Bloom/Inverted/Vector/Range/Page/Spatial</td>
+<td><code>storages/common/index/src/</code></td>
+</tr>
+<tr>
+<td>09</td>
+<td><a href="./09-cluster-and-exchange.html">09-cluster-and-exchange.md</a></td>
+<td>集群发现 + Flight RPC + Shuffle</td>
+<td><code>service/src/clusters/cluster.rs</code>、<code>service/src/servers/flight/v1/exchange/exchange_manager.rs</code></td>
+</tr>
+<tr>
+<td>10</td>
+<td><a href="./10-extensions.html">10-extensions.md</a></td>
+<td>Stream / UDF / Iceberg / Delta</td>
+<td><code>storages/stream/</code>、<code>script_udf_support/</code>、<code>storages/{iceberg,delta}/</code></td>
+</tr>
+<tr>
+<td>99</td>
+<td><a href="./99-diagrams.html">99-diagrams.md</a></td>
+<td>全部 Mermaid 源码归档</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h2>5. 端到端贯穿案例（在多篇文档中分段复用）</h2>
+<p>主案例：</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #66D9EF">SELECT</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">count</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">*</span><span style="color: #F8F8F2">) </span><span style="color: #66D9EF">FROM</span><span style="color: #F8F8F2"> t </span><span style="color: #66D9EF">WHERE</span><span style="color: #F8F8F2"> x </span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> </span><span style="color: #AE81FF">1</span><span style="color: #F8F8F2">;</span>
+</code></pre></div>
+
+<p>调用链（每篇文档只画自己负责的那一段时序图，由下表锚定边界）：</p>
+<table>
+<thead>
+<tr>
+<th>文档</th>
+<th>负责段落</th>
+<th>起点 → 终点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>03</td>
+<td>词法/语法/绑定</td>
+<td>HTTP Body → <code>parse_sql</code> → <code>Binder::bind</code> → <code>Plan::Query(...)</code></td>
+</tr>
+<tr>
+<td>04</td>
+<td>优化</td>
+<td><code>Plan</code> → <code>optimize_query</code> → <code>CascadesOptimizer::optimize_sync</code> → <code>PhysicalPlan</code></td>
+</tr>
+<tr>
+<td>05</td>
+<td>物理执行</td>
+<td><code>PhysicalPlan</code> → <code>PipelineBuilder::finalize</code> → <code>PipelineExecutor::execute</code></td>
+</tr>
+<tr>
+<td>06</td>
+<td>存储读取</td>
+<td><code>FuseTable::read_partitions</code> → 块裁剪 → <code>read_data</code> → OpenDAL</td>
+</tr>
+<tr>
+<td>07</td>
+<td>IO 落点</td>
+<td>OpenDAL <code>Operator::read</code> → 多级缓存 → 字节流</td>
+</tr>
+<tr>
+<td>08</td>
+<td>谓词下推</td>
+<td><code>BlockMeta</code> 索引位置 → BloomIndex/RangeIndex 裁剪</td>
+</tr>
+</tbody>
+</table>
+<h2>6. 术语表</h2>
+<table>
+<thead>
+<tr>
+<th>术语</th>
+<th>含义</th>
+<th>备注</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>FUSE engine</strong></td>
+<td>Databend 默认表引擎，三层文件结构 Snapshot → Segment → Block</td>
+<td>与 Linux FUSE 文件系统无关</td>
+</tr>
+<tr>
+<td><strong>Snapshot</strong></td>
+<td>表的某个版本元数据，包含 segment 列表、统计信息、cluster key</td>
+<td>不可变；<code>prev_snapshot_id</code> 形成链表实现 Time Travel</td>
+</tr>
+<tr>
+<td><strong>Segment</strong></td>
+<td>一组 block 的容器，自带 segment 级聚合统计</td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Block</strong></td>
+<td>实际数据块，对应对象存储一个文件（默认 Parquet）</td>
+<td><code>BlockMeta</code> 上挂 bloom/inverted/vector/spatial 等索引 location</td>
+</tr>
+<tr>
+<td><strong>OpenDAL</strong></td>
+<td>对所有对象存储的统一抽象层（S3/GCS/Azure/OSS/HDFS/FS/...）</td>
+<td><code>Operator</code> 上叠加 Retry/Timeout/ConcurrentLimit/Logging/Metrics 等 Layer</td>
+</tr>
+<tr>
+<td><strong>Cascades / DPHyp</strong></td>
+<td>优化器框架：Cascades 用于规则/分组 memo 探索；DPHyp 用于多表 join 的动态规划枚举</td>
+<td>两者并存且分工不同</td>
+</tr>
+<tr>
+<td><strong>Pipeline / Processor / Port</strong></td>
+<td>push-based 执行模型：DAG 上的 <code>Processor</code> 节点通过 <code>Port</code> 推送 <code>DataBlock</code>，<code>Event</code> 状态机驱动调度</td>
+<td><code>PipelineExecutor</code> 在 worker 间 work-stealing</td>
+</tr>
+<tr>
+<td><strong>DataBlock</strong></td>
+<td>列存内存批，由若干 <code>Column</code> + 元数据组成，是 pipeline 中流转的基本单位</td>
+<td></td>
+</tr>
+<tr>
+<td><strong>BindContext</strong></td>
+<td>Binder 输出的上下文，记录列绑定、可见列集合、CTE/外层引用</td>
+<td></td>
+</tr>
+<tr>
+<td><strong>SExpr</strong></td>
+<td>Single-Expression Tree，逻辑计划的不可变表达</td>
+<td>缓存关系属性（基数、输出列、分区）</td>
+</tr>
+<tr>
+<td><strong>PhysicalPlan</strong></td>
+<td>物理算子的 enum 派发；每个变体自带 <code>build_pipeline</code> 实现</td>
+<td>没有「单独的 PhysicalPlan trait」，而是 enum</td>
+</tr>
+<tr>
+<td><strong>MetaStore</strong></td>
+<td>meta 客户端抽象，可包内嵌或走 gRPC；本仓库代码硬性禁用 embedded 模式</td>
+<td><code>src/meta/store/</code></td>
+</tr>
+<tr>
+<td><strong>META_CHANGE_LOG</strong></td>
+<td>meta 类型 protobuf 版本追加日志；只允许尾部追加，前部清理</td>
+<td><code>src/meta/proto-conv/src/util.rs</code></td>
+</tr>
+<tr>
+<td><strong>EE / OSS</strong></td>
+<td>企业版 / 开源版二进制；通过不同 license-manager 入口区分</td>
+<td><code>ee_main.rs</code> vs <code>oss_main.rs</code></td>
+</tr>
+</tbody>
+</table>
+<h2>7. 写作约定</h2>
+<ul>
+<li><strong>图优先</strong>：每篇 ≥ 8 张图，段落超过 5 行而无图/表/代码块视为缺图必须补。</li>
+<li><strong>结论先行</strong>：每节首句即点结论。</li>
+<li><strong>不编造 API</strong>：所有 trait/struct/函数必须在源码 grep 得到；行号允许 ±20 偏差。</li>
+<li><strong>诚实留白</strong>：每篇 §8 <em>未解之谜</em> 至少一条非空内容，标注未读懂或不确定的边界。</li>
+<li><strong>中文写作</strong>，技术名词保留英文。</li>
+</ul>
+<h2>8. 未解之谜</h2>
+<ul>
+<li><strong>本仓库 <code>Cargo.toml</code> 中 <code>version = "0.1.0"</code></strong>：实际发布版本由 build script 注入（参考 <code>src/common/version/</code>）。本系列不试图给出「真实的 nightly 版本号」，仅以 commit hash 为唯一基线。</li>
+<li><strong>跨仓库 commit 对齐</strong>：本系列只钉了本仓库的 commit；外部 <code>databend-meta</code> 用浅克隆，commit 未钉死。02 文档若发现外部仓库与本仓库 client 类型版本不一致，将在该文档内标注。</li>
+</ul>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

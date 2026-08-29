@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>03 · SQL 前端：词法 / 语法 / 绑定 · Databend 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#ff6b6b}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">☁️ <span>Databend 源码深度解析</span></span><nav class="nav"><a href="00-meta.html">元信息与阅读指南</a><a href="01-overview.html">总览：三层架构与设计取舍</a><a href="02-meta-service.html">Meta Service：客户端层 + 外部 OpenRaft 状态机</a><a href="03-sql-frontend.html" class=on>SQL 前端：词法 / 语法 / 绑定</a><a href="04-planner-optimizer.html">Planner / Optimizer：从 SExpr 到最优计划</a><a href="05-pipeline-execution.html">Pipeline 执行：Push-based + Event 状态机</a><a href="06-fuse-storage.html">FUSE 存储引擎：Snapshot / Segment / Block</a><a href="07-io-and-cache.html">IO 与多级缓存：OpenDAL Layer 栈 + CacheManager</a><a href="08-indexes-and-search.html">索引与搜索：Bloom / Inverted / Vector / Range / Page / Spatial</a><a href="09-cluster-and-exchange.html">集群与 Exchange：节点发现 + Flight Shuffle</a><a href="10-extensions.html">扩展：Stream / UDF / Iceberg / Delta</a><a href="99-diagrams.html">Mermaid 图源归档</a></nav></div></header>
+<main class="wrap">
+<h1>03 · SQL 前端：词法 / 语法 / 绑定</h1>
+<blockquote>
+<p>基于 commit <code>fe693bb677</code>。本篇覆盖 <code>databend-common-ast</code> 与 <code>databend-common-sql::planner::binder</code>，把 SQL 文本变成 <code>Plan</code>。</p>
+</blockquote>
+<h2>1. 解决了什么问题</h2>
+<p>现代分析型数据库的 SQL 前端不只是「把字符串 parse 成 AST」。它要解决三件事：</p>
+<ol>
+<li><strong>方言</strong>：兼容 MySQL/PostgreSQL/Hive，关键字、引号风格、可选分号都不同。</li>
+<li><strong>错误恢复</strong>：用户经常写一半 SQL 就求补全；前端必须给出<strong>位置精准、可读</strong>的错误。</li>
+<li><strong>语义校验前置</strong>：列引用是否唯一、子查询能否解相关、聚合表达式能否出现在投影里——这些得在生成逻辑计划之前就结束。</li>
+</ol>
+<p>直接用 <code>sqlparser</code> 这类库的反例：</p>
+<table>
+<thead>
+<tr>
+<th>反例</th>
+<th>问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>用 sqlparser 通用 AST</td>
+<td>关键字方言、字段精度（如 Decimal/Variant/Geo）不够细</td>
+</tr>
+<tr>
+<td>把语义校验留给优化器</td>
+<td>优化器要做的事被绑定细节污染；错误信息只能指向「列不存在」而无法精确到 token</td>
+</tr>
+<tr>
+<td>把 Bind 放进 Interpreter</td>
+<td>子查询、CTE、相关引用没法在统一上下文里解析</td>
+</tr>
+</tbody>
+</table>
+<p>Databend 的取舍：<strong>手写 nom parser</strong> + <strong>独立的 Binder 阶段</strong>输出 <code>(SExpr, BindContext)</code>，逻辑和物理计划之后才出场。</p>
+<h2>2. 在 Databend 中的位置</h2>
+<div class="mermaid">
+flowchart LR
+  subgraph Front[&quot;前端 (databend-common-ast)&quot;]
+    TOK[Tokenizer]
+    PARSE[parse_sql]
+    AST[Statement / Query / Expr]
+  end
+  subgraph Mid[&quot;绑定 (databend-common-sql::planner::binder)&quot;]
+    BIND[Binder]
+    BC[BindContext]
+    META[Metadata]
+    BS[Plan::Query{ s_expr, metadata, bind_context, ... }]
+  end
+  subgraph Back[&quot;后续阶段&quot;]
+    OPT[Optimizer]
+    PHYS[PhysicalPlan]
+    PIPE[Pipeline]
+  end
+  TOK --&gt; PARSE --&gt; AST --&gt; BIND
+  BIND --&gt; BC
+  BIND --&gt; META
+  BIND --&gt; BS
+  BS --&gt; OPT
+  OPT --&gt; PHYS
+  PHYS --&gt; PIPE
+</div>
+<p>源码：</p>
+<table>
+<thead>
+<tr>
+<th>模块</th>
+<th>路径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>词法</td>
+<td><code>src/query/ast/src/parser/token.rs</code></td>
+</tr>
+<tr>
+<td>语法</td>
+<td><code>src/query/ast/src/parser/{parser,statement,query,expr}.rs</code></td>
+</tr>
+<tr>
+<td>AST</td>
+<td><code>src/query/ast/src/ast/{statements/, query.rs, expr.rs, common.rs}</code></td>
+</tr>
+<tr>
+<td>Binder</td>
+<td><code>src/query/sql/src/planner/binder/binder.rs::Binder</code></td>
+</tr>
+<tr>
+<td>BindContext</td>
+<td><code>src/query/sql/src/planner/binder/bind_context.rs::BindContext</code></td>
+</tr>
+<tr>
+<td>ColumnBinding</td>
+<td><code>src/query/sql/src/planner/binder/column_binding.rs::ColumnBinding</code></td>
+</tr>
+</tbody>
+</table>
+<h2>3. 关键数据结构</h2>
+<h3>3.1 Tokenizer 与 nom Parser</h3>
+<p>Databend 用 <code>nom</code>（parser combinator）手写<strong>LL(无限回溯)</strong> parser，对应 <code>src/query/ast/src/parser/parser.rs::parse_sql (L≈48)</code>：</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/ast/src/parser/parser.rs:42</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">tokenize_sql</span><span style="color: #F8F8F2">(sql: </span><span style="color: #66D9EF">&amp;str</span><span style="color: #F8F8F2">) -&gt; Result</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Token</span><span style="color: #FF4689">&lt;&#39;</span><span style="color: #F8F8F2">_</span><span style="color: #FF4689">&gt;&gt;&gt;</span><span style="color: #F8F8F2"> { </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">. }</span>
+
+<span style="color: #959077">// src/query/ast/src/parser/parser.rs:48</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">parse_sql</span><span style="color: #F8F8F2">(tokens: </span><span style="color: #66D9EF">&amp;</span><span style="color: #F8F8F2">[Token], dialect: </span><span style="color: #A6E22E">Dialect</span><span style="color: #F8F8F2">)</span>
+<span style="color: #F8F8F2">    -&gt; Result</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">(Statement, Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">)</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> stmt </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> run_parser(tokens, dialect, ParseMode::Default, </span><span style="color: #66D9EF">false</span><span style="color: #F8F8F2">, statement)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// ...</span>
+<span style="color: #F8F8F2">    Ok((stmt.stmt, stmt.format))</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><code>run_parser (L≈156)</code> 是统一的入口：</p>
+<div class="mermaid">
+flowchart TB
+  Sql[SQL 字符串] --&gt; Tokz[Tokenizer\nparser/token.rs]
+  Tokz --&gt; Tokens[&quot;Vec&amp;lt;Token&amp;gt;&quot;]
+  Tokens --&gt; Input[Input { tokens, dialect, mode, backtrace }]
+  Input --&gt; Combo[nom 组合器 statement / expr / values / ...]
+  Combo --&gt; Stmt[Statement / Expr / Values]
+  Combo --&gt; Bt[Backtrace 用于错误展示]
+  Stmt --&gt; Out[&quot;(Statement, Option&amp;lt;FORMAT&amp;gt;)&quot;]
+</div>
+<p>关键设计：</p>
+<ul>
+<li><strong><code>Backtrace</code></strong>：解析失败时不直接报错，而是在 <code>Backtrace</code> 里记录"最深成功位置 + 期望的 token 集合"，由 <code>display_parser_error (L≈186)</code> 渲染成「expected <code>FROM</code>, <code>WHERE</code>, ... at line 3 col 8」。</li>
+<li><strong>方言</strong>：<code>Dialect</code> 决定关键字保留集与引号字符（双引号 vs 反引号）。<code>parse_cluster_key_exprs (L≈117)</code> 还会显式 fallback 到 <code>Dialect::default()</code>，因为 cluster key 是持久化的，跨 session 必须可读。</li>
+<li><strong><code>#[cfg(debug_assertions)] assert_reparse (L≈195)</code></strong>：debug build 下，每次 parse 完都把 AST 转回 SQL 再 parse 一次，确保 AST 是「可印刷的」——这是 Databend 维护「format SQL」能力（<code>mod ast::format</code>）的隐性成本。</li>
+</ul>
+<h3>3.2 顶层 AST 节点</h3>
+<div class="mermaid">
+classDiagram
+  class Statement {
+    &lt;&lt;enum&gt;&gt;
+    Query(Box~Query~)
+    Insert(InsertStmt)
+    Replace(ReplaceStmt)
+    MergeInto(MergeIntoStmt)
+    Delete(DeleteStmt)
+    Update(UpdateStmt)
+    CopyIntoTable / CopyIntoLocation
+    Explain { kind, options, query }
+    StatementWithSettings { settings, stmt }
+    SetStmt / UnSetStmt / Use / KillStmt
+    ... 100+ DDL/DML/Show/Admin variants
+  }
+  class Query {
+    +Vec~With~ with
+    +SetExpr body
+    +Vec~OrderByExpr~ order_by
+    +Option~Expr~ limit
+    +Option~Expr~ offset
+    ...
+  }
+  class Expr {
+    &lt;&lt;enum&gt;&gt;
+    Literal { span, value }
+    ColumnRef { span, column }
+    FunctionCall(FunctionCall)
+    BinaryOp / UnaryOp
+    Case { conditions, results, else_result }
+    Subquery { modifier, subquery }
+    Cast / TryCast / IsNull / Tuple / Array
+    ...
+  }
+  Statement --&gt; Query
+  Query --&gt; Expr
+</div>
+<p><code>Statement::Query</code> 占主线；其他大部分 variant 是 DDL/DML 的便利包装。注意 <strong><code>StatementWithSettings</code></strong> 是一个高阶 wrapper（<code>statement.rs::L≈51</code>）——执行临时变量的语法 <code>SETTINGS (foo='bar') SELECT ...</code> 都在 Binder 里转化为「在子语句执行期间生效的 settings」。</p>
+<h3>3.3 Binder 与 BindContext</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/sql/src/planner/binder/binder.rs:89</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">Binder</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> ctx: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">dyn</span><span style="color: #F8F8F2"> TableContext</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,           </span><span style="color: #959077">// 取 settings/catalog/会话状态</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> dialect: </span><span style="color: #A6E22E">Dialect</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> catalogs: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">CatalogManager</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,        </span><span style="color: #959077">// 解析 db/table/view</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> name_resolution_ctx: </span><span style="color: #A6E22E">NameResolutionContext</span><span style="color: #F8F8F2">, </span><span style="color: #959077">// 大小写策略、quote 风格</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> metadata: </span><span style="color: #A6E22E">MetadataRef</span><span style="color: #F8F8F2">,                </span><span style="color: #959077">// 全查询共享的&quot;列/表注册表&quot;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> expression_scan_context: </span><span style="color: #A6E22E">ExpressionScanContext</span><span style="color: #F8F8F2">, </span><span style="color: #959077">// hash join build cache</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> bind_recursive_cte: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> m_cte_table_name: </span><span style="color: #A6E22E">HashMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String, String</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> enable_result_cache: </span><span style="color: #66D9EF">bool</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> subquery_executor: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">dyn</span><span style="color: #F8F8F2"> QueryExecutor</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">, </span><span style="color: #959077">// 标量子查询 eager exec</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><code>BindContext</code> 是<strong>树形作用域</strong>——子查询会创建嵌套上下文，<code>parent</code> 指针向上找外层列：</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/sql/src/planner/binder/bind_context.rs:144</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">BindContext</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> parent: Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Box</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">BindContext</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,                       </span><span style="color: #959077">// 外层引用</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> columns: Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ColumnBinding</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,                            </span><span style="color: #959077">// 当前可见列</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> bound_internal_columns: </span><span style="color: #A6E22E">BTreeMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">(IndexType, ColumnId), Symbol</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">, </span><span style="color: #959077">// _row_id 等</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> bound_virtual_columns: </span><span style="color: #A6E22E">BTreeMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">VirtualColumnName, (ColumnId, Symbol)</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> aggregate_info: </span><span style="color: #A6E22E">AggregateInfo</span><span style="color: #F8F8F2">,                          </span><span style="color: #959077">// 聚合扫描结果</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> windows: </span><span style="color: #A6E22E">WindowInfo</span><span style="color: #F8F8F2">,                                    </span><span style="color: #959077">// 窗口函数定义</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> srf_info: </span><span style="color: #A6E22E">SetReturningInfo</span><span style="color: #F8F8F2">,                             </span><span style="color: #959077">// 返回多行的函数</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> cte_context: </span><span style="color: #A6E22E">CteContext</span><span style="color: #F8F8F2">,                                </span><span style="color: #959077">// CTE 与递归 CTE</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> in_grouping: </span><span style="color: #66D9EF">bool</span><span style="color: #F8F8F2">,                                      </span><span style="color: #959077">// 当前是否在 GROUP BY 范围内</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> binding_views: </span><span style="color: #A6E22E">HashSet</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ViewIdent</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,                      </span><span style="color: #959077">// 防止视图递归</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> have_async_func </span><span style="color: #FF4689">/</span><span style="color: #F8F8F2"> have_udf_script </span><span style="color: #FF4689">/</span><span style="color: #F8F8F2"> have_udf_server: </span><span style="color: #66D9EF">bool</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> udf_cache: </span><span style="color: #A6E22E">Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">RwLock</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">HashMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String, Option</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">UserDefinedFunction</span><span style="color: #FF4689">&gt;&gt;&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> inverted_index_map </span><span style="color: #FF4689">/</span><span style="color: #F8F8F2"> vector_index_map: Box</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">IndexMap</span><span style="color: #FF4689">&lt;..</span><span style="color: #F8F8F2">.</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">, </span><span style="color: #959077">// 索引上下文</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> allow_virtual_column: </span><span style="color: #66D9EF">bool</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> expr_context: </span><span style="color: #A6E22E">ExprContext</span><span style="color: #F8F8F2">,                              </span><span style="color: #959077">// 当前正在 bind 哪类表达式</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> planning_agg_index: </span><span style="color: #66D9EF">bool</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> window_definitions: </span><span style="color: #A6E22E">DashMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String, WindowSpec</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<div class="mermaid">
+classDiagram
+  class BindContext {
+    +parent: Option~BindContext~
+    +columns: Vec~ColumnBinding~
+    +aggregate_info / windows / srf_info / cte_context
+    +in_grouping: bool
+    +inverted_index_map / vector_index_map
+  }
+  class ColumnBinding {
+    +database_name / table_name
+    +column_name / column_name_lower
+    +column_position
+    +table_index: IndexType
+    +index: Symbol
+    +data_type: DataType
+    +visibility: Visibility
+    +virtual_expr: Option~String~
+    +is_srf: bool
+  }
+  class Metadata {
+    &lt;&lt;MetadataRef = Arc&amp;lt;RwLock&amp;lt;Metadata&amp;gt;&amp;gt;&gt;&gt;
+    +tables: Vec~Table~
+    +columns: Vec~Column~
+    +base_column_scan_index: ...
+  }
+  BindContext --&gt; ColumnBinding : columns[]
+  BindContext ..&gt; BindContext : parent
+  Binder --&gt; BindContext : 创建 / 嵌套
+  Binder --&gt; Metadata : 全局共享
+</div>
+<p><code>ColumnBinding (column_binding.rs::L≈25)</code> 是"绑定"概念的具体载体：每个出现在 SQL 中的列引用最终被解析成一个 <code>ColumnBinding.index</code>（<code>Symbol</code>）。<code>Symbol</code> 是个 <code>IndexType</code>，整个查询里全局唯一——这是后面优化器进行列裁剪、列等价、列依赖分析的基础。</p>
+<p>注意 <strong><code>in_grouping</code></strong> 这种"小布尔"——它决定了 <code>SELECT a, sum(b) FROM t</code> 中的 <code>a</code> 是否合法（必须在 GROUP BY 中）；这种校验放在 binder 里是 OLAP 系统的标配。</p>
+<h2>4. 关键流程</h2>
+<h3>4.1 整体流程</h3>
+<div class="mermaid">
+flowchart TB
+  Sql[SQL 文本]
+  Sql --&gt; T[tokenize_sql]
+  T --&gt; P[parse_sql → Statement]
+  P --&gt; B0[Binder::bind]
+  B0 --&gt; BS[bind_statement]
+  BS -- Query --&gt; BQ[bind_query]
+  BS -- DDL --&gt; BD[bind_ddl]
+  BS -- Insert/Replace/Merge --&gt; BM[bind_mutation]
+  BS -- Set / Use / Show --&gt; BSh[bind_admin]
+  BQ --&gt; BSel[bind_select]
+  BSel --&gt; BTR[bind_table_reference]
+  BSel --&gt; Scal[bind scalar / aggregate / window / srf]
+  BSel --&gt; Proj[project / sort / limit / having / qualify]
+  Proj --&gt; SE[SExpr 树]
+  SE --&gt; P_OUT[Plan::Query { s_expr, metadata, bind_context, ... }]
+</div>
+<p><code>Binder::bind (binder.rs::L≈144)</code> 的实现一目了然：</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/sql/src/planner/binder/binder.rs:144</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">async</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">bind</span><span style="color: #F8F8F2">(</span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> self, stmt: </span><span style="color: #66D9EF">&amp;</span><span style="color: #A6E22E">Statement</span><span style="color: #F8F8F2">) -&gt; Result</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Plan</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> bind_context </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> BindContext::new();</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> plan </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> self.bind_statement(</span><span style="color: #FF4689">&amp;</span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> bind_context, stmt).</span><span style="color: #66D9EF">await</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    self.bind_query_index(</span><span style="color: #FF4689">&amp;</span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> bind_context, </span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">plan).</span><span style="color: #66D9EF">await</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;  </span><span style="color: #959077">// 决定可用索引</span>
+<span style="color: #F8F8F2">    Ok(plan)</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><code>bind_statement (L≈158)</code> 是一个 ~100 个 arm 的大 <code>match</code>，每个 arm 把对应的 <code>Statement</code> variant 派发到专门的 <code>bind_*</code> 方法。其中 <code>Statement::Query</code> 走 <code>bind_query (binder/bind_query/bind.rs)</code>：</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// 节选自 binder.rs:165</span>
+<span style="color: #F8F8F2">Statement::Query(query) </span><span style="color: #FF4689">=&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> (</span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> s_expr, bind_context) </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> self.bind_query(bind_context, query)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    (s_expr, _) </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> self.construct_expression_scan(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">s_expr, self.metadata.clone())</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">let</span><span style="color: #F8F8F2"> formatted_ast </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">if</span><span style="color: #F8F8F2"> self.ctx.get_settings().get_enable_query_result_cache()</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">        Some(stmt.to_string())   </span><span style="color: #959077">// 用规范化 SQL 字符串作 result cache key</span>
+<span style="color: #F8F8F2">    } </span><span style="color: #66D9EF">else</span><span style="color: #F8F8F2"> { None };</span>
+<span style="color: #F8F8F2">    Plan::Query {</span>
+<span style="color: #F8F8F2">        s_expr: Box::new(s_expr),</span>
+<span style="color: #F8F8F2">        metadata: </span><span style="color: #A6E22E">self</span><span style="color: #F8F8F2">.metadata.clone(),</span>
+<span style="color: #F8F8F2">        bind_context: Box::new(bind_context),</span>
+<span style="color: #F8F8F2">        rewrite_kind: None,</span>
+<span style="color: #F8F8F2">        ignore_result: </span><span style="color: #A6E22E">query</span><span style="color: #F8F8F2">.ignore_result,</span>
+<span style="color: #F8F8F2">        formatted_ast,</span>
+<span style="color: #F8F8F2">    }</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>注意 <code>formatted_ast</code> —— <strong>result cache 的 key 来自 AST 重新打印的规范化 SQL</strong>，不是原始字符串。同样语义不同写法的两条 SQL 命中同一缓存。</p>
+<h3>4.2 SELECT 的内部分解</h3>
+<p><code>bind_select (bind_query/bind_select.rs::L≈398)</code> 把一条 SELECT 拆成一连串 RelOperator：</p>
+<div class="mermaid">
+flowchart LR
+  S[SELECT a, sum(b) FROM t WHERE c&gt;1 GROUP BY a HAVING sum(b)&gt;10 ORDER BY a LIMIT 5]
+  S --&gt; FROM[bind_table_reference\n→ Scan(t)]
+  FROM --&gt; WHERE[bind WHERE\n→ Filter(c&gt;1)]
+  WHERE --&gt; SCAN[scan AggregateInfo / WindowInfo / SetReturning\n（来自 SELECT/HAVING/QUALIFY）]
+  SCAN --&gt; AGG[bind_aggregate\n→ Aggregate{group_items=[a], agg_funcs=[sum(b)]}]
+  AGG --&gt; HAV[bind HAVING\n→ Filter(sum(b)&gt;10)]
+  HAV --&gt; WIN[bind windows\n→ Window 算子若有]
+  WIN --&gt; Q[bind QUALIFY 若有]
+  Q --&gt; P[bind_projection\n→ EvalScalar / Project]
+  P --&gt; ORD[bind_order_by → Sort]
+  ORD --&gt; LIM[bind_limit → Limit]
+  LIM --&gt; SE[最终 SExpr]
+</div>
+<p><code>bind_select_source (L≈132)</code> 处理 <code>FROM</code> 子句：表 / 子查询 / TableFunction / VALUES / Stage 文件。每条路径都返回一个 <code>(SExpr, BindContext)</code>：BindContext 中的 <code>columns</code> 就是这一层可见的列绑定。</p>
+<h3>4.3 命名解析</h3>
+<div class="mermaid">
+sequenceDiagram
+  participant E as Expr::ColumnRef(&quot;t.x&quot;)
+  participant Resolver as TypeChecker (scalar/...)
+  participant BC as BindContext
+  participant P as parent BindContext
+  participant Meta as Metadata
+
+  E-&gt;&gt;Resolver: resolve_column(&quot;t.x&quot;)
+  Resolver-&gt;&gt;BC: 查 columns[] 中 (Some(&quot;t&quot;), &quot;x&quot;)
+  alt 找到 + 唯一
+    BC--&gt;&gt;Resolver: ColumnBinding
+  else 未找到 → 向外层
+    Resolver-&gt;&gt;P: 查 parent.columns[]
+    alt 找到（外层）
+      P--&gt;&gt;Resolver: 标记为 outer ref
+    else 仍未找到
+      P-&gt;&gt;Meta: 是否是 internal/virtual 列？
+      Meta--&gt;&gt;Resolver: ColumnBinding 或 ColumnNotFound
+    end
+  else 找到但模糊
+    BC--&gt;&gt;Resolver: AmbiguousColumn 错误
+  end
+  Resolver--&gt;&gt;E: ScalarExpr::BoundColumnRef
+</div>
+<p>外层引用（correlated subquery）在 binder 里被显式标记，<strong>不在这里解相关</strong>——解相关由优化器的 <code>subquery_decorrelator</code> 完成（详见 04 文档）。Binder 只负责打标签。</p>
+<h3>4.4 「未知函数」如何处理</h3>
+<p><code>have_udf_script / have_udf_server / udf_cache</code> 这三个字段揭示了一个细节：<strong>Binder 解析 UDF 时会缓存定义</strong>，避免一条 SQL 内多次访问 meta-service。<code>bind_query_index (L≈150)</code> 是绑定结束后单独的一步——它根据当前 plan 反查可用的 inverted/vector 索引，把 <code>inverted_index_map / vector_index_map</code> 填好，给优化器留信息。</p>
+<h2>5. 性能与优化点</h2>
+<table>
+<thead>
+<tr>
+<th>优化</th>
+<th>在哪里</th>
+<th>效果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>AST 缓存键</strong> = 重打印后的 SQL（<code>stmt.to_string()</code>）</td>
+<td>binder.rs L≈170</td>
+<td>同语义不同写法共享 result cache</td>
+</tr>
+<tr>
+<td><strong>UDF 定义查询去重</strong></td>
+<td>BindContext.udf_cache</td>
+<td>避免重复 RPC 到 meta</td>
+</tr>
+<tr>
+<td><strong>debug 模式 reparse 校验</strong></td>
+<td>parser.rs L≈51</td>
+<td>防止 AST 漂移导致 format/SQL 修复输出错乱（仅 debug 开启）</td>
+</tr>
+<tr>
+<td><strong>错误消息里有最深成功位置</strong></td>
+<td>Backtrace + display_parser_error</td>
+<td>一行 SQL 拼写错时定位到具体 token</td>
+</tr>
+<tr>
+<td><strong>CTE/递归 CTE 用 <code>m_cte_table_name</code></strong></td>
+<td>binder.rs L≈101</td>
+<td>把 CTE 投射到一个真实表名，下游优化器看到的就是普通表，不需要专门处理递归</td>
+</tr>
+<tr>
+<td><strong>scalar subquery 立即执行</strong></td>
+<td><code>subquery_executor: Option&lt;Arc&lt;dyn QueryExecutor&gt;&gt;</code></td>
+<td>用 <code>(SELECT ...)::int</code> 当表函数参数等场景，binder 阶段就跑完拿常量</td>
+</tr>
+</tbody>
+</table>
+<h2>6. 与同类系统的对照</h2>
+<table>
+<thead>
+<tr>
+<th>系统</th>
+<th>parser 方式</th>
+<th>绑定阶段</th>
+<th>列引用承载</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ClickHouse</td>
+<td>手写递归下降（C++）</td>
+<td>在 <code>InterpreterSelect</code> 内</td>
+<td><code>ASTIdentifier</code> + 名字字符串</td>
+</tr>
+<tr>
+<td>StarRocks/Doris</td>
+<td>ANTLR4 生成</td>
+<td><code>Analyzer</code></td>
+<td><code>SlotRef</code> + Slot ID</td>
+</tr>
+<tr>
+<td>DuckDB</td>
+<td>自定义</td>
+<td><code>Binder</code></td>
+<td><code>ColumnBinding</code> + table_index</td>
+</tr>
+<tr>
+<td><strong>Databend</strong></td>
+<td><strong>nom 手写</strong></td>
+<td><strong>独立 <code>Binder</code> → SExpr</strong></td>
+<td><strong><code>ColumnBinding</code> + <code>Symbol</code>（IndexType）</strong></td>
+</tr>
+<tr>
+<td>PostgreSQL</td>
+<td>yacc/bison</td>
+<td><code>analyze</code></td>
+<td><code>Var(varno, varattno)</code></td>
+</tr>
+</tbody>
+</table>
+<p>Databend 的 <code>ColumnBinding</code> 跟 DuckDB 几乎一致；而 nom 手写比 ANTLR4 慢一些但<strong>错误信息更可控</strong>，对方言切换更友好。</p>
+<h2>7. 端到端案例</h2>
+<p><code>SELECT count(*) FROM t WHERE x &gt; 1</code>，前端段：</p>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant T as Tokenizer
+  participant P as parse_sql
+  participant B as Binder::bind
+  participant BC as BindContext
+  participant Cat as CatalogManager
+  participant M as Metadata
+
+  T-&gt;&gt;T: [&quot;SELECT&quot;, &quot;count&quot;, &quot;(&quot;, &quot;*&quot;, &quot;)&quot;, &quot;FROM&quot;, &quot;t&quot;, &quot;WHERE&quot;, &quot;x&quot;, &quot;&gt;&quot;, &quot;1&quot;]
+  T-&gt;&gt;P: tokens
+  P-&gt;&gt;P: run_parser(statement)
+  P--&gt;&gt;B: Statement::Query(Query { body: SELECT, where: x&gt;1 })
+  B-&gt;&gt;BC: 新建空 BindContext
+  B-&gt;&gt;B: bind_statement → bind_query → bind_select
+  B-&gt;&gt;Cat: 查 default.t
+  Cat-&gt;&gt;M: 注册 Table(t), Column(x), 隐式 Column(_row_id)
+  Cat--&gt;&gt;B: TableInfo
+  B-&gt;&gt;BC: 添加 columns: [t.x → Symbol(0), ...]
+  B-&gt;&gt;B: bind WHERE → Filter(BoundColumnRef(0) &gt; 1)
+  B-&gt;&gt;B: bind_projection: count(*) 是聚合，进入 AggregateInfo
+  B-&gt;&gt;B: bind_aggregate → Aggregate { group_items: [], agg_funcs: [count] }
+  B-&gt;&gt;B: 最终 SExpr = EvalScalar(Aggregate(Filter(Scan(t))))
+  B--&gt;&gt;P: Plan::Query { s_expr, metadata: M, bind_context: BC, ... }
+</div>
+<p>注意几个细节：</p>
+<ul>
+<li><strong><code>count(*)</code> 不需要绑定到具体列</strong>——它在 AggregateInfo 里被识别为「count of rows」，由聚合阶段直接读 <code>BlockMeta.row_count</code> 求和（详见 06 文档）。</li>
+<li><strong>WHERE 子句用的是 <code>BoundColumnRef(Symbol)</code></strong>，不是字符串名 <code>"x"</code>——Symbol 才是优化器的"列等价"主键。</li>
+<li><strong><code>metadata</code></strong> 跨整个查询共享一份，子查询创建子 BindContext 但不分裂 metadata。</li>
+</ul>
+<h2>8. 未解之谜</h2>
+<ul>
+<li><strong><code>construct_expression_scan</code> (binder.rs::L≈169)</strong> 做了什么：注释说"移除未使用的 cache 列、构造 ExpressionScan 子树"。具体是为 hash join build-side 的「子查询表达式扫描」服务，但本篇没深入。</li>
+<li><strong><code>bind_query_index</code></strong> 与 <code>inverted_index_map / vector_index_map</code> 的协作：它是在 Binder 末尾、Optimizer 之前发生，但具体的索引选择策略放在了哪里（Binder vs Optimizer vs PhysicalPlanBuilder）？需要在 04/08 文档对照确认。</li>
+<li><strong>为什么是 nom 而不是 yacc/lalrpop</strong>：从 commit history 看应该是早期决策；本篇没有定论性证据。</li>
+<li><strong><code>Symbol</code>/<code>IndexType</code> 的全局唯一性</strong>：在多语句事务、子查询、CTE 嵌套时的分配策略，留给 04 文档（metadata + optimizer）展开。</li>
+<li><strong><code>async_function_desc.rs</code></strong>：<code>AsyncFunctionDesc</code> 是怎么被 binder 识别并塞到 <code>have_async_func</code> 的？这与 sequence/dictionary 等异步函数有关，涉及 <code>bind_query_index</code> 之外的另一条路径。</li>
+</ul>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

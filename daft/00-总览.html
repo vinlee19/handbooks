@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>00 · Daft 总览:从 `df.collect()` 到 Arrow Buffer · Daft 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#a3e635}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">🐡 <span>Daft 源码深度解析</span></span><nav class="nav"><a href="index.html">总览</a><a href="00-总览.html" class=on>Daft 总览:从 `df.collect()` 到 Arrow Buffer</a><a href="01-核心类型与多模态.html">核心类型与多模态:Series / RecordBatch / MicroPartition / Image</a><a href="02-表达式DSL与函数.html">表达式 DSL 与函数:三阶段列解析、`Expr` 枚举、`FunctionRegistry`</a><a href="03-逻辑计划与优化器.html">逻辑计划与优化器</a><a href="04-Swordfish本地执行.html">Swordfish 本地执行</a><a href="05-分布式执行.html">分布式执行</a><a href="06-IO与扫描下推.html">IO 与扫描下推</a><a href="07-SQL与Python桥.html">SQL 与 Python 桥</a></nav></div></header>
+<main class="wrap">
+<h1>00 · Daft 总览:从 <code>df.collect()</code> 到 Arrow Buffer</h1>
+<blockquote>
+<p><strong>基准 commit</strong>: <code>fa0d066204eae630962af7b22a5ab559ecd454fb</code> (<code>v0.7.10-13-gfa0d06620</code>)
+<strong>workspace 版本</strong>: <code>0.3.0-dev0</code> · <strong>Rust edition</strong>: 2024
+<strong>本文目标读者</strong>: 已具备 Rust + 查询引擎基础,希望在 30 分钟内建立 Daft "工程级"心智模型的工程师</p>
+</blockquote>
+<hr />
+<h2>1. 解决了什么问题</h2>
+<h3>1.1 一句话定位</h3>
+<blockquote>
+<p>Daft 是一个 <strong>Rust 内核 + Python API</strong> 的 <strong>多模态</strong> + <strong>流式</strong> + <strong>可分布式</strong> 的 DataFrame / 查询引擎。</p>
+</blockquote>
+<p>它要同时做四件事(任何一件单拿出来都不算新,但合在一起就是新空间):</p>
+<ol>
+<li><strong>像 polars 那样</strong>:列存 + 向量化 + 查询优化,单机就能打过 pandas</li>
+<li><strong>像 spark 那样</strong>:能横向扩到集群跑 PB 级</li>
+<li><strong>像 Ray Data 那样</strong>:把 image / tensor / URL / file 当一等公民</li>
+<li><strong>像 duckdb 那样</strong>:嵌入 Python 进程零运维</li>
+</ol>
+<h3>1.2 一张"问题空间地图"</h3>
+<p>下图把现有 DataFrame/查询引擎按 <strong>多模态支持</strong> × <strong>可扩展性</strong> 二维分布。Daft 想占的是右上角 + 左下角同时通吃的那个空格。</p>
+<div class="mermaid">
+quadrantChart
+    title Daft 试图填充的空白
+    x-axis &quot;Schema 受限&quot; --&gt; &quot;多模态友好&quot;
+    y-axis &quot;单机为主&quot; --&gt; &quot;分布式可扩&quot;
+    quadrant-1 &quot;多模态 + 分布式&quot;
+    quadrant-2 &quot;结构化 + 分布式&quot;
+    quadrant-3 &quot;结构化 + 单机&quot;
+    quadrant-4 &quot;多模态 + 单机&quot;
+    &quot;pandas&quot;: [0.15, 0.15]
+    &quot;polars&quot;: [0.20, 0.30]
+    &quot;DuckDB&quot;: [0.30, 0.25]
+    &quot;Spark&quot;: [0.30, 0.85]
+    &quot;Modin&quot;: [0.25, 0.65]
+    &quot;Ray Data&quot;: [0.80, 0.80]
+    &quot;Daft&quot;: [0.85, 0.85]
+</div>
+<blockquote>
+<p><strong>看图要点</strong>:DataFrame 主流玩家(pandas/polars/DuckDB)在左下;分布式玩家(Spark/Modin)在左上;Ray Data 在右上但缺少完整查询优化器。Daft 的差异是<strong>右上(多模态+分布式)</strong>且自带优化器。</p>
+</blockquote>
+<h3>1.3 横向对比(摘自 <code>README.rst</code> 末尾的对比表,加列)</h3>
+<table>
+<thead>
+<tr>
+<th>Engine</th>
+<th>Query Optimizer</th>
+<th>Multimodal</th>
+<th>Distributed</th>
+<th>Arrow Backed</th>
+<th>Vectorized</th>
+<th>Out-of-core</th>
+<th>优化器位置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Daft</strong></td>
+<td>✅ Rule + CBO</td>
+<td>✅ 一等公民</td>
+<td>✅ Ray (Flotilla)</td>
+<td>✅</td>
+<td>✅ Rust SIMD</td>
+<td>✅</td>
+<td>自研 (<code>daft-logical-plan</code>)</td>
+</tr>
+<tr>
+<td>Polars</td>
+<td>✅</td>
+<td>❌ Python obj</td>
+<td>❌</td>
+<td>✅</td>
+<td>✅</td>
+<td>✅</td>
+<td>自研 (Polars LazyFrame)</td>
+</tr>
+<tr>
+<td>DuckDB</td>
+<td>✅ Cascades</td>
+<td>❌</td>
+<td>❌</td>
+<td>✅</td>
+<td>✅</td>
+<td>✅</td>
+<td>DuckDB Optimizer</td>
+</tr>
+<tr>
+<td>Spark</td>
+<td>✅ Catalyst</td>
+<td>❌</td>
+<td>✅</td>
+<td>Pandas UDF</td>
+<td>Pandas UDF</td>
+<td>✅</td>
+<td>Catalyst (Scala)</td>
+</tr>
+<tr>
+<td>Ray Data</td>
+<td>❌</td>
+<td>✅</td>
+<td>✅</td>
+<td>✅</td>
+<td>部分</td>
+<td>✅</td>
+<td>无</td>
+</tr>
+<tr>
+<td>Pandas</td>
+<td>❌</td>
+<td>Python obj</td>
+<td>❌</td>
+<td>≥2.0 可选</td>
+<td>NumPy</td>
+<td>❌</td>
+<td>无</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>2. 整体设计</h2>
+<h3>2.1 引用官方架构图(三层)</h3>
+<p>Daft 自己的架构文档把整体切成 <strong>API → Planning → Execution</strong> 三层(见 <code>docs/architecture/index.md</code>):</p>
+<p><img alt="Daft 官方架构总图" src="../img/architecture.png" /></p>
+<blockquote>
+<p><strong>从这张图看出</strong>:用户从 Python/SQL 进入 → API 层只造一棵 <code>LogicalPlan</code> 树 → Optimizer 改写 → Native 或 Ray Runner 执行。本文剩下的所有图都是给这张总图填细节。</p>
+</blockquote>
+<h3>2.2 仓库 50+ crate 的实际分层</h3>
+<div class="mermaid">
+graph LR
+  subgraph FRONT[&quot;前端 (Frontend)&quot;]
+    PYAPI[&quot;daft/ (Python)&quot;]
+    SQL[&quot;daft-sql&quot;]
+  end
+
+  subgraph DSL[&quot;DSL 层&quot;]
+    DSLC[&quot;daft-dsl&lt;br/&gt;Expr / Column / AggExpr&quot;]
+    FUNCS[&quot;daft-functions*&lt;br/&gt;numeric / utf8 / json /&lt;br/&gt;list / temporal / image...&quot;]
+  end
+
+  subgraph PLAN[&quot;计划层&quot;]
+    LP[&quot;daft-logical-plan&quot;]
+    ALG[&quot;daft-algebra&lt;br/&gt;boolean simplify&quot;]
+    LCP[&quot;daft-local-plan&quot;]
+    DIST[&quot;daft-distributed&quot;]
+  end
+
+  subgraph EXEC[&quot;执行层&quot;]
+    LE[&quot;daft-local-execution&lt;br/&gt;(Swordfish)&quot;]
+    SHUF[&quot;daft-shuffles&quot;]
+    WR[&quot;daft-writers&quot;]
+    MP[&quot;daft-micropartition&quot;]
+    RB[&quot;daft-recordbatch&quot;]
+  end
+
+  subgraph IO[&quot;IO 层&quot;]
+    SCAN[&quot;daft-scan&quot;]
+    PARQ[&quot;daft-parquet&quot;]
+    CSV[&quot;daft-csv&quot;]
+    JSON[&quot;daft-json&quot;]
+    WARC[&quot;daft-warc&quot;]
+    IO2[&quot;daft-io&lt;br/&gt;(S3/GCS/Azure/HTTP)&quot;]
+  end
+
+  subgraph CORE[&quot;基础类型层&quot;]
+    SCH[&quot;daft-schema&quot;]
+    DC[&quot;daft-core&lt;br/&gt;Series/DataArray/kernels&quot;]
+    IMG[&quot;daft-image&quot;]
+    FILE[&quot;daft-file&quot;]
+    TXT[&quot;daft-text&quot;]
+    STATS[&quot;daft-stats&quot;]
+  end
+
+  subgraph COMMON[&quot;common/&quot;]
+    TN[&quot;common/treenode&quot;]
+    ERR[&quot;common/error&quot;]
+    CFG[&quot;common/daft-config&quot;]
+    DISP[&quot;common/display&quot;]
+  end
+
+  subgraph RUN[&quot;运行时&quot;]
+    RUNNERS[&quot;daft-runners&lt;br/&gt;Runner enum&quot;]
+    CTX[&quot;daft-context&quot;]
+    SES[&quot;daft-session&quot;]
+  end
+
+  PYAPI --&gt; SQL
+  PYAPI --&gt; DSLC
+  SQL --&gt; LP
+  DSLC --&gt; LP
+  DSLC --&gt; FUNCS
+  LP --&gt; ALG
+  LP --&gt; LCP
+  LP --&gt; DIST
+  LCP --&gt; LE
+  DIST --&gt; LE
+  DIST --&gt; SHUF
+  LE --&gt; WR
+  LE --&gt; MP
+  MP --&gt; RB
+  LE --&gt; SCAN
+  SCAN --&gt; PARQ
+  SCAN --&gt; CSV
+  SCAN --&gt; JSON
+  SCAN --&gt; WARC
+  PARQ --&gt; IO2
+  CSV --&gt; IO2
+  JSON --&gt; IO2
+  WARC --&gt; IO2
+  RB --&gt; DC
+  DC --&gt; SCH
+  IMG --&gt; DC
+  FILE --&gt; DC
+  TXT --&gt; DC
+  SCAN --&gt; STATS
+  LP --&gt; TN
+  LCP --&gt; TN
+  DSLC --&gt; TN
+  PYAPI --&gt; RUNNERS
+  RUNNERS --&gt; CTX
+  RUNNERS --&gt; SES
+
+  classDef frontStyle fill:#fde2e2,stroke:#cc3333
+  classDef execStyle fill:#d4f1d4,stroke:#229922
+  classDef coreStyle fill:#d4e2f1,stroke:#2266cc
+  classDef ioStyle fill:#fff5d6,stroke:#cc8800
+  classDef commonStyle fill:#eee,stroke:#888
+
+  class PYAPI,SQL frontStyle
+  class LE,SHUF,WR,MP,RB execStyle
+  class DC,SCH,IMG,FILE,TXT,STATS coreStyle
+  class SCAN,PARQ,CSV,JSON,WARC,IO2 ioStyle
+  class TN,ERR,CFG,DISP commonStyle
+</div>
+<blockquote>
+<p><strong>从图看出</strong>:箭头方向一致 —— 上层依赖下层,绝不反向。<code>common/treenode</code> 是被 DSL/计划层共享的"通用工具"。<code>daft-micropartition</code> 是执行层向上吐出的"标准盒子",所有算子吃它、吐它。</p>
+</blockquote>
+<h3>2.3 仓库目录(高亮版)</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">Daft</span><span style="color: #FF4689">/</span>
+<span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> src</span><span style="color: #FF4689">/</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> lib.rs                          </span><span style="color: #ED007E; background-color: #1E0010">←</span><span style="color: #F8F8F2"> </span><span style="color: #ED007E; background-color: #1E0010">#</span><span style="color: #FF4689">[</span><span style="color: #F8F8F2">pymodule</span><span style="color: #FF4689">]</span><span style="color: #F8F8F2"> fn daft  </span><span style="color: #ED007E; background-color: #1E0010">★</span><span style="color: #F8F8F2"> 唯一 Python 入口</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> common</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">                          </span><span style="color: #ED007E; background-color: #1E0010">←</span><span style="color: #F8F8F2"> 工具层 (treenode</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">error</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">display</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">runtime</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">io</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">config...)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #66D9EF">schema</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">    </span><span style="color: #ED007E; background-color: #1E0010">★</span><span style="color: #F8F8F2"> DataType</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">Field</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">Schema</span><span style="color: #F8F8F2">      (类型词汇表)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">core</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">      </span><span style="color: #ED007E; background-color: #1E0010">★</span><span style="color: #F8F8F2"> Series</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">DataArray</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">kernels   (列存原语)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">recordbatch</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2"> </span><span style="color: #ED007E; background-color: #1E0010">★</span><span style="color: #F8F8F2"> RecordBatch              (列存表)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">micropartition</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2"> </span><span style="color: #ED007E; background-color: #1E0010">★</span><span style="color: #F8F8F2"> MicroPartition        (执行层数据盒子)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">       </span><span style="color: #ED007E; background-color: #1E0010">★</span><span style="color: #F8F8F2"> Expr</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">Column</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">AggExpr        (表达式 DSL)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">logical</span><span style="color: #FF4689">-</span><span style="color: #66D9EF">plan</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2"> </span><span style="color: #ED007E; background-color: #1E0010">★</span><span style="color: #F8F8F2"> LogicalPlan </span><span style="color: #FF4689">+</span><span style="color: #F8F8F2"> 优化器</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">algebra</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">                    (布尔代数化简)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #66D9EF">local</span><span style="color: #FF4689">-</span><span style="color: #66D9EF">plan</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">                 (物理计划下译)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #66D9EF">local</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">execution</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2"> </span><span style="color: #ED007E; background-color: #1E0010">★</span><span style="color: #F8F8F2"> Swordfish            (本地流式执行)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #66D9EF">distributed</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">  </span><span style="color: #ED007E; background-color: #1E0010">★</span><span style="color: #F8F8F2"> Flotilla                (分布式调度)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">shuffles</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">                   (Arrow Flight shuffle)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">writers</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">                    (Parquet</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">CSV</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">Lance</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">IPC 写)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">io</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">        </span><span style="color: #ED007E; background-color: #1E0010">★</span><span style="color: #F8F8F2"> ObjectSource trait         (S3</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">GCS</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">Azure</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">HTTP</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">Local</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">HF</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">...)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">scan</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">      </span><span style="color: #ED007E; background-color: #1E0010">★</span><span style="color: #F8F8F2"> ScanTask </span><span style="color: #FF4689">+</span><span style="color: #F8F8F2"> Pushdowns</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">parquet</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">★</span><span style="color: #F8F8F2"> ReadPlanner (字节范围合并)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">csv</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">json</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">warc</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">   (其它格式)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">stats</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">                      (列级 </span><span style="color: #A6E22E">min</span><span style="color: #FF4689">/</span><span style="color: #A6E22E">max</span><span style="color: #F8F8F2">,行组裁剪)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #A6E22E">image</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #66D9EF">file</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #A6E22E">text</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2"> </span><span style="color: #ED007E; background-color: #1E0010">★</span><span style="color: #F8F8F2"> 多模态一等公民</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">functions</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">functions</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">utf8</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2"> ...     (内置函数)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #66D9EF">sql</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">       </span><span style="color: #ED007E; background-color: #1E0010">★</span><span style="color: #F8F8F2"> SQLPlanner (sqlparser</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">rs)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">runners</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">★</span><span style="color: #F8F8F2"> Runner enum (Native</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2">Ray)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">context</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #66D9EF">session</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">      (会话状态)</span>
+<span style="color: #ED007E; background-color: #1E0010">│</span><span style="color: #F8F8F2">   </span><span style="color: #ED007E; background-color: #1E0010">└──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">-</span><span style="color: #66D9EF">checkpoint</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">                 (Iceberg</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">Delta</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">Lance 事务写)</span>
+<span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> daft</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">                                </span><span style="color: #ED007E; background-color: #1E0010">←</span><span style="color: #F8F8F2"> Python 包(极薄 PyO3 包装)</span>
+<span style="color: #ED007E; background-color: #1E0010">├──</span><span style="color: #F8F8F2"> docs</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">                                </span><span style="color: #ED007E; background-color: #1E0010">←</span><span style="color: #F8F8F2"> 官方 mkdocs 文档</span>
+<span style="color: #ED007E; background-color: #1E0010">└──</span><span style="color: #F8F8F2"> docs</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">deep</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dive</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">zh</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">                   </span><span style="color: #ED007E; background-color: #1E0010">←</span><span style="color: #F8F8F2"> 你正在看的这套文档 </span><span style="color: #ED007E; background-color: #1E0010">★</span>
+</code></pre></div>
+
+<blockquote>
+<p><strong>看树的诀窍</strong>:<code>★</code> 是必须啃的 8 个 crate;其它都是这 8 个的"扩展点"或"实现者"。</p>
+</blockquote>
+<h3>2.4 三层职责的 trait/struct 速查</h3>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>关键类型</th>
+<th>文件:行</th>
+<th>拥有谁 / 被谁拥有</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>API</td>
+<td><code>LogicalPlanBuilder</code></td>
+<td><code>src/daft-logical-plan/src/builder/mod.rs</code></td>
+<td>Python 持有 → 构造 <code>LogicalPlanRef</code></td>
+</tr>
+<tr>
+<td>API</td>
+<td><code>Expr</code> 枚举</td>
+<td><code>src/daft-dsl/src/expr/mod.rs:222</code></td>
+<td>被 <code>LogicalPlan</code> 持有(深嵌入)</td>
+</tr>
+<tr>
+<td>Plan</td>
+<td><code>LogicalPlan</code> 枚举</td>
+<td><code>src/daft-logical-plan/src/logical_plan.rs:35</code></td>
+<td>优化器吃它、吐它</td>
+</tr>
+<tr>
+<td>Plan</td>
+<td><code>OptimizerRule</code> trait</td>
+<td><code>src/daft-logical-plan/src/optimization/rules/rule.rs:9</code></td>
+<td>由 11 个 batch 串联</td>
+</tr>
+<tr>
+<td>Plan</td>
+<td><code>LocalPhysicalPlan</code> 枚举</td>
+<td><code>src/daft-local-plan/src/plan.rs:62</code></td>
+<td>由 <code>translate.rs</code> 从 LogicalPlan 下译</td>
+</tr>
+<tr>
+<td>Exec</td>
+<td><code>Source/IntermediateOperator/StreamingSink</code> traits</td>
+<td><code>src/daft-local-execution/src/{sources,intermediate_ops,streaming_sink}/...</code></td>
+<td>Swordfish 内核</td>
+</tr>
+<tr>
+<td>Exec</td>
+<td><code>MicroPartition</code></td>
+<td><code>src/daft-micropartition/src/micropartition.rs:32</code></td>
+<td>算子之间唯一传递的数据单位</td>
+</tr>
+<tr>
+<td>Exec</td>
+<td><code>RecordBatch</code></td>
+<td><code>src/daft-recordbatch/src/lib.rs:68</code></td>
+<td>被 <code>MicroPartition.chunks</code> 持有</td>
+</tr>
+<tr>
+<td>IO</td>
+<td><code>ObjectSource</code> trait</td>
+<td><code>src/daft-io/src/object_io.rs:287</code></td>
+<td>被 <code>IOClient</code> 路由</td>
+</tr>
+<tr>
+<td>IO</td>
+<td><code>ScanTask</code></td>
+<td><code>src/daft-scan/src/lib.rs:348</code></td>
+<td>Source 算子的种子</td>
+</tr>
+<tr>
+<td>Run</td>
+<td><code>Runner</code> 枚举</td>
+<td><code>src/daft-runners/src/runners.rs:67</code></td>
+<td>由 <code>RunnerConfig::create_runner</code> 产生</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>3. 关键数据结构:一条数据的"七层套娃"</h2>
+<p>执行期间,任何一行数据从 S3 到 Python 都要穿越如下 <strong>7 层</strong>抽象。看懂这 7 层 = 看懂 Daft 一半。</p>
+<div class="mermaid">
+flowchart TD
+  A[&quot;Arrow ArrayRef&lt;br/&gt;(values_buffer + null_buffer)&quot;] --&gt;|被 wrap| B[&quot;DataArray&amp;lt;T&amp;gt;&lt;br/&gt;or ListArray / StructArray&quot;]
+  B --&gt;|多态封装| C[&quot;Series&lt;br/&gt;{ inner: Arc&amp;lt;dyn SeriesLike&amp;gt; }&quot;]
+  C --&gt;|聚合多列| D[&quot;RecordBatch&lt;br/&gt;{ schema, columns, num_rows }&quot;]
+  D --&gt;|聚合多 chunk| E[&quot;MicroPartition&lt;br/&gt;{ chunks, metadata, statistics }&quot;]
+  E --&gt;|流式产出| F[&quot;PipelineMessage&lt;br/&gt;(Morsel)&quot;]
+  F --&gt;|跨进程/语言| G[&quot;Python iterator&lt;br/&gt;of MicroPartition&quot;]
+
+  click A &quot;https://arrow.apache.org&quot; &quot;Arrow&quot;
+  classDef arrow fill:#fde2e2
+  classDef daft fill:#d4e2f1
+  classDef exec fill:#d4f1d4
+  class A arrow
+  class B,C,D,E daft
+  class F,G exec
+</div>
+<blockquote>
+<p><strong>看图要点</strong>:<code>Arrow ArrayRef</code> 是 Daft 与外部世界交换数据的"协议层";<code>MicroPartition</code> 是 Daft 自己执行层的"数据包";<code>PipelineMessage</code> 是 Swordfish 在多线程之间传递 morsel 的载体。</p>
+</blockquote>
+<h3>关键字段速查</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>Series                  src/daft-core/src/series/mod.rs:32
+  └── inner: Arc&lt;dyn SeriesLike&gt;  (类型擦除 + 运行时 downcast)
+
+RecordBatch             src/daft-recordbatch/src/lib.rs:68
+  ├── schema:    SchemaRef
+  ├── columns:   Arc&lt;Vec&lt;Column&gt;&gt;           // Column 是 Series 的 newtype
+  └── num_rows:  usize
+
+MicroPartition          src/daft-micropartition/src/micropartition.rs:32
+  ├── schema:     SchemaRef
+  ├── chunks:     Arc&lt;Vec&lt;RecordBatch&gt;&gt;     // 多个等列宽 batch
+  ├── metadata:   TableMetadata             // 至少有 length
+  └── statistics: Option&lt;TableStatistics&gt;   // 列级 min/max,启用谓词下推
+</code></pre></div>
+
+<hr />
+<h2>4. 关键源码走读:<code>df.collect()</code> 端到端时序</h2>
+<p>下图是 <code>daft.read_parquet("s3://...").where("a&gt;10").collect()</code> 一次运行的完整调用链。<strong>纵轴是层、横轴是时间</strong>;每个箭头都附了源码定位。</p>
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    actor User as Python User
+    participant PY as daft/dataframe.py
+    participant LB as LogicalPlanBuilder&lt;br/&gt;(daft-logical-plan)
+    participant OPT as Optimizer
+    participant LCP as LocalPhysicalPlan&lt;br/&gt;(daft-local-plan)
+    participant SW as Swordfish&lt;br/&gt;(daft-local-execution)
+    participant SCAN as ScanTask + IO&lt;br/&gt;(daft-scan + daft-io)
+    participant ARR as Arrow / parquet crate
+
+    User-&gt;&gt;PY: df.collect()
+    PY-&gt;&gt;LB: build LogicalPlan tree&lt;br/&gt;(Source→Filter→Sink)
+    PY-&gt;&gt;OPT: optimizer.optimize(lp)
+    Note over OPT: 11 个 batch&lt;br/&gt;(下推/重写/Join 重排)
+    OPT--&gt;&gt;PY: 优化后的 LogicalPlan
+    PY-&gt;&gt;LCP: translate(lp) ⇒ LocalPhysicalPlan
+    PY-&gt;&gt;SW: NativeExecutor::execute_physical_plan
+    SW-&gt;&gt;SW: build_pipeline (operator DAG)
+    loop 每个 morsel
+      SW-&gt;&gt;SCAN: Source::get_data(scan_task)
+      SCAN-&gt;&gt;ARR: Parquet ReadPlanner (合并字节范围)
+      ARR--&gt;&gt;SCAN: ArrayRef 列
+      SCAN--&gt;&gt;SW: MicroPartition (chunk)
+      SW-&gt;&gt;SW: Filter(IntermediateOp) → 输出 morsel
+      SW--&gt;&gt;PY: yield MicroPartition
+    end
+    PY--&gt;&gt;User: pandas / pyarrow.Table
+</div>
+<blockquote>
+<p><strong>从这张图看出</strong>:
+1. 优化器(步骤 3-4)只在 <code>collect()</code> 时触发,<strong>不在每次链式调用时执行</strong>
+2. ScanTask 一次只取一个 morsel,然后边读边过滤;不会先读完再过滤
+3. Python ↔ Rust 边界只在两处:<code>build LogicalPlan</code> 入口、<code>yield MicroPartition</code> 出口</p>
+</blockquote>
+<h3>4.1 入口源码(已验证)</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/lib.rs:109</span>
+<span style="color: #959077">#[pymodule]</span>
+<span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">daft</span><span style="color: #F8F8F2">(py: </span><span style="color: #A6E22E">Python</span><span style="color: #F8F8F2">, m: </span><span style="color: #66D9EF">&amp;</span><span style="color: #A6E22E">Bound</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">PyModule</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">PyResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">()</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    refresh_logger(py)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    init_tracing();</span>
+
+<span style="color: #F8F8F2">    common_daft_config::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// ... 30+ register_modules 调用</span>
+<span style="color: #F8F8F2">    daft_dsl::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_io::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    daft_logical_plan::register_modules(m)</span><span style="color: #FF4689">?</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// ...</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<blockquote>
+<p>50+ 个 Rust crate 共用 <strong>同一个 cdylib</strong>(<code>crate-type = ["cdylib"]</code>,<code>name = "daft"</code>),Python 侧 <code>from daft.daft import X</code> 进入。</p>
+</blockquote>
+<h3>4.2 Runner 选择决策(<code>src/daft-runners/src/runners.rs:67</code>)</h3>
+<div class="mermaid">
+flowchart TD
+  Start[&quot;df.collect() 触发&quot;] --&gt; Q1{&quot;DAFT_RUNNER&lt;br/&gt;env 设置?&quot;}
+  Q1 -- &quot;ray&quot; --&gt; Ray[&quot;Runner::Ray&lt;br/&gt;(RayRunner)&quot;]
+  Q1 -- &quot;native&quot; --&gt; Native[&quot;Runner::Native&lt;br/&gt;(NativeRunner)&quot;]
+  Q1 -- &quot;未设置&quot; --&gt; Q2{&quot;已在 Ray&lt;br/&gt;cluster 内?&quot;}
+  Q2 -- 是 --&gt; Ray
+  Q2 -- 否 --&gt; Native
+
+  Ray --&gt; RayPy[&quot;调用 daft.runners.ray_runner.RayRunner&lt;br/&gt;(Python 端)&quot;]
+  Native --&gt; NativePy[&quot;调用 daft.runners.native_runner.NativeRunner&lt;br/&gt;(Python 端)&quot;]
+  RayPy --&gt; Run[&quot;Runner::run_iter_tables(lp)&lt;br/&gt;→ Iterator&amp;lt;MicroPartitionRef&amp;gt;&quot;]
+  NativePy --&gt; Run
+</div>
+<blockquote>
+<p><strong>源码</strong>:<code>Runner::run_iter_tables</code> 在 <code>runners.rs:102</code>,内部 <code>Python::attach</code> 抓 GIL → 调用 Python 侧 <code>RayRunner.run_iter_tables</code> 或 <code>NativeRunner.run_iter_tables</code> → 返回 PyIterator → 每次 next 抽出一个 <code>PyMicroPartition</code> 转回 Rust <code>MicroPartitionRef</code>。</p>
+</blockquote>
+<hr />
+<h2>5. 怎么优化的:全局视角</h2>
+<p>下图把 Daft 的优化分布画成一张"层级图"。<strong>每一层都有自己的优化点</strong>,不是只有优化器那一层在做事。</p>
+<div class="mermaid">
+flowchart LR
+  subgraph PLAN_OPT[&quot;计划期优化&quot;]
+    direction TB
+    P1[&quot;谓词/投影/Limit 下推&quot;]
+    P2[&quot;布尔表达式化简&lt;br/&gt;(daft-algebra: CNF/DNF/De Morgan)&quot;]
+    P3[&quot;Join 重排&lt;br/&gt;(DP-CCP / 暴力枚举)&quot;]
+    P4[&quot;UDF 隔离&lt;br/&gt;(SplitUDFs)&quot;]
+    P5[&quot;子查询展开&quot;]
+  end
+
+  subgraph EXEC_OPT[&quot;执行期优化&quot;]
+    direction TB
+    E1[&quot;Morsel-driven&lt;br/&gt;动态批次大小&quot;]
+    E2[&quot;列存向量化 +&lt;br/&gt;SIMD (Arrow 内核)&quot;]
+    E3[&quot;Probe-table&lt;br/&gt;(IndexHash)&quot;]
+    E4[&quot;流式 sink&lt;br/&gt;vs 阻塞 sink&quot;]
+  end
+
+  subgraph IO_OPT[&quot;IO 期优化&quot;]
+    direction TB
+    I1[&quot;Parquet 行组裁剪&lt;br/&gt;(daft-stats min/max)&quot;]
+    I2[&quot;字节范围合并&lt;br/&gt;(ReadPlanner)&quot;]
+    I3[&quot;小文件 eager / 大文件 stream&lt;br/&gt;(16MB 阈值)&quot;]
+    I4[&quot;指数退避 + jitter 重试&quot;]
+  end
+
+  subgraph DIST_OPT[&quot;分布式期优化&quot;]
+    direction TB
+    D1[&quot;Arrow Flight shuffle&lt;br/&gt;(零拷贝传输)&quot;]
+    D2[&quot;分区本地性调度&lt;br/&gt;(Flotilla scheduler)&quot;]
+    D3[&quot;partial+final 聚合&lt;br/&gt;(map-side combine)&quot;]
+  end
+
+  PLAN_OPT --&gt; EXEC_OPT
+  EXEC_OPT --&gt; IO_OPT
+  EXEC_OPT --&gt; DIST_OPT
+</div>
+<blockquote>
+<p><strong>看图要点</strong>:左边的"计划期优化"是 polars / DuckDB 也有的;右边两块"IO 期 + 分布式期"才是 Daft 真正的工程亮点 —— 后续的 06、05 文档会逐个展开。</p>
+</blockquote>
+<h3>引用官方优化器图</h3>
+<p><img alt="Daft 优化器内部" src="../img/optimizer.png" /></p>
+<blockquote>
+<p>图来自 <code>docs/architecture/index.md</code>。Rule-based 阶段先做 11 个 batch;Cost-based 阶段对 Join 子树做枚举。<strong>多模态感知</strong>:URL 下载、image decode、UDF 这些"贵算子"被故意保留在最晚执行,避免对最终被丢弃的行做无用功。</p>
+</blockquote>
+<hr />
+<h2>6. 端到端案例:一行 Python 在 Daft 内部走过的 8 站</h2>
+<h3>6.1 案例代码</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #FF4689">import</span><span style="color: #F8F8F2"> daft</span>
+<span style="color: #F8F8F2">df</span> <span style="color: #FF4689">=</span> <span style="color: #F8F8F2">(</span>
+    <span style="color: #F8F8F2">daft</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">read_parquet(</span><span style="color: #E6DB74">&quot;s3://my-bucket/year=2024/*.parquet&quot;</span><span style="color: #F8F8F2">)</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">where(</span><span style="color: #E6DB74">&quot;amount &gt; 100&quot;</span><span style="color: #F8F8F2">)</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">select(</span><span style="color: #E6DB74">&quot;user_id&quot;</span><span style="color: #F8F8F2">,</span> <span style="color: #E6DB74">&quot;amount&quot;</span><span style="color: #F8F8F2">)</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">limit(</span><span style="color: #AE81FF">1000</span><span style="color: #F8F8F2">)</span>
+<span style="color: #F8F8F2">)</span>
+<span style="color: #F8F8F2">df</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">collect()</span>
+</code></pre></div>
+
+<h3>6.2 一次运行,8 站快照</h3>
+<div class="mermaid">
+flowchart TB
+  S1[&quot;Stage 1: Python&lt;br/&gt;daft.read_parquet → DataFrame&quot;] --&gt;|惰性| S2
+  S2[&quot;Stage 2: LogicalPlanBuilder&lt;br/&gt;Source→Filter→Project→Limit→Sink&quot;] --&gt;|optimize()| S3
+  S3[&quot;Stage 3: Optimizer&lt;br/&gt;下推 Filter→Source&lt;br/&gt;下推 Limit→Source&lt;br/&gt;下推 Project→Source&quot;] --&gt; S4
+  S4[&quot;Stage 4: LocalPhysicalPlan&lt;br/&gt;PhysicalScan + Limit&quot;] --&gt; S5
+  S5[&quot;Stage 5: Swordfish&lt;br/&gt;build_pipeline ⇒ Source 算子&quot;] --&gt; S6
+  S6[&quot;Stage 6: ScanTask&lt;br/&gt;Pushdowns { filter, columns, limit }&quot;] --&gt; S7
+  S7[&quot;Stage 7: ReadPlanner&lt;br/&gt;S3 GET 字节范围(已合并)&quot;] --&gt; S8
+  S8[&quot;Stage 8: yield MicroPartition&lt;br/&gt;→ Python iterator&quot;]
+</div>
+<blockquote>
+<p><strong>关键观察</strong>:Stage 3 的下推会让 Stage 6 的 <code>Pushdowns</code> 同时带上 filter / columns / limit 三种;Stage 7 的 <code>ReadPlanner</code> 因此只下载 <strong>必要列、必要行组、必要字节</strong>。这就是 Daft 在多模态场景下"不读图就能裁掉无关行"的根因。</p>
+</blockquote>
+<h3>6.3 中间态对照表</h3>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>代码层数据载体</th>
+<th>占内存(估)</th>
+<th>是否物化</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>DataFrame</code> (Python)</td>
+<td>&lt; 1KB</td>
+<td>❌ 仅记录 builder</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>LogicalPlanRef = Arc&lt;LogicalPlan&gt;</code></td>
+<td>&lt; 10KB</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>3</td>
+<td>同上(被 transform 过)</td>
+<td>&lt; 10KB</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>Arc&lt;LocalPhysicalPlan&gt;</code></td>
+<td>&lt; 10KB</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Pipeline DAG (channel + 算子)</td>
+<td>~1MB</td>
+<td>❌ 算子未启动</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>ScanTaskRef</code></td>
+<td>&lt; 5KB / task</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>Bytes</code> (S3 拉回的字节)</td>
+<td>1-100MB / morsel</td>
+<td>✅ 一次只一个</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>MicroPartition</code></td>
+<td>1-100MB / morsel</td>
+<td>✅ 边产边消</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>7. 与同类项目对照</h2>
+<h3>7.1 内核语言 + 多模态 + 优化器三维对照</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>内核语言</th>
+<th>多模态</th>
+<th>优化器</th>
+<th>分布式策略</th>
+<th>Python 边界</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Daft</strong></td>
+<td>Rust</td>
+<td>一等公民</td>
+<td>自研 11 batch + DP-CCP</td>
+<td>Ray actor + Flight shuffle</td>
+<td>PyO3 单 cdylib</td>
+</tr>
+<tr>
+<td>polars</td>
+<td>Rust</td>
+<td>❌</td>
+<td>自研 LazyFrame</td>
+<td>❌</td>
+<td>PyO3</td>
+</tr>
+<tr>
+<td>DuckDB</td>
+<td>C++</td>
+<td>❌</td>
+<td>Cascades</td>
+<td>(DuckDB 集群版商业)</td>
+<td>duckdb-py(C++ 绑定)</td>
+</tr>
+<tr>
+<td>Spark</td>
+<td>Scala/JVM</td>
+<td>Pandas UDF only</td>
+<td>Catalyst</td>
+<td>RDD shuffle</td>
+<td>Py4J(JVM RPC)</td>
+</tr>
+<tr>
+<td>Ray Data</td>
+<td>Python + C++</td>
+<td>✅</td>
+<td>❌</td>
+<td>Ray object store</td>
+<td>原生 Python</td>
+</tr>
+</tbody>
+</table>
+<h3>7.2 关键差异点</h3>
+<ul>
+<li><strong>vs polars</strong>:多模态 + 分布式;polars 单机更精</li>
+<li><strong>vs DuckDB</strong>:多模态;DuckDB 在结构化分析仍是当前 SOTA</li>
+<li><strong>vs Spark</strong>:Python 原生(无 JVM);Spark 在企业生态更厚</li>
+<li><strong>vs Ray Data</strong>:有真正的查询优化器和列存;Ray Data 更像"分布式 numpy"</li>
+</ul>
+<hr />
+<h2>8. 未解之谜</h2>
+<p>写本篇时还没完全搞清的几件事,留给后续文档逐一解答:</p>
+<ol>
+<li><strong><code>DistributedPhysicalPlan</code> 为什么不是物理树?</strong> —— Explore 报告说"它是惰性描述符,<strong>不是物理树</strong>"。具体调度怎么做?见 <code>05-分布式执行.md</code>。</li>
+<li><strong><code>MicroPartition.statistics</code> 何时填充?何时缺失?</strong> —— 影响谓词下推有效性。见 <code>06-IO与扫描下推.md</code>。</li>
+<li><strong>Ray actor 内的 Swordfish 实例与本地 Swordfish 是同一份代码吗?是,但 morsel 大小、并发度配置怎么传?</strong> —— 见 <code>05-分布式执行.md</code>。</li>
+<li><strong><code>Expr</code> 是 25+ 变体的大枚举,为什么不用 trait object?</strong> —— 通常是优化器更易枚举模式匹配。见 <code>02-表达式DSL与函数.md</code>。</li>
+<li><strong><code>#[pymodule] fn daft</code> 内 30 多个 <code>register_modules</code> 调用的顺序敏感吗?</strong> —— 见 <code>07-SQL与Python桥.md</code>。</li>
+</ol>
+<hr />
+<h2>附录 A · 本系列文档导航</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>文件</th>
+<th>主题</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td><code>00-总览.md</code></td>
+<td>总图、调用链、Runner、优化分层</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>1</td>
+<td><code>01-核心类型与多模态.md</code></td>
+<td>Series/Schema/RecordBatch/MicroPartition + image/file/text</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>02-表达式DSL与函数.md</code></td>
+<td>Expr 三阶段列解析 + FunctionRegistry + UDF</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>03-逻辑计划与优化器.md</code></td>
+<td>11 batch / 下推 / DP-CCP Join 重排</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>04-Swordfish本地执行.md</code></td>
+<td>morsel-driven / Source/IntermediateOp/Sink</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>05-分布式执行.md</code></td>
+<td>Flotilla / Ray actor / Arrow Flight shuffle</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>06-IO与扫描下推.md</code></td>
+<td>ObjectSource / Pushdowns / 行组裁剪 / ReadPlanner</td>
+<td>⬜</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>07-SQL与Python桥.md</code></td>
+<td>sqlparser / <code>#[pymodule]</code> / 数据回流</td>
+<td>⬜</td>
+</tr>
+</tbody>
+</table>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

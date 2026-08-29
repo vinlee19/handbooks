@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>02 · 表达式 DSL 与函数:三阶段列解析、`Expr` 枚举、`FunctionRegistry` · Daft 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#a3e635}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">🐡 <span>Daft 源码深度解析</span></span><nav class="nav"><a href="index.html">总览</a><a href="00-总览.html">Daft 总览:从 `df.collect()` 到 Arrow Buffer</a><a href="01-核心类型与多模态.html">核心类型与多模态:Series / RecordBatch / MicroPartition / Image</a><a href="02-表达式DSL与函数.html" class=on>表达式 DSL 与函数:三阶段列解析、`Expr` 枚举、`FunctionRegistry`</a><a href="03-逻辑计划与优化器.html">逻辑计划与优化器</a><a href="04-Swordfish本地执行.html">Swordfish 本地执行</a><a href="05-分布式执行.html">分布式执行</a><a href="06-IO与扫描下推.html">IO 与扫描下推</a><a href="07-SQL与Python桥.html">SQL 与 Python 桥</a></nav></div></header>
+<main class="wrap">
+<h1>02 · 表达式 DSL 与函数:三阶段列解析、<code>Expr</code> 枚举、<code>FunctionRegistry</code></h1>
+<blockquote>
+<p><strong>基准 commit</strong>: <code>fa0d066204eae630962af7b22a5ab559ecd454fb</code> (<code>v0.7.10-13</code>)
+<strong>上一篇</strong>: <a href="01-核心类型与多模态.html"><code>01-核心类型与多模态.md</code></a> · <strong>下一篇</strong>: <code>03-逻辑计划与优化器.md</code>
+<strong>本篇主题</strong>:<code>col("a") + 1</code>、<code>SELECT a+1</code>、<code>my_udf(a)</code> 三种入口怎么汇成同一棵 <code>Expr</code> 树,<strong>Unresolved → Resolved → Bound</strong> 三阶段解析,以及 <code>FunctionRegistry</code> 怎么把 50+ 个函数模块在初始化时挂上来</p>
+</blockquote>
+<hr />
+<h2>1. 解决了什么问题</h2>
+<h3>1.1 三种用户入口需要走同一条优化通道</h3>
+<div class="mermaid">
+flowchart LR
+  subgraph User
+    P[&quot;Python&lt;br/&gt;col(&#x27;a&#x27;) + 1&quot;]
+    S[&quot;SQL&lt;br/&gt;SELECT a+1&quot;]
+    U[&quot;UDF&lt;br/&gt;@daft.udf&quot;]
+  end
+  subgraph DSL
+    E[&quot;同一棵 Expr 树&lt;br/&gt;(Arc&amp;lt;Expr&amp;gt;)&quot;]
+  end
+  subgraph PlanLayer
+    LP[&quot;LogicalPlan / 优化器&lt;br/&gt;下推、化简、CBO&quot;]
+  end
+  subgraph ExecLayer
+    EX[&quot;RecordBatch.eval_expression&lt;br/&gt;(daft-recordbatch:1267)&quot;]
+  end
+  P --&gt; E
+  S --&gt; E
+  U --&gt; E
+  E --&gt; LP --&gt; EX
+</div>
+<blockquote>
+<p><strong>关键设计</strong>:DSL 层既要好写(用户 Python 端 <code>col() + col()</code> 之类的算子重载)、又要好优化(优化器要做 <code>transform_down</code> / 模式匹配)、还要好执行(<code>eval_expression</code> 一棵树扫到底)。这三件事的"公共子集"就是 <code>Expr</code> 这个<strong>大枚举 + Arc 共享</strong>的设计。</p>
+</blockquote>
+<h3>1.2 一个长期问题:Column 名字、序号、Scope 怎么管?</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>SELECT a, b FROM t WHERE EXISTS (SELECT 1 FROM s WHERE s.x = t.a)
+                                                             ↑↑↑
+                                          外层 t 的 a,在子查询里怎么解析?
+</code></pre></div>
+
+<p>朴素方案是"全部用 string 名字 + 运行时查 schema",但在以下场景会爆:
+- <strong>Join 重排</strong>后列源自 left 还是 right
+- <strong>子查询</strong>里引用外层列(<code>OuterRef</code>)
+- <strong>Bound 阶段</strong>算子要快速取列(O(1) by index)</p>
+<p>Daft 的答案是<strong>显式三态 <code>Column</code> 枚举</strong>(下文 §3.2)。</p>
+<hr />
+<h2>2. 整体设计</h2>
+<h3>2.1 DSL 层 crate 全景</h3>
+<div class="mermaid">
+graph LR
+  subgraph DSLC[&quot;daft-dsl&quot;]
+    Expr[&quot;Expr 枚举&lt;br/&gt;22 变体&quot;]
+    Col[&quot;Column 三态&quot;]
+    Agg[&quot;AggExpr&quot;]
+    Win[&quot;WindowExpr&quot;]
+    Bnd[&quot;BoundExpr&quot;]
+    FE[&quot;FunctionExpr / ScalarFn&quot;]
+    Reg[&quot;FunctionRegistry&lt;br/&gt;(LazyLock+RwLock)&quot;]
+    Lit[&quot;Literal&quot;]
+  end
+
+  subgraph FUNCS[&quot;daft-functions* (16 个 crate)&quot;]
+    NUM[&quot;numeric&quot;]
+    UTF[&quot;utf8&quot;]
+    JSON[&quot;json&quot;]
+    LIST[&quot;list&quot;]
+    URI[&quot;uri&quot;]
+    IMG[&quot;image&quot;]
+    BIN[&quot;binary&quot;]
+    TMP[&quot;temporal&quot;]
+    TOK[&quot;tokenize&quot;]
+    SER[&quot;serde&quot;]
+    GEO[&quot;geo&quot;]
+    HSH[&quot;hash&quot;]
+    MISC[&quot;misc / random / similarity / distance&quot;]
+  end
+
+  Expr --&gt; Col
+  Expr --&gt; Agg
+  Expr --&gt; Win
+  Expr --&gt; FE
+  FE --&gt; Reg
+  Reg &lt;-.全部注册到.- FUNCS
+  Bnd --&gt; Expr
+
+  classDef dsl fill:#d4e2f1
+  classDef fns fill:#fff5d6
+  class Expr,Col,Agg,Win,Bnd,FE,Reg,Lit dsl
+  class NUM,UTF,JSON,LIST,URI,IMG,BIN,TMP,TOK,SER,GEO,HSH,MISC fns
+</div>
+<blockquote>
+<p><strong>从图看出</strong>:<code>daft-dsl</code> 是骨架 + 注册中心,<code>daft-functions-*</code> 才是肉。具体注册过程在 <code>src/lib.rs:158-186</code>(已在 00 总览里贴过),每个 crate 实现 <code>FunctionModule</code> trait 并被 <code>register::&lt;NumericFunctions&gt;()</code> 挂入全局表。</p>
+</blockquote>
+<h3>2.2 <code>Expr</code> 枚举速查</h3>
+<table>
+<thead>
+<tr>
+<th>变体</th>
+<th>子结构</th>
+<th>典型场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Column(Column)</code></td>
+<td>三态列</td>
+<td><code>col("a")</code></td>
+</tr>
+<tr>
+<td><code>Alias(ExprRef, Arc&lt;str&gt;)</code></td>
+<td></td>
+<td><code>.alias("x")</code></td>
+</tr>
+<tr>
+<td><code>Agg(AggExpr)</code></td>
+<td>sum/mean/...</td>
+<td><code>.sum()</code></td>
+</tr>
+<tr>
+<td><code>BinaryOp { op, left, right }</code></td>
+<td><code>Operator</code> 枚举</td>
+<td><code>a + b</code>, <code>a &gt; 10</code></td>
+</tr>
+<tr>
+<td><code>Cast(ExprRef, DataType)</code></td>
+<td></td>
+<td><code>cast(a as int)</code></td>
+</tr>
+<tr>
+<td><code>Function { func, inputs }</code></td>
+<td><code>FunctionExpr</code></td>
+<td>旧式内置函数</td>
+</tr>
+<tr>
+<td><code>ScalarFn(ScalarFn)</code></td>
+<td>新式 trait-based</td>
+<td>注册表里的所有 UDF</td>
+</tr>
+<tr>
+<td><code>Over(WindowExpr, Arc&lt;WindowSpec&gt;)</code></td>
+<td>已绑定 frame</td>
+<td><code>sum() OVER (PARTITION BY x)</code></td>
+</tr>
+<tr>
+<td><code>WindowFunction(WindowExpr)</code></td>
+<td>临时态</td>
+<td>DataFrame API 中间产物</td>
+</tr>
+<tr>
+<td><code>Not / IsNull / NotNull / FillNull</code></td>
+<td>一元/二元</td>
+<td>null 处理</td>
+</tr>
+<tr>
+<td><code>IsIn / Between</code></td>
+<td>列表/范围</td>
+<td><code>a IN (...)</code> / <code>a BETWEEN x AND y</code></td>
+</tr>
+<tr>
+<td><code>List(Vec&lt;ExprRef&gt;)</code></td>
+<td></td>
+<td>表达式列表</td>
+</tr>
+<tr>
+<td><code>Literal(Literal)</code></td>
+<td></td>
+<td><code>1</code>, <code>"foo"</code>, <code>true</code></td>
+</tr>
+<tr>
+<td><code>IfElse { predicate, if_true, if_false }</code></td>
+<td></td>
+<td><code>CASE WHEN</code></td>
+</tr>
+<tr>
+<td><code>Coalesce(Vec&lt;ExprRef&gt;)</code></td>
+<td></td>
+<td><code>COALESCE(a,b,c)</code></td>
+</tr>
+<tr>
+<td><code>Subquery / InSubquery / Exists</code></td>
+<td>嵌套 plan</td>
+<td>子查询</td>
+</tr>
+<tr>
+<td><code>VLLM(VLLMExpr)</code></td>
+<td>实验:vLLM 推理</td>
+<td>LLM 列函数</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>所有变体的 children 都是 <code>ExprRef = Arc&lt;Expr&gt;</code></strong> —— 这意味着相同子树天然共享、<code>clone()</code> 是 O(1) 的引用计数。</p>
+</blockquote>
+<h3>2.3 解析三阶段</h3>
+<div class="mermaid">
+stateDiagram-v2
+  [*] --&gt; Unresolved: col(&quot;a&quot;) / 用户写
+  Unresolved --&gt; Resolved: LogicalPlanBuilder.&lt;br/&gt;resolve_columns
+  Resolved --&gt; Bound: BoundExpr::try_new(schema)
+  Bound --&gt; [*]: RecordBatch.eval_expression
+
+  state Resolved {
+    [*] --&gt; Basic
+    [*] --&gt; JoinSide
+    [*] --&gt; OuterRef
+    Basic: Resolved::Basic(name)
+    JoinSide: Resolved::JoinSide(field, side)
+    OuterRef: Resolved::OuterRef(field, plan_ref)
+  }
+</div>
+<blockquote>
+<p><strong>看图要点</strong>:三阶段不是装饰,是<strong>强制类型规约</strong> —— <code>BoundExpr</code> 是个 newtype:<code>pub struct BoundExpr(ExprRef)</code>。<code>try_new(schema)</code> 会遍历整棵树,<strong>任一列不是 <code>Bound</code> 都直接 <code>DaftResult::Err</code></strong>。这把"列没解析完就被执行"这个 bug 类别在编译器之外又卡了一道。</p>
+</blockquote>
+<hr />
+<h2>3. 关键数据结构</h2>
+<h3>3.1 <code>Expr</code> —— 大枚举 + Arc 共享</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/daft-dsl/src/expr/mod.rs:218</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">type</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">ExprRef</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Expr</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">;</span>
+
+<span style="color: #959077">// src/daft-dsl/src/expr/mod.rs:222</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">Expr</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    Column(Column),</span>
+<span style="color: #F8F8F2">    Alias(ExprRef, Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">str</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">),</span>
+<span style="color: #F8F8F2">    Agg(AggExpr),</span>
+<span style="color: #F8F8F2">    BinaryOp { op: </span><span style="color: #A6E22E">Operator</span><span style="color: #F8F8F2">, left: </span><span style="color: #A6E22E">ExprRef</span><span style="color: #F8F8F2">, right: </span><span style="color: #A6E22E">ExprRef</span><span style="color: #F8F8F2"> },</span>
+<span style="color: #F8F8F2">    Cast(ExprRef, DataType),</span>
+<span style="color: #F8F8F2">    Function { func: </span><span style="color: #A6E22E">FunctionExpr</span><span style="color: #F8F8F2">, inputs: Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ExprRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> },</span>
+<span style="color: #F8F8F2">    Over(WindowExpr, Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">WindowSpec</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">),</span>
+<span style="color: #F8F8F2">    WindowFunction(WindowExpr),</span>
+<span style="color: #F8F8F2">    Not(ExprRef), IsNull(ExprRef), NotNull(ExprRef), FillNull(ExprRef, ExprRef),</span>
+<span style="color: #F8F8F2">    IsIn(ExprRef, Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ExprRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">),</span>
+<span style="color: #F8F8F2">    Between(ExprRef, ExprRef, ExprRef),</span>
+<span style="color: #F8F8F2">    List(Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ExprRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">),</span>
+<span style="color: #F8F8F2">    Literal(Literal),</span>
+<span style="color: #F8F8F2">    IfElse { if_true: </span><span style="color: #A6E22E">ExprRef</span><span style="color: #F8F8F2">, if_false: </span><span style="color: #A6E22E">ExprRef</span><span style="color: #F8F8F2">, predicate: </span><span style="color: #A6E22E">ExprRef</span><span style="color: #F8F8F2"> },</span>
+<span style="color: #F8F8F2">    ScalarFn(ScalarFn),</span>
+<span style="color: #F8F8F2">    Subquery(Subquery),</span>
+<span style="color: #F8F8F2">    InSubquery(ExprRef, Subquery),</span>
+<span style="color: #F8F8F2">    Exists(Subquery),</span>
+<span style="color: #F8F8F2">    Coalesce(Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ExprRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">),</span>
+<span style="color: #F8F8F2">    VLLM(VLLMExpr),</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>注意三个细节:</p>
+<ol>
+<li><code>#[allow(clippy::large_enum_variant)]</code>(line 221)—— Daft 知道 <code>VLLMExpr</code> 这种大变体会让整个枚举每个实例都按最大变体分配,但因为 <strong>几乎总是 <code>Arc&lt;Expr&gt;</code> 共享</strong>,所以可以接受。</li>
+<li><code>BinaryOp</code> / <code>IfElse</code> 等结构体变体 = 命名字段,可读性强。</li>
+<li><code>Function { func, inputs }</code> 与 <code>ScalarFn(ScalarFn)</code> <strong>共存</strong> —— 这是历史包袱:旧式内置函数走 <code>FunctionExpr</code> 枚举(<code>functions/mod.rs:36</code>),新式 trait-based UDF 走 <code>ScalarFn</code>(<code>functions/scalar.rs:21</code>)。<strong>优化器要同时识别两种</strong>(详见 03 篇)。</li>
+</ol>
+<h3>3.2 <code>Column</code> 三态详解</h3>
+<div class="mermaid">
+classDiagram
+  class Column {
+    &lt;&lt;enum&gt;&gt;
+    +Unresolved(UnresolvedColumn)
+    +Resolved(ResolvedColumn)
+    +Bound(BoundColumn)
+  }
+  class UnresolvedColumn {
+    +name: Arc&amp;lt;str&amp;gt;
+    +plan_ref: PlanRef
+    +plan_schema: Option&amp;lt;SchemaRef&amp;gt;
+  }
+  class ResolvedColumn {
+    &lt;&lt;enum&gt;&gt;
+    +Basic(Arc&amp;lt;str&amp;gt;)
+    +JoinSide(Field, JoinSide)
+    +OuterRef(Field, PlanRef)
+  }
+  class BoundColumn {
+    +index: usize
+    +field: Field
+  }
+  class PlanRef {
+    &lt;&lt;enum&gt;&gt;
+    +Alias(Arc&amp;lt;str&amp;gt;)
+    +Unqualified
+    +Id(usize)
+  }
+
+  Column --&gt; UnresolvedColumn
+  Column --&gt; ResolvedColumn
+  Column --&gt; BoundColumn
+  UnresolvedColumn --&gt; PlanRef
+  ResolvedColumn --&gt; PlanRef : OuterRef
+</div>
+<table>
+<thead>
+<tr>
+<th>状态</th>
+<th>何时存在</th>
+<th>何时消失</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Unresolved</strong></td>
+<td>DataFrame / SQL 前端</td>
+<td>LogicalPlanBuilder 阶段全部转 Resolved</td>
+<td>仅有 name 字符串,scope 信息可选</td>
+</tr>
+<tr>
+<td><strong>Resolved::Basic</strong></td>
+<td>单输入算子(Project/Filter)中</td>
+<td>Bound 阶段</td>
+<td>name 已确定唯一来源</td>
+</tr>
+<tr>
+<td><strong>Resolved::JoinSide</strong></td>
+<td>Join 谓词内</td>
+<td>同上</td>
+<td>需要 left/right 标签消歧</td>
+</tr>
+<tr>
+<td><strong>Resolved::OuterRef</strong></td>
+<td>子查询内</td>
+<td>同上</td>
+<td>引用外层 plan 列</td>
+</tr>
+<tr>
+<td><strong>Bound</strong></td>
+<td>物理执行前 <code>BoundExpr::try_new</code></td>
+<td>执行结束</td>
+<td>直接索引列(O(1) take)</td>
+</tr>
+</tbody>
+</table>
+<p>源码定位:<code>UnresolvedColumn</code> 148、<code>ResolvedColumn</code> 155、<code>BoundColumn</code> 175,文件 <code>src/daft-dsl/src/expr/mod.rs</code>。</p>
+<h3>3.3 <code>AggExpr</code> 与 <code>WindowExpr</code></h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// expr/mod.rs:395</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">AggExpr</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    Count(</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.), Sum(ExprRef), Mean(ExprRef),</span>
+<span style="color: #F8F8F2">    Min(ExprRef), Max(ExprRef),</span>
+<span style="color: #F8F8F2">    Stddev { expr: </span><span style="color: #A6E22E">ExprRef</span><span style="color: #F8F8F2">, ddof: </span><span style="color: #66D9EF">i32</span><span style="color: #F8F8F2"> },</span>
+<span style="color: #F8F8F2">    Var { expr: </span><span style="color: #A6E22E">ExprRef</span><span style="color: #F8F8F2">, ddof: </span><span style="color: #66D9EF">i32</span><span style="color: #F8F8F2"> },</span>
+<span style="color: #F8F8F2">    ApproxPercentile(ApproxPercentileParams),</span>
+<span style="color: #F8F8F2">    ApproxCountDistinct(ExprRef), ApproxSketch(ExprRef), MergeSketch(</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.),</span>
+<span style="color: #F8F8F2">    List(ExprRef), Set(ExprRef), Concat(</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.),</span>
+<span style="color: #F8F8F2">    AggFnMap(</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.), AggFnReduce(</span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">.),     </span><span style="color: #959077">// map-reduce 两阶段聚合</span>
+<span style="color: #F8F8F2">    MapGroups { func: </span><span style="color: #A6E22E">MapGroupsFn</span><span style="color: #F8F8F2">, inputs: Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ExprRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> },  </span><span style="color: #959077">// UDF agg</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #959077">// expr/mod.rs:494</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">WindowExpr</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    Agg(AggExpr),</span>
+<span style="color: #F8F8F2">    RowNumber, Rank, DenseRank,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// ...</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<blockquote>
+<p><strong><code>AggFnMap</code> / <code>AggFnReduce</code></strong> 是 partial+final 两阶段聚合的<strong>核心数据结构</strong> —— <code>PushDownAggregation</code> 优化规则会把 <code>Sum(x)</code> 拆成 "scan 侧 <code>AggFnMap(Sum)</code>" + "shuffle 后 <code>AggFnReduce(Sum)</code>",后者聚合前者输出的部分结果。这是分布式聚合"map-side combine"的内部表示。</p>
+</blockquote>
+<h3>3.4 <code>BoundExpr</code> —— newtype 封装的"已就绪"标记</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/daft-dsl/src/expr/bound_expr.rs:21</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">BoundExpr</span><span style="color: #F8F8F2">(ExprRef);</span>
+
+<span style="color: #66D9EF">impl</span><span style="color: #F8F8F2"> BoundExpr {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// line 25</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">try_new</span><span style="color: #F8F8F2">(expr: </span><span style="color: #A6E22E">impl</span><span style="color: #F8F8F2"> Into</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ExprRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">, schema: </span><span style="color: #66D9EF">&amp;</span><span style="color: #A6E22E">Schema</span><span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">DaftResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Self</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">        </span><span style="color: #959077">// 遍历 expr 树,若任一列不是 Column::Bound 就返回 Err</span>
+<span style="color: #F8F8F2">    }</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// line 62</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">new_unchecked</span><span style="color: #F8F8F2">(expr: </span><span style="color: #A6E22E">ExprRef</span><span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">Self</span><span style="color: #F8F8F2"> { Self(expr) }</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// line 81</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">bind_all</span><span style="color: #F8F8F2">(exprs: </span><span style="color: #66D9EF">&amp;</span><span style="color: #F8F8F2">[ExprRef], schema: </span><span style="color: #66D9EF">&amp;</span><span style="color: #A6E22E">Schema</span><span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">DaftResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Self</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2"> { </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">. }</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>下游(<code>RecordBatch::eval_expression</code>)的签名是 <code>&amp;BoundExpr</code> 而<strong>不是 <code>&amp;ExprRef</code></strong>,这就把"未绑定列被求值"的可能性彻底封掉。</p>
+<hr />
+<h2>4. 关键源码走读</h2>
+<h3>4.1 一棵 <code>(col("a") + col("b") * 2).alias("x")</code> 的形态变化</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>                                       ┌─────────────────────────────┐
+   用户 Python:                        │  Alias                       │
+   (col(&quot;a&quot;) + col(&quot;b&quot;) * 2).alias(&quot;x&quot;)│  ├── BinaryOp +              │
+                                       │  │   ├── Column(Unresolved a)│
+                                       │  │   └── BinaryOp *          │
+                                       │  │       ├── Column(Unr  b)  │
+                                       │  │       └── Literal(2)      │
+                                       │  └── Arc&lt;str&gt;(&quot;x&quot;)           │
+                                       └─────────────────────────────┘
+                                                     ↓ 进入 LogicalPlanBuilder
+   resolve_columns(input_schema={a:Int,b:Int}):
+                                       ┌─────────────────────────────┐
+                                       │  Alias                       │
+                                       │  └── BinaryOp +              │
+                                       │      ├── Column(Resolved Basic(&quot;a&quot;))
+                                       │      └── BinaryOp *          │
+                                       │          ├── Column(R Basic b)│
+                                       │          └── Literal(2)      │
+                                       └─────────────────────────────┘
+                                                     ↓ BoundExpr::try_new(schema)
+                                       ┌─────────────────────────────┐
+                                       │  BoundExpr(Alias            │
+                                       │    └── BinaryOp +            │
+                                       │        ├── Column(Bound{0,a})│
+                                       │        └── BinaryOp *        │
+                                       │            ├── Column(B{1,b})│
+                                       │            └── Literal(2))   │
+                                       └─────────────────────────────┘
+                                                     ↓ RecordBatch.eval_expression
+                              Series { dtype: Int, name: &quot;x&quot;, ... }
+</code></pre></div>
+
+<h3>4.2 Expr 实现 <code>TreeNode</code>(供优化器使用)</h3>
+<p><code>Expr</code> 实现了 <code>common_treenode::TreeNode</code>(虽然 impl 在另一文件,但你能在 <code>daft-dsl</code> 中看到所有 <code>transform_down</code> / <code>apply_children</code> / <code>with_new_children</code> 调用)。三个核心方法:</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// expr/mod.rs:761</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">children</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self) -&gt; Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ExprRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">     </span><span style="color: #959077">// 返回直接子节点</span>
+
+<span style="color: #959077">// expr/mod.rs:791</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">with_new_children</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self, </span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> children: Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ExprRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">Self</span><span style="color: #F8F8F2">  </span><span style="color: #959077">// 替换子节点</span>
+
+<span style="color: #959077">// expr/mod.rs:856</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">to_field</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self, schema: </span><span style="color: #66D9EF">&amp;</span><span style="color: #A6E22E">Schema</span><span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">DaftResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Field</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">  </span><span style="color: #959077">// 推断输出 dtype</span>
+</code></pre></div>
+
+<div class="mermaid">
+sequenceDiagram
+    participant Opt as Optimizer
+    participant TN as TreeNode (common/treenode)
+    participant E as Expr
+    Opt-&gt;&gt;TN: expr.transform_down(rule_fn)
+    TN-&gt;&gt;E: rule_fn(self) → Transformed::Yes/No
+    alt Yes (变了)
+      TN-&gt;&gt;E: 用新子节点重建 (with_new_children)
+    else No
+      TN-&gt;&gt;E: children() 递归下降
+      loop each child
+        TN-&gt;&gt;TN: child.transform_down(rule_fn)
+      end
+    end
+    TN--&gt;&gt;Opt: Transformed&lt;ExprRef&gt;
+</div>
+<blockquote>
+<p>详细的 TreeNode 协议见 <code>03-逻辑计划与优化器.md</code> §2.4。</p>
+</blockquote>
+<h3>4.3 <code>FunctionRegistry</code> 全局单例</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/daft-dsl/src/functions/mod.rs:191</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">static</span><span style="color: #F8F8F2"> FUNCTION_REGISTRY: </span><span style="color: #A6E22E">LazyLock</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">RwLock</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">FunctionRegistry</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">=</span>
+<span style="color: #F8F8F2">    LazyLock::new(</span><span style="color: #FF4689">||</span><span style="color: #F8F8F2"> RwLock::new(FunctionRegistry::new()));</span>
+
+<span style="color: #959077">// src/daft-dsl/src/functions/mod.rs:133</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">FunctionRegistry</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    fns: </span><span style="color: #A6E22E">HashMap</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String, Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">dyn</span><span style="color: #F8F8F2"> ScalarFunctionFactory</span><span style="color: #FF4689">&gt;&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #959077">// line 153</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">register</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Mod: </span><span style="color: #A6E22E">FunctionModule</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> self) { Mod::register(self); }</span>
+<span style="color: #959077">// line 167</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">add_fn</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">UDF: </span><span style="color: #A6E22E">ScalarUDF</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">+</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">&#39;</span><span style="color: #F8F8F2">static</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> self, func: </span><span style="color: #A6E22E">UDF</span><span style="color: #F8F8F2">) { </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">. }</span>
+<span style="color: #959077">// line 175</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">add_async_fn</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">UDF: </span><span style="color: #A6E22E">AsyncScalarUDF</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">+</span><span style="color: #F8F8F2"> </span><span style="color: #FF4689">&#39;</span><span style="color: #F8F8F2">static</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #66D9EF">mut</span><span style="color: #F8F8F2"> self, func: </span><span style="color: #A6E22E">UDF</span><span style="color: #F8F8F2">) { </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">. }</span>
+</code></pre></div>
+
+<div class="mermaid">
+sequenceDiagram
+    autonumber
+    participant Py as Python `import daft`
+    participant Cdy as cdylib (libdaft.so)
+    participant Rust as #[pymodule] fn daft (src/lib.rs:109)
+    participant FR as FUNCTION_REGISTRY (LazyLock)
+    participant Mods as FunctionModule impls
+
+    Py-&gt;&gt;Cdy: Python 加载 .so
+    Cdy-&gt;&gt;Rust: 调用 #[pymodule] fn daft(...)
+    Rust-&gt;&gt;FR: write() 拿写锁 (line 158-160)
+    Rust-&gt;&gt;Mods: registry.register::&lt;NumericFunctions&gt;()
+    Mods-&gt;&gt;FR: 在 fns HashMap 注册 add/sub/mul/...
+    Rust-&gt;&gt;Mods: registry.register::&lt;Utf8Functions&gt;()
+    Mods-&gt;&gt;FR: 注册 lower/upper/length/...
+    Note over Rust,Mods: 重复 16 次,把 16 个 module 都注册完
+    Rust-&gt;&gt;FR: add_fn(daft_functions::coalesce::Coalesce) (line 178)
+    Rust-&gt;&gt;FR: add_fn(daft_file::File / FilePath / Size / VideoFile / AudioFile / GuessMimeType) (179-184)
+    Rust--&gt;&gt;Py: PyModule 就绪
+</div>
+<blockquote>
+<p><strong>看图要点</strong>:<strong>整个进程生命周期内,<code>FUNCTION_REGISTRY</code> 只在 <code>import daft</code> 时被写一次,之后全部是读路径</strong>。<code>RwLock</code> 选型很关键:正常运行时只读拿,极偶尔 Python 端注册 UDF 才会拿写锁。</p>
+</blockquote>
+<h3>4.4 内置 <code>ScalarUDF</code> 长什么样</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/daft-dsl/src/functions/scalar.rs:205</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">trait</span><span style="color: #F8F8F2"> ScalarUDF: Send </span><span style="color: #FF4689">+</span><span style="color: #F8F8F2"> Sync </span><span style="color: #FF4689">+</span><span style="color: #F8F8F2"> std::any::Any {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">name</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self) -&gt; </span><span style="color: #66D9EF">&amp;</span><span style="color: #FF4689">&#39;</span><span style="color: #F8F8F2">static </span><span style="color: #66D9EF">str</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">aliases</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self) -&gt; </span><span style="color: #66D9EF">&amp;</span><span style="color: #FF4689">&#39;</span><span style="color: #F8F8F2">static [</span><span style="color: #FF4689">&amp;&#39;</span><span style="color: #F8F8F2">static </span><span style="color: #66D9EF">str</span><span style="color: #F8F8F2">] { </span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">[] }</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">is_deterministic</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self) -&gt; </span><span style="color: #66D9EF">bool</span><span style="color: #F8F8F2"> { </span><span style="color: #66D9EF">true</span><span style="color: #F8F8F2"> }</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">to_field</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self, ctx: </span><span style="color: #66D9EF">&amp;</span><span style="color: #A6E22E">EvalContext</span><span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">DaftResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Field</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">fn</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">evaluate</span><span style="color: #F8F8F2">(</span><span style="color: #FF4689">&amp;</span><span style="color: #F8F8F2">self, ctx: </span><span style="color: #66D9EF">&amp;</span><span style="color: #A6E22E">EvalContext</span><span style="color: #F8F8F2">) -&gt; </span><span style="color: #A6E22E">DaftResult</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Series</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">;</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// ...</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><code>Arc&lt;dyn ScalarUDF&gt;</code> 被装进 <code>BuiltinScalarFn</code>(line 92):</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// scalar.rs:92</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">BuiltinScalarFn</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> variant: </span><span style="color: #A6E22E">BuiltinScalarFnVariant</span><span style="color: #F8F8F2">,   </span><span style="color: #959077">// sync 或 async</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> inputs: Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ExprRef</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p>最终塞进 <code>Expr::ScalarFn(ScalarFn)</code>,跟其它表达式平级。</p>
+<h3>4.5 Python UDF 如何套到这个体系</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #A6E22E">@daft</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">udf(return_dtype</span><span style="color: #FF4689">=</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">DataType</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">int64())</span>
+<span style="color: #66D9EF">def</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">my_double</span><span style="color: #F8F8F2">(x):</span>
+    <span style="color: #66D9EF">return</span> <span style="color: #F8F8F2">[v</span> <span style="color: #FF4689">*</span> <span style="color: #AE81FF">2</span> <span style="color: #66D9EF">for</span> <span style="color: #F8F8F2">v</span> <span style="color: #FF4689">in</span> <span style="color: #F8F8F2">x]</span>
+</code></pre></div>
+
+<p>走的不是 <code>ScalarFn</code> 这条路,而是 <code>Expr::Function { func: FunctionExpr::Python(...) }</code>(<code>FunctionExpr</code> 在 <code>functions/mod.rs:36</code>)。理由:Python UDF 需要 GIL、需要序列化、行为不确定,优化器要识别它来做 <code>SplitUDFs</code> 规则(见 03 篇)把 UDF 节点单独切出来调度。</p>
+<hr />
+<h2>5. 怎么优化的</h2>
+<h3>5.1 优化点速查</h3>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>优化点</th>
+<th>不优化会怎样</th>
+<th>Daft 怎么做</th>
+<th>源码</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>ExprRef = Arc&lt;Expr&gt;</code> 共享</td>
+<td>树克隆代价 O(节点数)</td>
+<td>Arc 引用计数,clone O(1)</td>
+<td><code>expr/mod.rs:218</code></td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>BoundExpr</code> newtype 强制约束</td>
+<td>列没解析就执行 → 错误延迟</td>
+<td>类型系统在编译期/构造期截断</td>
+<td><code>bound_expr.rs:21,25</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>Column</code> 三态显式建模</td>
+<td>字符串拼 + 运行时查表</td>
+<td>枚举 + 两次显式转换</td>
+<td><code>expr/mod.rs:115</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>AggFnMap</code> / <code>AggFnReduce</code> 拆</td>
+<td>必须 shuffle 完整数据</td>
+<td>partial+final 两阶段</td>
+<td><code>expr/mod.rs</code> AggExpr</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>FunctionRegistry</code> <code>LazyLock+RwLock</code></td>
+<td>启动时无并发安全 / 频繁加锁</td>
+<td>一次写多次读,RwLock 适配</td>
+<td><code>functions/mod.rs:191</code></td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>is_deterministic()</code> 扁平标记</td>
+<td>无法做公共子表达式消除</td>
+<td>trait 默认 <code>true</code>,UDF 可改 <code>false</code></td>
+<td><code>scalar.rs:76</code></td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>IfElse</code> 短路求值</td>
+<td>两边都算</td>
+<td>对 mask 分别取分支再合并</td>
+<td><code>expr/mod.rs:283</code>(eval 分发)</td>
+</tr>
+<tr>
+<td>8</td>
+<td>谓词 <code>IsIn</code> / <code>Between</code> 单独建模</td>
+<td>都展开为 <code>OR</code>/<code>AND</code></td>
+<td>单变体让规则识别成 set / range</td>
+<td><code>expr/mod.rs:271-275</code></td>
+</tr>
+</tbody>
+</table>
+<h3>5.2 <code>is_deterministic</code> 之于公共子表达式消除(CSE)</h3>
+<div class="mermaid">
+flowchart LR
+  E1[&quot;expr1: f(a)+1&quot;] --&gt;|hash| H[&quot;semantic_id&quot;]
+  E2[&quot;expr2: f(a)+1&quot;] --&gt;|hash| H
+  H --&gt;|相等| Q{&quot;f.is_deterministic()?&quot;}
+  Q --&gt;|true| CSE[&quot;复用一次计算&quot;]
+  Q --&gt;|false| TWICE[&quot;分别计算两次&lt;br/&gt;(eg. random())&quot;]
+</div>
+<blockquote>
+<p><code>Expr::semantic_id</code> (line 629) 把整棵树折叠成 <code>FieldID</code>,但仅当所有节点的函数都是 <code>is_deterministic</code> 时,优化器才能放心合并。这是个<strong>经典但容易写错</strong>的细节。</p>
+</blockquote>
+<hr />
+<h2>6. 端到端案例:<code>groupby("user").agg(col("amount").sum().alias("total"))</code></h2>
+<h3>6.1 Python 入口</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">df</span> <span style="color: #FF4689">=</span> <span style="color: #F8F8F2">(</span>
+    <span style="color: #F8F8F2">daft</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">read_parquet(</span><span style="color: #E6DB74">&quot;logs/&quot;</span><span style="color: #F8F8F2">)</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">groupby(</span><span style="color: #E6DB74">&quot;user&quot;</span><span style="color: #F8F8F2">)</span>
+        <span style="color: #FF4689">.</span><span style="color: #F8F8F2">agg(col(</span><span style="color: #E6DB74">&quot;amount&quot;</span><span style="color: #F8F8F2">)</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">sum()</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">alias(</span><span style="color: #E6DB74">&quot;total&quot;</span><span style="color: #F8F8F2">))</span>
+<span style="color: #F8F8F2">)</span>
+<span style="color: #F8F8F2">df</span><span style="color: #FF4689">.</span><span style="color: #F8F8F2">collect()</span>
+</code></pre></div>
+
+<h3>6.2 表达式结构(初始)</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>Expr::Alias(
+  Expr::Agg(
+    AggExpr::Sum(
+      Expr::Column(Column::Unresolved(UnresolvedColumn{ name: &quot;amount&quot; }))
+    )
+  ),
+  Arc::from(&quot;total&quot;)
+)
+</code></pre></div>
+
+<h3>6.3 6 个阶段的形态</h3>
+<div class="mermaid">
+flowchart TB
+  S0[&quot;Stage 0: 用户构造&lt;br/&gt;Unresolved column &#x27;amount&#x27;&quot;] --&gt; S1
+  S1[&quot;Stage 1: LogicalPlanBuilder.agg(...)&lt;br/&gt;resolve → Resolved::Basic(&#x27;amount&#x27;)&quot;] --&gt; S2
+  S2[&quot;Stage 2: Optimizer 跑&lt;br/&gt;PushDownAggregation&quot;] --&gt; S3
+  S3[&quot;Stage 3: AggExpr::Sum 拆&lt;br/&gt;scan 侧 AggFnMap, 全局侧 AggFnReduce&quot;] --&gt; S4
+  S4[&quot;Stage 4: BoundExpr::try_new&lt;br/&gt;amount → Column::Bound{idx=1}&quot;] --&gt; S5
+  S5[&quot;Stage 5: RecordBatch.eval_expression&quot;] --&gt; S6
+  S6[&quot;Stage 6: Series &#x27;total&#x27; 输出&quot;]
+</div>
+<h3>6.4 Stage 3 拆分前后对比</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code>拆分前 (单机):
+  Aggregate
+   └── Sum(amount)
+
+拆分后 (分布式):
+  Aggregate (final)
+   └── AggFnReduce(Sum, partial_sum)
+        ↑
+     [shuffle by user]
+        ↑
+  Aggregate (partial, in scan stage)
+   └── AggFnMap(Sum, amount)
+</code></pre></div>
+
+<blockquote>
+<p><strong>看出</strong>:<code>PushDownAggregation</code> 不仅"挪了位置",还把 <code>AggExpr::Sum</code> 在 DSL 层就拆成了两份不同的 <code>AggExpr</code> 变体。下游执行算子直接吃这两种,不需要再判断"我是不是 partial 阶段"。</p>
+</blockquote>
+<hr />
+<h2>7. 与同类项目对照</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>表达式表示</th>
+<th>Column 解析</th>
+<th>UDF 注册</th>
+<th>决定性优化</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Daft</strong></td>
+<td>enum + Arc 共享</td>
+<td>三阶段强类型</td>
+<td><code>FunctionRegistry</code> LazyLock+RwLock</td>
+<td><code>is_deterministic</code> 显式</td>
+</tr>
+<tr>
+<td>polars</td>
+<td>enum + Arc</td>
+<td>名字 + lazy schema 推断</td>
+<td><code>register_function</code></td>
+<td>LogicalPlan 同体</td>
+</tr>
+<tr>
+<td>DataFusion</td>
+<td>enum + Arc</td>
+<td><code>Column::name + relation</code></td>
+<td><code>FunctionRegistry</code> per-context</td>
+<td><code>Volatility</code> 三档</td>
+</tr>
+<tr>
+<td>Spark Catalyst</td>
+<td>Scala class hierarchy + AST</td>
+<td><code>UnresolvedAttribute → Attribute</code></td>
+<td><code>SessionState.functionRegistry</code></td>
+<td><code>Deterministic</code> trait</td>
+</tr>
+<tr>
+<td>DuckDB</td>
+<td>C++ AST class</td>
+<td>name → Column binding</td>
+<td><code>CreateScalarFunction</code></td>
+<td>volatile flag</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>看出</strong>:Daft 的 <code>Column</code> 三态 + <code>BoundExpr</code> 强约束在主流引擎里<strong>算最严格的之一</strong>(对比 DataFusion 的两态:<code>Column</code> 用 <code>relation: Option&lt;TableReference&gt;</code> 标 scope)。代价是用户写 DSL 时心智模型多一层,好处是优化期 bug 可以靠类型系统逼出来。</p>
+</blockquote>
+<hr />
+<h2>8. 未解之谜</h2>
+<ol>
+<li><strong><code>Expr::Function</code> 与 <code>Expr::ScalarFn</code> 何时统一?</strong> —— 源码里两者并存,<code>ScalarFn</code> 是新派(trait-based),<code>Function</code> 是旧派(<code>FunctionExpr</code> 枚举)。优化器需要同时匹配两套,长期看应该收敛。</li>
+<li><strong><code>#[deprecated]</code> 的 <code>BoundColumn::field</code></strong> —— 源码注释说"name-referenced columns",意味着未来某天 <code>BoundColumn</code> 可能只剩 <code>index: usize</code>(纯位置索引),对优化器影响多大?</li>
+<li><strong><code>semantic_id</code> 的 hash 冲突概率</strong> —— <code>FieldID</code> 是 sanitized 字符串,公共子表达式消除完全靠它。深层嵌套表达式的字符串可能很长,有没有压缩?</li>
+<li><strong>Python UDF 跨进程序列化</strong> —— Ray runner 下 UDF 必须用 cloudpickle 跨节点,这部分代码在 Python 端而不在 <code>daft-dsl</code> 里。</li>
+<li><strong><code>Expr</code> 大枚举与 <code>large_enum_variant</code> lint</strong> —— 当前 <code>#[allow]</code> 掉了,<code>VLLMExpr</code> 一个变体就比基础变体大很多。在 Arc 共享下问题不大,但深度优化时这件事可能值得 revisit。</li>
+</ol>
+<hr />
+<h2>附录 · 本篇引用源码清单</h2>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">115</span><span style="color: #F8F8F2">                  pub enum </span><span style="color: #66D9EF">Column</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">148</span><span style="color: #F8F8F2">                  pub struct UnresolvedColumn</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">155</span><span style="color: #F8F8F2">                  pub enum ResolvedColumn</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">175</span><span style="color: #F8F8F2">                  pub struct BoundColumn</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">218</span><span style="color: #F8F8F2">                  pub type ExprRef </span><span style="color: #FF4689">=</span><span style="color: #F8F8F2"> Arc</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">Expr</span><span style="color: #FF4689">&gt;</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">222</span><span style="color: #F8F8F2">                  pub enum Expr (</span><span style="color: #AE81FF">22</span><span style="color: #F8F8F2"> 变体)</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">311</span><span style="color: #F8F8F2">                  pub struct VLLMExpr</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">333</span><span style="color: #F8F8F2">                  pub struct ApproxPercentileParams</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">340</span><span style="color: #F8F8F2">                  pub enum MapGroupsFn</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">395</span><span style="color: #F8F8F2">                  pub enum AggExpr</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">494</span><span style="color: #F8F8F2">                  pub enum WindowExpr</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">629</span><span style="color: #F8F8F2">                  Expr:</span><span style="color: #ED007E; background-color: #1E0010">:</span><span style="color: #F8F8F2">semantic_id (CSE 关键)</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">761</span><span style="color: #F8F8F2">                  Expr:</span><span style="color: #ED007E; background-color: #1E0010">:</span><span style="color: #F8F8F2">children</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">791</span><span style="color: #F8F8F2">                  Expr:</span><span style="color: #ED007E; background-color: #1E0010">:</span><span style="color: #F8F8F2">with_new_children</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">856</span><span style="color: #F8F8F2">                  Expr:</span><span style="color: #ED007E; background-color: #1E0010">:</span><span style="color: #F8F8F2">to_field (类型推断)</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">bound_expr.rs:</span><span style="color: #AE81FF">21</span><span style="color: #F8F8F2">            pub struct BoundExpr(ExprRef)</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">bound_expr.rs:</span><span style="color: #AE81FF">25</span><span style="color: #F8F8F2">            BoundExpr:</span><span style="color: #ED007E; background-color: #1E0010">:</span><span style="color: #F8F8F2">try_new (校验全 Bound)</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">expr</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">bound_expr.rs:</span><span style="color: #AE81FF">81</span><span style="color: #F8F8F2">            BoundExpr:</span><span style="color: #ED007E; background-color: #1E0010">:</span><span style="color: #F8F8F2">bind_all</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">functions</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">36</span><span style="color: #F8F8F2">              pub enum FunctionExpr (旧式)</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">functions</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">44</span><span style="color: #F8F8F2">              pub trait FunctionEvaluator</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">functions</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">133</span><span style="color: #F8F8F2">             pub struct FunctionRegistry</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">functions</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">139</span><span style="color: #F8F8F2">             pub trait FunctionModule</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">functions</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">153</span><span style="color: #F8F8F2">             FunctionRegistry:</span><span style="color: #ED007E; background-color: #1E0010">:</span><span style="color: #F8F8F2">register</span><span style="color: #FF4689">&lt;</span><span style="color: #66D9EF">Mod</span><span style="color: #FF4689">&gt;</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">functions</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">167</span><span style="color: #F8F8F2">             FunctionRegistry:</span><span style="color: #ED007E; background-color: #1E0010">:</span><span style="color: #F8F8F2">add_fn</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">functions</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">175</span><span style="color: #F8F8F2">             FunctionRegistry:</span><span style="color: #ED007E; background-color: #1E0010">:</span><span style="color: #F8F8F2">add_async_fn</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">functions</span><span style="color: #FF4689">/</span><span style="color: #66D9EF">mod</span><span style="color: #F8F8F2">.rs:</span><span style="color: #AE81FF">191</span><span style="color: #F8F8F2">             pub </span><span style="color: #66D9EF">static</span><span style="color: #F8F8F2"> FUNCTION_REGISTRY (LazyLock)</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">functions</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">scalar.rs:</span><span style="color: #AE81FF">21</span><span style="color: #F8F8F2">           pub enum ScalarFn</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">functions</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">scalar.rs:</span><span style="color: #AE81FF">40</span><span style="color: #F8F8F2">           pub enum BuiltinScalarFnVariant (sync</span><span style="color: #FF4689">|</span><span style="color: #F8F8F2">async)</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">functions</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">scalar.rs:</span><span style="color: #AE81FF">92</span><span style="color: #F8F8F2">           pub struct BuiltinScalarFn</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">functions</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">scalar.rs:</span><span style="color: #AE81FF">179</span><span style="color: #F8F8F2">          pub trait ScalarFunctionFactory</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">functions</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">scalar.rs:</span><span style="color: #AE81FF">205</span><span style="color: #F8F8F2">          pub trait ScalarUDF</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">daft</span><span style="color: #FF4689">-</span><span style="color: #F8F8F2">dsl</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">functions</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">scalar.rs:</span><span style="color: #AE81FF">266</span><span style="color: #F8F8F2">          pub trait AsyncScalarUDF</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">lib.rs:</span><span style="color: #AE81FF">109</span><span style="color: #FF4689">-</span><span style="color: #AE81FF">189</span><span style="color: #F8F8F2">                                </span><span style="color: #ED007E; background-color: #1E0010">#</span><span style="color: #FF4689">[</span><span style="color: #F8F8F2">pymodule</span><span style="color: #FF4689">]</span><span style="color: #F8F8F2"> fn daft (注册入口)</span>
+<span style="color: #F8F8F2">src</span><span style="color: #FF4689">/</span><span style="color: #F8F8F2">lib.rs:</span><span style="color: #AE81FF">158</span><span style="color: #FF4689">-</span><span style="color: #AE81FF">186</span><span style="color: #F8F8F2">                                FUNCTION_REGISTRY 注册批量</span>
+</code></pre></div>
+
+<p>图数量统计:Mermaid 7 + ASCII 2 + 表格 5 = <strong>14 个图源</strong>(≥8 ✅)。</p>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

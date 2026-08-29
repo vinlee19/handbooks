@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>08 · 索引与搜索：Bloom / Inverted / Vector / Range / Page / Spatial · Databend 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#ff6b6b}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">☁️ <span>Databend 源码深度解析</span></span><nav class="nav"><a href="00-meta.html">元信息与阅读指南</a><a href="01-overview.html">总览：三层架构与设计取舍</a><a href="02-meta-service.html">Meta Service：客户端层 + 外部 OpenRaft 状态机</a><a href="03-sql-frontend.html">SQL 前端：词法 / 语法 / 绑定</a><a href="04-planner-optimizer.html">Planner / Optimizer：从 SExpr 到最优计划</a><a href="05-pipeline-execution.html">Pipeline 执行：Push-based + Event 状态机</a><a href="06-fuse-storage.html">FUSE 存储引擎：Snapshot / Segment / Block</a><a href="07-io-and-cache.html">IO 与多级缓存：OpenDAL Layer 栈 + CacheManager</a><a href="08-indexes-and-search.html" class=on>索引与搜索：Bloom / Inverted / Vector / Range / Page / Spatial</a><a href="09-cluster-and-exchange.html">集群与 Exchange：节点发现 + Flight Shuffle</a><a href="10-extensions.html">扩展：Stream / UDF / Iceberg / Delta</a><a href="99-diagrams.html">Mermaid 图源归档</a></nav></div></header>
+<main class="wrap">
+<h1>08 · 索引与搜索：Bloom / Inverted / Vector / Range / Page / Spatial</h1>
+<blockquote>
+<p>基于 commit <code>fe693bb677</code>。本篇覆盖 <code>databend-storages-common-index</code>，把"几张索引"从概念图变成一组带 location 字段的真实文件。</p>
+</blockquote>
+<h2>1. 解决了什么问题</h2>
+<p>OLAP on 对象存储 + 向量检索 + 全文搜索的统一引擎，索引层要兼顾三个完全不同的访问模式：</p>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>例子</th>
+<th>经典做法</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>等值/范围裁剪</td>
+<td><code>WHERE x = 'a'</code>、<code>WHERE ts &gt; '2024-01-01'</code></td>
+<td>min/max 列统计 + Bloom</td>
+</tr>
+<tr>
+<td>文本搜索</td>
+<td><code>WHERE content @&gt; 'rust databend'</code></td>
+<td>倒排索引（Lucene/Tantivy）</td>
+</tr>
+<tr>
+<td>向量检索</td>
+<td><code>ORDER BY embedding &lt;-&gt; [...] LIMIT 10</code></td>
+<td>HNSW/IVF</td>
+</tr>
+</tbody>
+</table>
+<p>如果把它们做成"另一张表"或者外挂服务（如 ES + Qdrant），就要付出"两份数据 + 两份元数据 + 两套查询 API"的代价。Databend 的取舍：<strong>所有索引都和数据块绑定，建在同一次写入，按 <code>BlockMeta.&lt;idx&gt;_index_location</code> 引用，读时按需 GET</strong>——索引退化为「带索引的对象存储路径」。</p>
+<h2>2. 在 Databend 中的位置</h2>
+<div class="mermaid">
+flowchart LR
+  subgraph Block[&quot;BlockMeta（src/query/storages/common/table_meta/src/meta/v2/segment.rs）&quot;]
+    LOC[location: data .parquet]
+    BLM[bloom_filter_index_location]
+    INVS[inverted_index_size]
+    NGS[ngram_filter_index_size]
+    VECL[vector_index_location]
+    SPAL[spatial_index_location]
+  end
+  subgraph Index[&quot;storages/common/index/src/&quot;]
+    BI[bloom_index.rs]
+    XOR[filters/xor8 + bloom_filter.rs]
+    II[inverted_index.rs (Tantivy)]
+    HN[hnsw_index/*]
+    RI[range_index.rs]
+    PI[page_index.rs]
+    SI[spatial_index.rs + spatial_predicate.rs]
+  end
+  subgraph Read[&quot;FuseTable 读路径&quot;]
+    PRUNE[prune_snapshot_blocks / do_build_prune_pipeline]
+    SEARCH[query 中的 MATCH / VECTOR_DISTANCE / 空间谓词]
+  end
+  subgraph Write[&quot;FuseTable 写路径&quot;]
+    AP[append.rs → TransformSerializeBlock]
+    BLOOMW[io/write/bloom_index_writer.rs]
+    INVW[io/write/inverted_index_writer.rs]
+    VECW[io/write/vector_index_writer.rs]
+    SPAW[io/write/spatial_index_writer.rs]
+  end
+  Block --&gt; Read
+  Read --&gt; RI
+  Read --&gt; BI --&gt; XOR
+  Read --&gt; II
+  Read --&gt; HN
+  Read --&gt; SI
+  Read --&gt; PI
+  Write --&gt; BLOOMW --&gt; Block
+  Write --&gt; INVW --&gt; Block
+  Write --&gt; VECW --&gt; Block
+  Write --&gt; SPAW --&gt; Block
+  AP --&gt; Write
+</div>
+<h2>3. 关键数据结构</h2>
+<h3>3.1 总览：每张索引的"挂点"</h3>
+<div class="mermaid">
+classDiagram
+  class BlockMeta {
+    +location: Location           # data parquet
+    +col_stats: HashMap~ColumnId, ColumnStatistics~  # min/max → RangeIndex
+    +bloom_filter_index_location: Option~Location~
+    +bloom_filter_index_size: u64
+    +inverted_index_size: Option~u64~
+    +ngram_filter_index_size: Option~u64~
+    +vector_index_size: Option~u64~
+    +vector_index_location: Option~Location~
+    +spatial_index_size: Option~u64~
+    +spatial_index_location: Option~Location~
+    +spatial_stats: Option~HashMap~ColumnId, SpatialStatistics~~
+  }
+  class RangeIndex {
+    +expr: Expr~String~
+    +schema
+    +default_stats
+    +predicates: Vec~SpatialPredicate~
+    +apply(stats, spatial_stats) bool
+  }
+  class BloomIndex {
+    +func_ctx
+    +filter_schema
+    +columns: Vec~(name, FilterImpl)~
+    +apply_predicate(expr) BloomIndexResult
+  }
+  class BloomIndexType {
+    &lt;&lt;enum&gt;&gt;
+    Xor8
+    BinaryFuse32
+  }
+  class InvertedIndexFile {
+    +tantivy 文件集（.fast / .pos / .term）
+  }
+  class HnswIndex {
+    +graph_layers: GraphLayers
+    +entry_points
+    +visited_pool
+    +search_context
+    +quantization
+  }
+  class PageIndex {
+    +per-page row offsets / cluster keys
+  }
+  class SpatialIndex {
+    +rect / point predicates
+  }
+  BlockMeta --&gt; RangeIndex : 通过 col_stats 直接喂数据
+  BlockMeta ..&gt; BloomIndex : 通过 bloom_filter_index_location 按需加载
+  BlockMeta ..&gt; InvertedIndexFile
+  BlockMeta ..&gt; HnswIndex
+  BlockMeta ..&gt; PageIndex
+  BlockMeta ..&gt; SpatialIndex
+  BloomIndex --&gt; BloomIndexType
+</div>
+<h3>3.2 RangeIndex — 0 IO 的"免费裁剪"</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/storages/common/index/src/range_index.rs:65</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">RangeIndex</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    expr: </span><span style="color: #A6E22E">Expr</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">String</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,                           </span><span style="color: #959077">// WHERE 子句的可裁剪部分</span>
+<span style="color: #F8F8F2">    func_ctx: </span><span style="color: #A6E22E">FunctionContext</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    schema: </span><span style="color: #A6E22E">TableSchemaRef</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    default_stats: </span><span style="color: #A6E22E">StatisticsOfColumns</span><span style="color: #F8F8F2">,           </span><span style="color: #959077">// 给后加列的兜底</span>
+<span style="color: #F8F8F2">    predicates: Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">SpatialPredicate</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,            </span><span style="color: #959077">// 空间谓词（独立分支）</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #959077">// apply(...) bool —— true=保留这块；false=裁掉</span>
+</code></pre></div>
+
+<p>特点：</p>
+<ul>
+<li><strong>数据来源是内存里的 <code>BlockMeta.col_stats</code></strong>，不发任何 RPC。</li>
+<li>用「可单调的表达式归纳」做区间运算：把 <code>x&gt;1</code> 在 [min=2, max=10] 上化简成 <code>true</code>；<code>x&gt;1</code> 在 [min=-5, max=0] 上化简成 <code>false</code>；任何无法在区间内化简的式子保留为 unknown，块保留。</li>
+<li><strong>default_stats</strong>：表加了新列后，旧 block 的 <code>col_stats</code> 不含新列；用 default 兜底。</li>
+</ul>
+<h3>3.3 BloomIndex — 等值/集合裁剪</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/storages/common/index/src/bloom_index.rs:103</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">enum</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">BloomIndexType</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    Xor8,</span>
+<span style="color: #F8F8F2">    BinaryFuse32,  </span><span style="color: #959077">// 体积更小、查询更快的现代 filter</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #959077">// src/query/storages/common/index/src/bloom_index.rs:222</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">BloomIndex</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> func_ctx: </span><span style="color: #A6E22E">FunctionContext</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// ...</span>
+<span style="color: #F8F8F2">    </span><span style="color: #959077">// 内部按列存放 FilterImpl（Xor8Filter 或 BinaryFuseFilter）</span>
+<span style="color: #F8F8F2">}</span>
+
+<span style="color: #959077">// src/query/storages/common/index/src/bloom_index.rs:133</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">BloomIndexMeta</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    </span><span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> columns: Vec</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">(String, SingleColumnMeta)</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,  </span><span style="color: #959077">// 每列在 bloom .parquet 中的偏移</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<p><strong>为什么不是经典 BloomFilter</strong>？经典 Bloom 的假阳率随负载升高显著退化、删除困难。Xor8 / Binary Fuse 是现代「最小完美哈希家族」，相同 false-positive 下空间显著更小、查询恒定 O(1)。源码 (<code>bloom_index.rs::L≈87, 97</code>) 直接 import 了这两种 filter 的 builder。</p>
+<p>每个 block <strong>每列一个 filter</strong>（注释 L≈209）：</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #F8F8F2">+---</span><span style="color: #959077">name</span><span style="color: #F8F8F2">--+--</span><span style="color: #959077">age</span><span style="color: #F8F8F2">--+</span>
+<span style="color: #959077">| &quot;Alice&quot; |  20   |</span>
+<span style="color: #959077">| &quot;Bob&quot;   |  30   |</span>
+<span style="color: #F8F8F2">+---------+-------+</span>
+
+<span style="color: #959077">→ 写出 1 个 bloom </span><span style="color: #FF4689">.</span><span style="color: #959077">parquet：</span>
+<span style="color: #F8F8F2">+---</span><span style="color: #959077">Bloom(name)</span><span style="color: #F8F8F2">--+--</span><span style="color: #959077">Bloom(age)</span><span style="color: #F8F8F2">--+</span>
+<span style="color: #959077">|  序列化 filter |  序列化 filter|</span>
+<span style="color: #F8F8F2">+----------------+--------------+</span>
+</code></pre></div>
+
+<p>Bloom .parquet 自身用 parquet 存（一行多列），方便共享 reader 与 footer 缓存。</p>
+<h3>3.4 InvertedIndex — Tantivy + 自定义 Directory</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/storages/common/index/src/inverted_index.rs:1240</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">InvertedIndexMeta</span><span style="color: #F8F8F2"> { </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">. }</span>
+
+<span style="color: #959077">// src/query/storages/common/index/src/inverted_index.rs:1291</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">InvertedIndexFile</span><span style="color: #F8F8F2"> { </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">. }</span>
+
+<span style="color: #959077">// src/query/storages/common/index/src/inverted_index.rs:1419</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">InvertedIndexDirectory</span><span style="color: #F8F8F2"> { </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">. }   </span><span style="color: #959077">// Tantivy::Directory 实现，支持按 OpenDAL 拉文件</span>
+</code></pre></div>
+
+<div class="mermaid">
+flowchart LR
+  Q[MATCH(&#x27;rust databend&#x27;, column)] --&gt; P[Parser → tantivy QueryAst]
+  P --&gt; D[InvertedIndexDirectory\nopen by location]
+  D --&gt; OD[OpenDAL: 按需 GET tantivy .term/.pos/.fast 段]
+  OD --&gt; RES[posting list → 行号集]
+  RES --&gt; Mat[配合 BlockMeta 还原 row_id 组]
+</div>
+<p>要点：</p>
+<ul>
+<li><strong>为什么 Tantivy</strong>：成熟的 Rust 倒排库，与 Databend 同生态。</li>
+<li><strong><code>InvertedIndexDirectory</code></strong> 自定义实现 Tantivy 的 <code>Directory</code> trait——它把"打开一个文件"映射为"GET 一段对象存储 range"，不需要把整个 index 拉到本地磁盘。</li>
+<li><strong>缓存</strong>：<code>InvertedIndexMetaCache + InvertedIndexFileCache</code>（07 文档已介绍）让重复检索零远程读。</li>
+</ul>
+<h3>3.5 HnswIndex — 层级图向量检索</h3>
+<div class="mermaid">
+flowchart TB
+  subgraph HNSW[&quot;src/query/storages/common/index/src/hnsw_index/&quot;]
+    direction TB
+    GL[graph_layers.rs / graph_layers_builder.rs]
+    GLINK[graph_links / graph_links.rs]
+    PS[point_scorer.rs]
+    SC[search_context.rs]
+    EP[entry_points.rs]
+    VP[visited_pool.rs]
+    Q[quantization/]
+    HN[hnsw.rs]
+  end
+  WRITE[io/write/vector_index_writer.rs] --&gt; GL
+  GL --&gt; GLINK
+  GL --&gt; PS
+  HN --&gt; EP
+  HN --&gt; SC
+  SC --&gt; PS
+  HN --&gt; VP
+  HN --&gt; Q
+</div>
+<p>HNSW 是层级"小世界"图：每个点在多层中根据概率出现；上层稀疏快速跳跃，下层密集精确收敛。Databend 的实现亮点：</p>
+<ul>
+<li><strong><code>graph_links</code></strong> 子模块：把邻居关系做成连续布局，一次 mmap 友好。</li>
+<li><strong><code>visited_pool</code></strong>：把每次查询要用的 visited bitset 做 pool 复用，避免高并发下分配抖动。</li>
+<li><strong><code>quantization/</code></strong>：标量量化（PQ/SQ），用近似距离换内存。</li>
+<li><strong><code>point_scorer</code></strong>：把"距离函数"抽象成 trait（L2/IP/Cosine 都是 PointScorer 实现）。</li>
+</ul>
+<p>写入侧 <code>vector_index_writer.rs</code> 在 block 收齐后离线建图，落 <code>&lt;block_id&gt;_v&lt;ver&gt;.parquet</code>（前缀 <code>_i_v</code>，参见 06 文档）。读取侧由查询的 <code>ORDER BY &lt;expr_dist&gt; LIMIT k</code> 触发，绕过 RangeIndex 直接命中 HNSW search。</p>
+<h3>3.6 PageIndex — block 内的 row 范围</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/storages/common/index/src/page_index.rs:41</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">PageIndex</span><span style="color: #F8F8F2"> { </span><span style="color: #FF4689">..</span><span style="color: #F8F8F2">. }</span>
+</code></pre></div>
+
+<p><code>PageIndex</code> 用于 native 列存里"页"级别的 row offset 映射；有了它，按行号子集（如 inverted 检索后的 row_id 集合）回填实际列时，不需要扫整 block。它不是独立物理文件——信息已经在 <code>BlockMeta.col_metas[ColumnMeta::Native(NativeColumnMeta { pages })]</code> 里。</p>
+<h3>3.7 SpatialIndex — 矩形/点谓词</h3>
+<p><code>spatial_index.rs / spatial_predicate.rs</code> 实现：把 GIS 谓词（<code>ST_Contains</code>、<code>ST_Intersects</code>、<code>ST_DWithin</code>）转成"Block 矩形 vs 谓词矩形"的判定，使用 <code>BlockMeta.spatial_stats</code> + 可选独立 <code>_i_s/...</code> 文件。</p>
+<div class="mermaid">
+flowchart LR
+  EXPR[&quot;ST_Intersects(geom, &#x27;POLYGON(...)&#x27;)&quot;] --&gt; CSP[collect_spatial_predicates]
+  CSP --&gt; SP[Vec~SpatialPredicate~]
+  SP --&gt; RI[RangeIndex.apply 内联]
+  RI --&gt;|Block 矩形 与谓词矩形不相交| SKIP[裁掉]
+  RI --&gt;|相交| KEEP[保留]
+</div>
+<p>注意 <code>RangeIndex</code> 内部已经处理空间谓词（<code>range_index.rs::L≈82</code>），等值/范围与空间共享一次裁剪过程。</p>
+<h2>4. 关键流程</h2>
+<h3>4.1 写：索引和数据并行落地</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Pipe as Pipeline
+  participant TS as TransformSerializeBlock
+  participant BW as block_writer.rs
+  participant BLOOM as bloom_index_writer.rs
+  participant INV as inverted_index_writer.rs
+  participant VEC as vector_index_writer.rs
+  participant SPA as spatial_index_writer.rs
+  participant OD as OpenDAL
+
+  Pipe-&gt;&gt;TS: DataBlock
+  TS-&gt;&gt;BW: 写 .parquet（数据列 + footer）
+  par 并行索引旁路
+    BW-&gt;&gt;BLOOM: 抽样列 build Xor8/BinaryFuse32 → put 到 _i_b_v2/
+    BLOOM-&gt;&gt;OD: PUT bloom .parquet
+    OD--&gt;&gt;TS: bloom_filter_index_location + size
+  and
+    BW-&gt;&gt;INV: 文本列 build Tantivy index → put 到 _i_i/
+    INV-&gt;&gt;OD: PUT inverted file
+    OD--&gt;&gt;TS: inverted_index_size
+  and
+    BW-&gt;&gt;VEC: 向量列 build HNSW → put 到 _i_v/
+    VEC-&gt;&gt;OD: PUT vector index
+    OD--&gt;&gt;TS: vector_index_location + size
+  and
+    BW-&gt;&gt;SPA: 几何列 build spatial → put 到 _i_s/
+    SPA-&gt;&gt;OD: PUT spatial index
+    OD--&gt;&gt;TS: spatial_index_location + size
+  end
+  TS-&gt;&gt;TS: 合并 BlockMeta（含所有 location/size）
+  TS--&gt;&gt;Pipe: 下游 SerializeSegment / CommitSink
+</div>
+<p>并行的代价是写入路径需要更多 IO 与 CPU 空间；收益是<strong>索引建好就能查</strong>，避免「写完再后台 build 索引导致前期查询走全表扫」的体验断层。</p>
+<h3>4.2 读：层层裁剪 + 必要时 search</h3>
+<div class="mermaid">
+flowchart TB
+  WHERE[push_downs（filter/limit/sort/projection）] --&gt; CK1{有 filter?}
+  CK1 -- 否 --&gt; KEEP[保留所有 block]
+  CK1 -- 是 --&gt; R0[RangeIndex.apply\n纯内存 col_stats]
+  R0 -- false --&gt; SKIP1[裁掉块]
+  R0 -- true --&gt; R1{filter 含等值/IN?}
+  R1 -- 是 --&gt; B0[读 bloom_filter_index_location]
+  B0 --&gt; BAPPLY[BloomIndex.apply_predicate]
+  BAPPLY -- 必无 --&gt; SKIP2[裁掉块]
+  BAPPLY -- 可能有 --&gt; R2{含全文 MATCH?}
+  R1 -- 否 --&gt; R2
+  R2 -- 是 --&gt; INV[InvertedIndex search → row_id 集合]
+  R2 -- 否 --&gt; R3
+  INV --&gt; R3{含向量距离?}
+  R3 -- 是 --&gt; HN[HnswIndex.search(top-k)]
+  R3 -- 否 --&gt; KEEP
+  HN --&gt; KEEP
+  KEEP --&gt; READ[do_read_data 拉 parquet 列]
+</div>
+<p>注意几条隐含规则：</p>
+<ul>
+<li><strong>RangeIndex 永远第一关</strong>：它 0 IO，先把绝大多数无关 block 干掉。</li>
+<li><strong>Bloom 只在等值类谓词上才发挥作用</strong>：<code>x &gt; 1</code> 这种范围谓词跳过 bloom（<code>count(*)</code> 案例就是这样）。</li>
+<li><strong>Inverted 与 Vector 是「主动检索」而非「被动裁剪」</strong>：它们直接产生候选 row_id 集合，下游再回填列。这与传统数据库"裁剪 + 顺序扫描"不同——更像是搜索引擎的执行路径。</li>
+<li><strong>Spatial 内嵌在 RangeIndex</strong>：因为空间谓词的本质也是区间相交。</li>
+</ul>
+<h3>4.3 BindContext 喂索引上下文给优化器</h3>
+<div class="mermaid">
+flowchart LR
+  Bind[BindContext.inverted_index_map / vector_index_map] --&gt; P[planner.bind_query_index\n（03 文档）]
+  P --&gt; O[Optimizer 决定是否 push_down 至 Scan]
+  O --&gt; S[Scan 算子带 index_info]
+  S --&gt; PB[PhysicalPlanBuilder]
+  PB --&gt; FT[FuseTable.do_read_partitions 接收 index_info]
+</div>
+<p>这是 03/04 文档已经埋下的伏笔——索引选择不在执行层做，而是在 binder/optimizer 链路里就决定好走哪条索引（详见 03 文档的 <code>bind_query_index</code>）。</p>
+<h2>5. 性能与优化点</h2>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>在哪里</th>
+<th>效果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>索引文件独立 location</strong></td>
+<td><code>BlockMeta.&lt;idx&gt;_location</code></td>
+<td>索引可独立缓存、淘汰、关闭，不污染主数据</td>
+</tr>
+<tr>
+<td><strong>写入并行 build 索引</strong></td>
+<td><code>io/write/{bloom,inverted,vector,spatial}_index_writer.rs</code></td>
+<td>写完即可查，不需要后台 catch-up</td>
+</tr>
+<tr>
+<td><strong>Xor8 / BinaryFuse32 替代经典 Bloom</strong></td>
+<td><code>bloom_index.rs::BloomIndexType</code></td>
+<td>更小、更快；BinaryFuse32 的位密度比 Xor8 更优</td>
+</tr>
+<tr>
+<td><strong>InvertedIndexDirectory 自定义</strong></td>
+<td><code>inverted_index.rs::L≈1419</code></td>
+<td>Tantivy 直接读对象存储 range，无需先下载 index 全量</td>
+</tr>
+<tr>
+<td><strong>HnswIndex visited_pool 复用</strong></td>
+<td><code>hnsw_index/visited_pool.rs</code></td>
+<td>高并发向量检索分配开销可控</td>
+</tr>
+<tr>
+<td><strong><code>graph_links</code> 紧凑布局</strong></td>
+<td><code>hnsw_index/graph_links/</code></td>
+<td>内存局部性 + 一次 mmap</td>
+</tr>
+<tr>
+<td><strong>RangeIndex 0 IO</strong></td>
+<td><code>range_index.rs</code> 用 <code>BlockMeta.col_stats</code></td>
+<td>直接在内存里裁块</td>
+</tr>
+<tr>
+<td><strong>BloomIndexMeta 与 BloomIndex 分缓存</strong></td>
+<td><code>BloomIndexMetaCache</code> + <code>BloomIndexFilterCache</code></td>
+<td>先命中 meta（小）确认列存在，再命中 filter（大）</td>
+</tr>
+<tr>
+<td><strong>PageIndex 复用 col_metas</strong></td>
+<td>不新增物理文件</td>
+<td>row 子集回填仅读相关 page</td>
+</tr>
+</tbody>
+</table>
+<h3>5.1 索引尺寸对比直觉</h3>
+<div class="mermaid">
+flowchart LR
+  subgraph &quot;1 GB 数据 block 的索引大小（数量级估算）&quot;
+    direction LR
+    DAT[数据 .parquet ≈ 1 GB]
+    BL[bloom_filter ≈ 5 MB]
+    INV[inverted ≈ 80 MB]
+    VEC[vector(HNSW) ≈ 50–200 MB（视维度）]
+    SPA[spatial ≈ 5–20 MB]
+  end
+</div>
+<p>实际值随列数据分布、字典基数、向量维度变化巨大；这里只用于直觉感知"索引为什么必须独立可关闭"。</p>
+<h2>6. 与同类系统的对照</h2>
+<table>
+<thead>
+<tr>
+<th>系统</th>
+<th>Bloom 形式</th>
+<th>全文</th>
+<th>向量</th>
+<th>Range/min-max</th>
+<th>空间</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Iceberg</td>
+<td>column bloom（v3+）</td>
+<td>否</td>
+<td>否</td>
+<td>metadata stats</td>
+<td>否</td>
+</tr>
+<tr>
+<td>Delta</td>
+<td>data skipping (min/max)</td>
+<td>否</td>
+<td>否</td>
+<td>data skipping</td>
+<td>否</td>
+</tr>
+<tr>
+<td>ClickHouse</td>
+<td>多种二级索引（minmax/set/bloom_filter/ngram）</td>
+<td>tokenizer + bloom</td>
+<td>实验性</td>
+<td>minmax</td>
+<td>部分</td>
+</tr>
+<tr>
+<td>StarRocks/Doris</td>
+<td>bitmap/bloom</td>
+<td>inverted</td>
+<td>实验性</td>
+<td>minmax/zone map</td>
+<td>部分</td>
+</tr>
+<tr>
+<td>Snowflake</td>
+<td>自动微分区</td>
+<td>否</td>
+<td>否</td>
+<td>自动</td>
+<td>部分</td>
+</tr>
+<tr>
+<td><strong>Databend</strong></td>
+<td><strong>Xor8 / BinaryFuse32</strong></td>
+<td><strong>Tantivy</strong></td>
+<td><strong>HNSW + 量化</strong></td>
+<td><strong>min/max in BlockMeta</strong></td>
+<td><strong>rect 内嵌 RangeIndex</strong></td>
+</tr>
+<tr>
+<td>Lucene/ES</td>
+<td>bloom + skip list</td>
+<td>倒排</td>
+<td>knn</td>
+<td>doc values</td>
+<td>geo</td>
+</tr>
+</tbody>
+</table>
+<p>Databend 把"列式分析 + 全文 + 向量"放在同一索引层框架里，不必为了三种 workload 维护三套元数据系统；这是和 ClickHouse / StarRocks 显著拉开身位的地方。</p>
+<h2>7. 端到端案例</h2>
+<p><code>SELECT count(*) FROM t WHERE x &gt; 1</code>，索引段：</p>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Plan as do_read_partitions
+  participant RI as RangeIndex
+  participant BI as BloomIndex
+  participant Cache as 多级 Cache
+
+  Plan-&gt;&gt;RI: try_create(expr=x&gt;1, schema, default_stats)
+  loop 每个 BlockMeta
+    Plan-&gt;&gt;RI: apply(col_stats, spatial_stats=None)
+    alt block.col_stats[x].max &lt;= 1
+      RI--&gt;&gt;Plan: false（裁掉）
+    else block.col_stats[x].min &gt; 1
+      RI--&gt;&gt;Plan: true（保留，且本块全保留）
+    else 区间跨越 1
+      RI--&gt;&gt;Plan: true（保留，无法定夺）
+    end
+  end
+  Plan-&gt;&gt;Plan: filter 不含等值/IN，跳过 bloom
+  Plan--&gt;&gt;Plan: 仅留下&quot;区间含 1 或全 &gt;1&quot;的 block
+</div>
+<p>如果谓词改成 <code>WHERE name = 'Alice'</code>：</p>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Plan as do_read_partitions
+  participant RI as RangeIndex
+  participant BIM as BloomIndexMetaCache
+  participant BIF as BloomIndexFilterCache
+  participant OD as OpenDAL
+
+  Plan-&gt;&gt;RI: apply
+  RI--&gt;&gt;Plan: 大多数块 unknown（字符串 min/max 无法判)
+  loop 候选 block
+    Plan-&gt;&gt;BIM: get(BloomIndexMeta @ bloom_filter_index_location)
+    alt 命中
+      BIM--&gt;&gt;Plan: meta（每列偏移）
+    else
+      Plan-&gt;&gt;OD: range read bloom .parquet footer
+      OD--&gt;&gt;Plan: meta
+      Plan-&gt;&gt;BIM: put
+    end
+    Plan-&gt;&gt;BIF: get(name 列 filter)
+    alt 命中
+      BIF--&gt;&gt;Plan: Xor8Filter
+    else
+      Plan-&gt;&gt;OD: range read bloom .parquet col=name
+      OD--&gt;&gt;Plan: filter bytes
+      Plan-&gt;&gt;BIF: put
+    end
+    Plan-&gt;&gt;Plan: filter.contains(hash(&#x27;Alice&#x27;))
+    alt 必无
+      Plan-&gt;&gt;Plan: 裁掉块
+    else 可能有
+      Plan-&gt;&gt;Plan: 保留 block 进 read_data
+    end
+  end
+</div>
+<p>注意：</p>
+<ul>
+<li><strong><code>name = 'Alice'</code></strong> 才是 bloom 的最佳战场。一次裁剪决定了"接下来 GET 多少 parquet"，直接定生死。</li>
+<li>BloomIndexMeta vs BloomIndexFilter 分两次 GET（footer + 列 range），但都受 <code>ConcurrentLimitLayer</code> 与多级缓存保护，正常稳态命中率非常高。</li>
+</ul>
+<h2>8. 未解之谜</h2>
+<ul>
+<li><strong><code>ngram_filter_index_size</code></strong>：<code>BlockMeta</code> 上有这个字段，但本仓库 <code>index/src/</code> 下没有 <code>ngram_*.rs</code>；可能在 <code>filters/</code> 子模块里以另一种命名呈现，或者属于 EE 模块。本篇只提到字段存在，未追踪到生成器。</li>
+<li><strong>InvertedIndex 与 BindContext 的 <code>inverted_index_map</code></strong>：03 文档已记录这个未解之谜；本篇假设"Binder 选好索引、Scan 携带 index_info"，但具体的"选哪一个 inverted index 上的字段"决策路径需要进一步跟踪。</li>
+<li><strong>HNSW 的 <code>quantization/</code> 实现</strong>：标量量化 vs 二值量化 vs PQ 的覆盖度未读完；不同 quant 在 build 时由谁选？由 setting 还是 schema？</li>
+<li><strong>Aggregating index / Agg index</strong>：<code>RuleID::TryApplyAggIndex</code>（04 文档）暗示存在表级聚合索引，但其物理形态（独立物化视图？另一种 BlockMeta 上的 location？）本篇未澄清。可能在 <code>src/query/storages/common/index/src/index.rs</code> 与 <code>EE</code> 模块之间。</li>
+<li><strong>Bloom 的列选择策略</strong>：<code>BloomIndexColumns</code> 由 <code>FuseTable</code> 字段携带，在 06 文档已记录；具体是"全部高基数列自动 bloom"还是"用户白名单"还需读 <code>BloomIndexBuilder</code> 内部。</li>
+<li><strong>跨索引代价模型</strong>：当一个查询同时能命中 inverted 与 bloom + range 时，谁先跑？是否有 cost 比较？目前看是按 push_downs 形态硬编码（filter ∋ 等值就走 bloom，含 MATCH 就走 inverted），并没有 CBO 选择索引的痕迹。</li>
+</ul>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

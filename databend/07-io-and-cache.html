@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>07 · IO 与多级缓存：OpenDAL Layer 栈 + CacheManager · Databend 源码深度解析</title>
+<style>
+:root{--bg:#0a0e16;--panel:#0f1524;--panel2:#131b2e;--line:#22304a;--line2:#2c3d5c;
+--tx:#dbe6f5;--tx2:#93a5c0;--tx3:#6b7d99;--ac:#ff6b6b}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);
+font:15px/1.8 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:960px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.93);backdrop-filter:blur(8px);
+border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:14px;height:54px;flex-wrap:nowrap;overflow-x:auto}
+.logo{font-weight:700;font-size:15px;white-space:nowrap;flex-shrink:0;color:var(--tx)}
+.logo span{color:var(--ac)}
+.nav{margin-left:auto;display:flex;gap:2px}
+.nav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.nav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.nav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+main.wrap{padding:36px 28px 30px}
+h1{font-size:30px;line-height:1.35;margin:8px 0 20px}
+h2{font-size:22px;margin:40px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+h3{font-size:17.5px;margin:28px 0 10px}
+p{margin:12px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+blockquote{margin:16px 0;padding:10px 18px;border-left:3px solid var(--ac);
+background:var(--panel);border-radius:0 10px 10px 0;color:var(--tx2);font-size:14px}
+blockquote p{margin:6px 0;color:var(--tx2)}
+pre{background:#0b1220;border:1px solid var(--line);border-radius:10px;padding:14px 16px;
+overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;
+font:12.5px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+tr:nth-child(2n) td{background:rgba(255,255,255,.02)}
+ul,ol{color:#c7d3e6;padding-left:24px}
+li{margin:6px 0}
+img{max-width:100%%;border-radius:10px;border:1px solid var(--line);background:#fff}
+.mermaid{margin:22px 0;padding:18px;background:var(--panel);border:1px solid var(--line);
+border-radius:14px;overflow-x:auto;text-align:center}
+.mermaid svg{max-width:100%%;height:auto}
+.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}
+.toc-grid a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;color:var(--tx2);font-size:14px}
+.toc-grid a:hover{border-color:var(--ac);text-decoration:none}
+.toc-grid a b{display:block;color:var(--tx);font-size:15px;margin-bottom:4px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 44px}
+hr{border:none;border-top:1px solid var(--line);margin:32px 0}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',flowchart:{curve:'basis'}});</script>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo">☁️ <span>Databend 源码深度解析</span></span><nav class="nav"><a href="00-meta.html">元信息与阅读指南</a><a href="01-overview.html">总览：三层架构与设计取舍</a><a href="02-meta-service.html">Meta Service：客户端层 + 外部 OpenRaft 状态机</a><a href="03-sql-frontend.html">SQL 前端：词法 / 语法 / 绑定</a><a href="04-planner-optimizer.html">Planner / Optimizer：从 SExpr 到最优计划</a><a href="05-pipeline-execution.html">Pipeline 执行：Push-based + Event 状态机</a><a href="06-fuse-storage.html">FUSE 存储引擎：Snapshot / Segment / Block</a><a href="07-io-and-cache.html" class=on>IO 与多级缓存：OpenDAL Layer 栈 + CacheManager</a><a href="08-indexes-and-search.html">索引与搜索：Bloom / Inverted / Vector / Range / Page / Spatial</a><a href="09-cluster-and-exchange.html">集群与 Exchange：节点发现 + Flight Shuffle</a><a href="10-extensions.html">扩展：Stream / UDF / Iceberg / Delta</a><a href="99-diagrams.html">Mermaid 图源归档</a></nav></div></header>
+<main class="wrap">
+<h1>07 · IO 与多级缓存：OpenDAL Layer 栈 + CacheManager</h1>
+<blockquote>
+<p>基于 commit <code>fe693bb677</code>。本篇覆盖 <code>databend-common-storage</code>（<code>Operator</code> 工厂与 Layer 栈）和 <code>databend-storages-common-cache</code>（CacheManager 的 20+ 种缓存）。这两层把"对象存储延迟"变成了"系统能容忍的延迟"。</p>
+</blockquote>
+<h2>1. 解决了什么问题</h2>
+<p>把列存表跑在对象存储上，IO 设计要解决三个矛盾：</p>
+<ol>
+<li><strong>统一接口 vs 后端碎片化</strong>：S3、GCS、Azure、OSS、OBS、COS、HDFS、本地 FS 都要支持，每家都有怪癖（签名版本、认证流程、API quirk）。</li>
+<li><strong>对象存储尾延迟 vs 用户期望毫秒级响应</strong>：S3 P99 经常上百毫秒；不能让裁剪/读 meta 这些"应该瞬完成"的操作裸跑。</li>
+<li><strong>重复读放大成本</strong>：同一张表的 snapshot/segment/bloom 在并发查询里被反复读，纯靠 OpenDAL 重读是钱多人傻的做法。</li>
+</ol>
+<p>直接拿 <code>aws-sdk-s3</code> 加一个 LRU 的反例：</p>
+<table>
+<thead>
+<tr>
+<th>反例</th>
+<th>后果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>把 retry/timeout 写在每个调用点</td>
+<td>漏一个就在生产挂死</td>
+</tr>
+<tr>
+<td>简单全局 LRU 缓存原始 bytes</td>
+<td>命中率低（key 太细），且每次都要再 deserialize</td>
+</tr>
+<tr>
+<td>把缓存放在表级别</td>
+<td>跨表的索引/分区元数据不复用；CTE 等场景重复加载</td>
+</tr>
+<tr>
+<td>不区分 meta/data 缓存</td>
+<td>大数据列把小元数据挤出去，命中率塌掉</td>
+</tr>
+</tbody>
+</table>
+<p>Databend 的取舍：<strong>OpenDAL 把后端差异统一</strong>，再叠一组 <code>Layer</code> 处理重试/超时/限流/可观测性；<strong>CacheManager</strong> 按"对象类型"切了 20+ 个独立 LRU/Hybrid 缓存，让小 meta 不被大 data 挤掉。</p>
+<h2>2. 在 Databend 中的位置</h2>
+<div class="mermaid">
+flowchart TB
+  subgraph Caller[&quot;调用方（FuseTable / Pruner / Pipeline source）&quot;]
+    direction TB
+    FuseRead[FuseTable.read_data]
+    Prune[BlockPruner]
+    Pipe[Pipeline source processor]
+  end
+  subgraph Cache[&quot;storages/common/cache (CacheManager)&quot;]
+    SnapC[TableSnapshotCache]
+    SegC[CompactSegmentInfoCache]
+    BloomC[BloomIndexFilterCache]
+    InvC[InvertedIndexFileCache]
+    VecC[VectorIndexFileCache]
+    PartC[PrunePartitionsCache]
+    PQC[ParquetMetaDataCache]
+    ColC[ColumnDataCache - Hybrid]
+    BlkC[BlockMetaCache]
+  end
+  subgraph IO[&quot;common/storage (OpenDAL Operator)&quot;]
+    OP[Operator]
+    LAY[Layer 栈]
+  end
+  subgraph Net[&quot;对象存储后端&quot;]
+    S3[S3]
+    GCS[GCS]
+    Azblob[Azure Blob]
+    OSS[OSS]
+    OBS[OBS]
+    COS[COS]
+    HDFS[HDFS]
+    FS[本地 FS]
+    HTTP[HTTP]
+    HF[Huggingface]
+  end
+  Caller --&gt; Cache
+  Cache -- miss --&gt; IO
+  IO --&gt; Net
+</div>
+<p>源码：</p>
+<table>
+<thead>
+<tr>
+<th>模块</th>
+<th>路径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Operator 工厂</td>
+<td><code>src/common/storage/src/operator.rs::init_operator (L≈74)</code></td>
+</tr>
+<tr>
+<td>Layer 装配</td>
+<td><code>src/common/storage/src/operator.rs::build_operator (L≈152)</code></td>
+</tr>
+<tr>
+<td>Operator 缓存</td>
+<td><code>src/common/storage/src/operator_cache.rs</code></td>
+</tr>
+<tr>
+<td>RuntimeLayer</td>
+<td><code>src/common/storage/src/runtime_layer.rs</code></td>
+</tr>
+<tr>
+<td>MetricsLayer</td>
+<td><code>src/common/storage/src/metrics_layer.rs</code></td>
+</tr>
+<tr>
+<td>HTTP 客户端</td>
+<td><code>src/common/storage/src/http_client.rs</code></td>
+</tr>
+<tr>
+<td>CacheManager</td>
+<td><code>src/query/storages/common/cache/src/manager.rs::CacheManager (L≈104)</code></td>
+</tr>
+<tr>
+<td>内存缓存</td>
+<td><code>src/query/storages/common/cache/src/providers/memory_cache.rs</code></td>
+</tr>
+<tr>
+<td>磁盘缓存</td>
+<td><code>src/query/storages/common/cache/src/providers/disk_cache/</code></td>
+</tr>
+<tr>
+<td>混合缓存</td>
+<td><code>src/query/storages/common/cache/src/providers/hybrid_cache.rs</code></td>
+</tr>
+<tr>
+<td>缓存读取</td>
+<td><code>src/query/storages/common/cache/src/read/</code></td>
+</tr>
+</tbody>
+</table>
+<h2>3. 关键数据结构</h2>
+<h3>3.1 OpenDAL <code>Operator</code> 与 Layer 栈</h3>
+<div class="mermaid">
+flowchart TB
+  Op[&quot;Operator (动态/静态混合)&quot;] --&gt; L1[&quot;TimeoutLayer (must be first!)&quot;]
+  L1 --&gt; L2[&quot;RuntimeLayer(GlobalIORuntime)\n所有 future 强制丢回 IO runtime&quot;]
+  L2 --&gt; Finish[&quot;.finish() — 静态/动态 dispatch 边界&quot;]
+  Finish --&gt; L3[HttpClientLayer]
+  L3 --&gt; L4[&quot;RetryLayer\n(jitter + DatabendRetryInterceptor)&quot;]
+  L4 --&gt; L5[AsyncBacktraceLayer]
+  L5 --&gt; L6[LoggingLayer]
+  L6 --&gt; L7[FastraceLayer]
+  L7 --&gt; L8[METRICS_LAYER\n(Prometheus opendal_*)]
+  L8 --&gt; L9{有 max_concurrent_io_requests?}
+  L9 -- 是 --&gt; L10[ConcurrentLimitLayer]
+  L9 -- 否 --&gt; Backend
+  L10 --&gt; Backend[&quot;S3 / GCS / OSS / ...&quot;]
+</div>
+<p>来自 <code>build_operator (L≈152)</code> 的实际拼装顺序，<strong>这是源码里的硬规则</strong>：</p>
+<ul>
+<li><strong>TimeoutLayer 必须最先叠</strong>——OpenDAL 内部 future 只有被外层 timeout 包住才能在超时时被取消。</li>
+<li><strong>RuntimeLayer 紧跟 TimeoutLayer</strong>：把所有 IO future 转发到 <code>GlobalIORuntime</code> 这个独立 tokio runtime，避免污染 server 侧。</li>
+<li><strong><code>.finish()</code> 是分界</strong>：之前的 layer 走静态 dispatch（编译期生效，性能更高），之后走动态 dispatch（避免编译时间爆炸——源码注释里有 rustc <code>overflow evaluating</code> 的吐槽）。</li>
+<li><strong><code>RetryLayer</code> 在 <code>HttpClientLayer</code> 之后</strong>：retry 需要看到 HTTP 错误才能决定是否重试。</li>
+<li><strong>METRICS_LAYER 在最后</strong>：每一层的延迟都被它统计，确保指标真实反映"用户感知到的延迟"。</li>
+<li><strong>环境变量后门</strong>：<code>_DATABEND_INTERNAL_RETRY_TIMEOUT / _DATABEND_INTERNAL_RETRY_IO_TIMEOUT / _DATABEND_INTERNAL_MAX_CONCURRENT_IO_REQUEST / _DATABEND_INTERNAL_POOL_MAX_IDLE_PER_HOST</code> 全在 build_operator 中读取——生产事故时不需要改 config 文件就能临时降级。</li>
+</ul>
+<h3>3.2 StorageParams — 后端配置形态</h3>
+<div class="mermaid">
+classDiagram
+  class StorageParams {
+    &lt;&lt;enum&gt;&gt;
+    Azblob(StorageAzblobConfig)
+    Fs(StorageFsConfig)
+    Gcs(StorageGcsConfig)
+    Hdfs(StorageHdfsConfig)  // feature-gated
+    Http(StorageHttpConfig)
+    Huggingface(StorageHuggingfaceConfig)
+    Ipfs(StorageIpfsConfig)
+    Memory
+    Moka(StorageMokaConfig)
+    Obs(StorageObsConfig)
+    Oss(StorageOssConfig)
+    S3(StorageS3Config)
+    Webhdfs(StorageWebhdfsConfig)
+    Cos(StorageCosConfig)
+  }
+  class StorageNetworkParams {
+    +retry_timeout
+    +retry_io_timeout
+    +max_concurrent_io_requests
+    +pool_max_idle_per_host
+    +connect_timeout
+  }
+  StorageParams --&gt; StorageNetworkParams : 每后端可选
+</div>
+<p><code>init_operator</code> 入口拿 <code>StorageParams</code>，先查 <code>get_operator_cache().get_or_create(cfg)</code>：<strong>同样配置只构建一次 Operator</strong>。这非常关键——构造一个 Operator 涉及 layer 装配 + HTTP client 池，重复构造会持续创建独立的 keep-alive 池。</p>
+<h3>3.3 CacheManager 的 20+ 缓存槽位</h3>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/storages/common/cache/src/manager.rs:104</span>
+<span style="color: #66D9EF">pub</span><span style="color: #F8F8F2"> </span><span style="color: #66D9EF">struct</span><span style="color: #F8F8F2"> </span><span style="color: #A6E22E">CacheManager</span><span style="color: #F8F8F2"> {</span>
+<span style="color: #F8F8F2">    table_snapshot_cache: </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">TableSnapshotCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    table_statistic_cache: </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">TableSnapshotStatisticCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    segment_statistics_cache: </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">SegmentStatisticsCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    compact_segment_info_cache: </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">CompactSegmentInfoCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    column_oriented_segment_info_cache: </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ColumnOrientedSegmentInfoCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    bloom_index_filter_cache: </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">BloomIndexFilterCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    bloom_index_meta_cache: </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">BloomIndexMetaCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    inverted_index_meta_cache:  </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">InvertedIndexMetaCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    inverted_index_file_cache:  </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">InvertedIndexFileCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    vector_index_meta_cache:    </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">VectorIndexMetaCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    vector_index_file_cache:    </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">VectorIndexFileCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    spatial_index_meta_cache:   </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">SpatialIndexMetaCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    spatial_index_file_cache:   </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">SpatialIndexFileCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    virtual_column_meta_cache:  </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">VirtualColumnMetaCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    prune_partitions_cache:     </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">PrunePartitionsCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    parquet_meta_data_cache:    </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ParquetMetaDataCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    in_memory_table_data_cache: </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ColumnArrayCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    segment_block_metas_cache:  </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">SegmentBlockMetasCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    block_meta_cache:           </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">BlockMetaCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    column_data_cache:          </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">ColumnDataCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,   </span><span style="color: #959077">// Hybrid（mem + disk）</span>
+<span style="color: #F8F8F2">    iceberg_table_meta_cache:   </span><span style="color: #A6E22E">CacheSlot</span><span style="color: #FF4689">&lt;</span><span style="color: #F8F8F2">IcebergTableCache</span><span style="color: #FF4689">&gt;</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">    allows_on_disk_cache: </span><span style="color: #A6E22E">AtomicBool</span><span style="color: #F8F8F2">,</span>
+<span style="color: #F8F8F2">}</span>
+</code></pre></div>
+
+<div class="mermaid">
+flowchart LR
+  subgraph Snapshot[&quot;快照层&quot;]
+    A1[TableSnapshotCache]
+    A2[TableSnapshotStatisticCache]
+  end
+  subgraph Segment[&quot;段层&quot;]
+    B1[CompactSegmentInfoCache]
+    B2[ColumnOrientedSegmentInfoCache]
+    B3[SegmentStatisticsCache]
+    B4[SegmentBlockMetasCache]
+    B5[BlockMetaCache]
+  end
+  subgraph Index[&quot;索引层&quot;]
+    C1[BloomIndexMeta + Filter]
+    C2[InvertedIndex Meta + File]
+    C3[VectorIndex Meta + File]
+    C4[SpatialIndex Meta + File]
+    C5[VirtualColumnMeta]
+  end
+  subgraph Query[&quot;查询层&quot;]
+    D1[PrunePartitionsCache]
+    D2[ParquetMetaDataCache]
+  end
+  subgraph Data[&quot;数据层&quot;]
+    E1[InMemory ColumnArrayCache]
+    E2[ColumnDataCache (Hybrid)]
+  end
+  subgraph External[&quot;外部 Catalog&quot;]
+    F1[IcebergTableCache]
+  end
+</div>
+<p><strong>为什么按对象类型切</strong>？因为这些对象的体积分布相差几个数量级：snapshot ≈ KB，segment ≈ KB-MB，bloom 文件 ≈ KB-MB，column data ≈ MB-GB。共享一个 LRU 等于让大 data 把小 meta 挤掉，命中率塌掉。各自一个 LRU 的代价是配置项变多，但是 Databend 在 <code>CacheConfig</code> 里给每种缓存独立的容量上限。</p>
+<h3>3.4 CacheAccessor trait</h3>
+<div class="mermaid">
+classDiagram
+  class CacheAccessor~K, V~ {
+    &lt;&lt;trait&gt;&gt;
+    +get(key) Option~Arc~V~~
+    +put(key, value)
+    +evict(key)
+    +len() / bytes_size()
+  }
+  class InMemoryLruCache
+  class DiskCacheAccessor
+  class HybridCache {
+    +mem: InMemoryLruCache
+    +disk: DiskCacheAccessor
+  }
+  CacheAccessor &lt;|-- InMemoryLruCache
+  CacheAccessor &lt;|-- DiskCacheAccessor
+  CacheAccessor &lt;|-- HybridCache
+</div>
+<p>源码：<code>src/query/storages/common/cache/src/cache.rs::CacheAccessor (L≈35)</code>。所有缓存槽位都按这个统一接口访问；调用方不需要知道是 in-mem 还是 hybrid。</p>
+<h3>3.5 HybridCache：内存优先 + 异步回填磁盘</h3>
+<div class="mermaid">
+flowchart LR
+  GET[&quot;get(k)&quot;] --&gt; M{内存命中?}
+  M -- 是 --&gt; Hit[返回]
+  M -- 否 --&gt; D{磁盘命中?}
+  D -- 是 --&gt; P[Promote 到内存]
+  P --&gt; Hit
+  D -- 否 --&gt; Miss[返回 None\n上层去 OpenDAL 拿]
+  PUT[&quot;put(k,v)&quot;] --&gt; Mem[写内存]
+  Mem --&gt; Q[异步入队\n(by table_data_cache_population_queue_size)]
+  Q --&gt; Disk[磁盘 LRU 写]
+</div>
+<p><strong>异步入队</strong>——put 是非阻塞的；磁盘写在后台 queue 上跑，避免拖累查询主线程。<code>table_data_cache_population_queue_size</code> 默认是 <code>available_parallelism * 5</code>（<code>manager.rs::L≈168</code>）。</p>
+<p><strong>EE only</strong>：<code>allows_on_disk_cache: AtomicBool</code> 在 OSS 模式下硬性为 false（<code>manager.rs::L≈166</code>）。</p>
+<h2>4. 关键流程</h2>
+<h3>4.1 读路径：先缓存、后 OpenDAL</h3>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant FT as FuseTable.do_read_partitions
+  participant CM as CacheManager
+  participant SnapC as TableSnapshotCache
+  participant SegC as CompactSegmentInfoCache
+  participant BFC as BloomIndexFilterCache
+  participant OD as OpenDAL Operator
+  participant LayerStack as Timeout/Retry/Limit Layer
+
+  FT-&gt;&gt;CM: get(snapshot_loc)
+  CM-&gt;&gt;SnapC: get
+  alt 命中
+    SnapC--&gt;&gt;FT: Arc&lt;TableSnapshot&gt;
+  else 未命中
+    SnapC--&gt;&gt;CM: None
+    CM-&gt;&gt;OD: read snapshot.json
+    OD-&gt;&gt;LayerStack: future
+    LayerStack--&gt;&gt;CM: bytes
+    CM-&gt;&gt;SnapC: put
+    CM--&gt;&gt;FT: Arc&lt;TableSnapshot&gt;
+  end
+
+  loop 每个 segment_loc
+    FT-&gt;&gt;CM: get(segment_loc)
+    CM-&gt;&gt;SegC: get
+    alt 命中
+      SegC--&gt;&gt;FT: SegmentInfo
+    else 未命中
+      CM-&gt;&gt;OD: read segment.mpk
+      OD--&gt;&gt;CM: bytes (zstd 解压)
+      CM-&gt;&gt;SegC: put
+    end
+  end
+
+  loop 每个 BlockMeta
+    FT-&gt;&gt;FT: RangeIndex 裁剪（用内存里的 col_stats，零 IO）
+    alt 仍存活
+      FT-&gt;&gt;CM: get(bloom_filter_index_location)
+      CM-&gt;&gt;BFC: get
+      alt 命中 → 用 bloom 再裁
+      else 未命中 → 读磁盘/对象存储 + put
+      end
+    end
+  end
+</div>
+<p><code>CachedReader / CachedTtlReader</code>（<code>src/query/storages/common/cache/src/read/</code>）封装了上面这套"先 cache 后 OpenDAL + miss 时反向 put"的逻辑，所有 reader 都基于它。</p>
+<h3>4.2 写路径：旁路写缓存</h3>
+<p>写入侧并不依赖 cache miss-then-fill；而是在写完一个 snapshot/segment 后<strong>主动 put</strong>，让随后的查询直接命中：</p>
+<div class="codehilite" style="background: #272822"><pre style="line-height: 125%;"><span></span><code><span style="color: #959077">// src/query/storages/fuse/src/operations/commit.rs:191（节选）</span>
+<span style="color: #959077">// 写完 statistics 文件后立刻塞 cache，不等下次查询去 GET</span>
+<span style="color: #F8F8F2">TableSnapshotStatistics::cache().insert(table_statistics_location, table_statistics.unwrap());</span>
+</code></pre></div>
+
+<p>类似地，bloom/inverted/vector index 写入侧也会主动喂 cache（详见 08 文档）。</p>
+<h3>4.3 ConcurrentLimitLayer：把"突发并发"压成"稳定吞吐"</h3>
+<div class="mermaid">
+flowchart LR
+  Q[N 个 worker 同时\nGET 不同 block.parquet] --&gt; CL[ConcurrentLimitLayer\n(permits = max_concurrent_io_requests)]
+  CL -- 通过 --&gt; S[实际发 HTTP 到 S3]
+  CL -- 阻塞 --&gt; W[等许可]
+</div>
+<p>没有这层时，<code>event=Async + worker=64</code> 的查询会瞬间发 64 个 GET 给 S3，遇到 P99 100ms+ 时把 socket 池打爆。<code>max_concurrent_io_requests</code> 通常按 「带宽 ÷ 平均块大小」推算。</p>
+<h3>4.4 RetryLayer：抖动 + 自定义拦截</h3>
+<div class="mermaid">
+flowchart LR
+  ERR[请求出错] --&gt; CLS{HTTP 状态}
+  CLS -- 5xx / 网络抖动 --&gt; R[RetryLayer 决定重试]
+  CLS -- 4xx 永久错误 --&gt; F[直接失败]
+  R --&gt; J[Jitter 退避]
+  J --&gt; RETRY[重发请求]
+  RETRY --&gt; METRIC[METRIC_OPENDAL_RETRIES_COUNT.inc()]
+  RETRY --&gt; NOTI[DatabendRetryInterceptor.notify\n打 log]
+</div>
+<p><code>with_jitter()</code> 是关键——多 worker 同时遇到限流时，指数退避<strong>必须加抖动</strong>，否则下一轮还会同步重试，雪崩。</p>
+<h2>5. 性能与优化点</h2>
+<table>
+<thead>
+<tr>
+<th>项</th>
+<th>在哪里</th>
+<th>效果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Operator 缓存</strong></td>
+<td><code>operator_cache.rs::get_or_create</code></td>
+<td>同样 storage params 共享 keep-alive 连接池</td>
+</tr>
+<tr>
+<td><strong>TimeoutLayer 必须最先</strong></td>
+<td><code>build_operator L≈156</code></td>
+<td>future 取消语义正确，否则 OpenDAL 卡住</td>
+</tr>
+<tr>
+<td><strong>专用 GlobalIORuntime</strong></td>
+<td><code>RuntimeLayer::new(GlobalIORuntime::instance())</code></td>
+<td>IO 不与 server 协议层共享线程</td>
+</tr>
+<tr>
+<td><strong>静/动 dispatch 分界 <code>.finish()</code></strong></td>
+<td><code>build_operator L≈202</code></td>
+<td>平衡编译时间 vs 静态分发性能</td>
+</tr>
+<tr>
+<td><strong>20+ 独立缓存槽</strong></td>
+<td><code>CacheManager</code></td>
+<td>大 data 不挤掉小 meta；命中率单独可调</td>
+</tr>
+<tr>
+<td><strong>Hybrid（mem+disk）异步回填</strong></td>
+<td><code>HybridCache</code> + queue size = parallelism×5</td>
+<td>磁盘写不阻塞主路径</td>
+</tr>
+<tr>
+<td><strong><code>prune_partitions_cache</code></strong></td>
+<td>缓存"裁剪后的 partitions 列表"</td>
+<td>同 SQL（同 push_downs hash）多次查询零 IO 复用裁剪结果</td>
+</tr>
+<tr>
+<td><strong><code>parquet_meta_data_cache</code></strong></td>
+<td>单独缓存 parquet footer</td>
+<td>解码列时不需要再 GET footer</td>
+</tr>
+<tr>
+<td><strong>环境变量降级开关</strong></td>
+<td><code>_DATABEND_INTERNAL_*</code> env vars</td>
+<td>生产事故时无需重启即可临时调参</td>
+</tr>
+</tbody>
+</table>
+<h2>6. 与同类系统的对照</h2>
+<table>
+<thead>
+<tr>
+<th>系统</th>
+<th>对象存储抽象</th>
+<th>缓存粒度</th>
+<th>重试/限流</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Iceberg/Delta on Spark</td>
+<td>Hadoop FS API</td>
+<td>文件级</td>
+<td>各自实现</td>
+</tr>
+<tr>
+<td>Trino</td>
+<td>Hive Connector + 自研 caching FS</td>
+<td>文件级（Alluxio 可选）</td>
+<td>Connector 内</td>
+</tr>
+<tr>
+<td>ClickHouse</td>
+<td>内置 S3 client</td>
+<td>元数据 + 数据双层</td>
+<td>内置</td>
+</tr>
+<tr>
+<td>StarRocks/Doris</td>
+<td>FE/BE 内置 + Storage Vault</td>
+<td>表级 + tablet 级</td>
+<td>内置</td>
+</tr>
+<tr>
+<td><strong>Databend</strong></td>
+<td><strong>OpenDAL + Layer 栈</strong></td>
+<td><strong>20+ 槽位按对象类型切</strong></td>
+<td><strong>OpenDAL Layer 统一</strong></td>
+</tr>
+<tr>
+<td>DuckDB</td>
+<td>httpfs / s3 extension</td>
+<td>（较弱）</td>
+<td>简单重试</td>
+</tr>
+</tbody>
+</table>
+<p>OpenDAL 是 Databend 团队主导的开源项目；这种「我们自己用、外部也能用」的策略让 IO 层的演进与上游社区贡献绑定，避免单仓库视角的腐烂。</p>
+<h2>7. 端到端案例</h2>
+<p><code>SELECT count(*) FROM t WHERE x &gt; 1</code>，IO/缓存段：</p>
+<div class="mermaid">
+sequenceDiagram
+  autonumber
+  participant FT as FuseTable
+  participant CM as CacheManager
+  participant OD as OpenDAL
+  participant TL as Timeout/Retry/Concurrent Layer
+  participant S3
+
+  FT-&gt;&gt;CM: TableSnapshotCache.get(snapshot_loc)
+  CM--&gt;&gt;FT: Arc&lt;TableSnapshot&gt; (命中，0 RPC)
+  loop segments
+    FT-&gt;&gt;CM: CompactSegmentInfoCache.get
+    alt 命中
+      CM--&gt;&gt;FT: SegmentInfo
+    else 首次访问
+      CM-&gt;&gt;OD: read segment_loc
+      OD-&gt;&gt;TL: future
+      TL-&gt;&gt;S3: GET object
+      S3--&gt;&gt;TL: bytes (压缩后)
+      TL--&gt;&gt;OD: bytes
+      OD--&gt;&gt;CM: 解压 + 反序列化 → SegmentInfo
+      CM-&gt;&gt;CM: put SegmentInfo
+      CM--&gt;&gt;FT: SegmentInfo
+    end
+  end
+  FT-&gt;&gt;FT: RangeIndex 裁剪（纯内存 col_stats，0 RPC）
+  FT-&gt;&gt;CM: BloomIndexFilterCache.get for bloom on x（本例不适用，跳过）
+  FT-&gt;&gt;CM: ParquetMetaDataCache.get(block.parquet)
+  alt 命中
+    CM--&gt;&gt;FT: footer metadata
+  else
+    CM-&gt;&gt;OD: range read footer (~ 8KB tail)
+    OD-&gt;&gt;TL: future
+    TL-&gt;&gt;S3: GET range
+    S3--&gt;&gt;TL: bytes
+    TL--&gt;&gt;CM: footer
+  end
+  FT-&gt;&gt;OD: 并发 GET col=x 范围
+  OD-&gt;&gt;TL: ConcurrentLimitLayer 排队
+  TL-&gt;&gt;S3: 受限并发 GET
+  S3--&gt;&gt;FT: parquet pages
+  FT-&gt;&gt;CM: ColumnDataCache.put(命中后续查询)
+</div>
+<p>注意：</p>
+<ul>
+<li><strong><code>RangeIndex</code> 不是缓存命中或未命中</strong>——它使用的 <code>col_stats</code> 已经在 <code>BlockMeta</code> 里，整个裁剪不发任何 RPC，只是内存比较。</li>
+<li><strong>Parquet footer 是 range read</strong>——典型 8KB，非常小，但是命中率影响巨大（footer 决定列偏移）。</li>
+<li><strong><code>ColumnDataCache</code> 默认是 Hybrid</strong>——磁盘大但命中率高的列（频繁过滤的列）会被异步落盘。</li>
+</ul>
+<h2>8. 未解之谜</h2>
+<ul>
+<li><strong>Operator cache 的失效策略</strong>：<code>get_or_create</code> 命中后什么时候清掉旧 Operator？如果 storage params 调过期 IAM token 怎么办？需要看 <code>operator_cache.rs</code> 内部 TTL/事件。</li>
+<li><strong><code>InMemoryLruCache</code> 的容量计费方式</strong>：是按 entry 数还是按字节？<code>Unit</code> 枚举（在 <code>cache.rs</code> 里）的含义本篇没展开。</li>
+<li><strong><code>column_oriented_segment_info_cache</code> vs <code>compact_segment_info_cache</code></strong>：两者并存，分别对应 <code>gen_segment_info_location</code> 的 <code>.col</code> 与 <code>.mpk</code> 路径——但具体什么场景生成 <code>.col</code> 还需要在 06 文档基础上跟踪 <code>is_column_oriented</code> 路径。</li>
+<li><strong><code>StorageHttpClient</code> 与 <code>pool_max_idle_per_host</code></strong>：HTTP/2 的多路复用对此参数的语义和直觉相反；本篇仅记录配置项，未深读。</li>
+<li><strong><code>set_s3_storage_class</code></strong> 在 <code>meta_app::storage</code> 中暴露——意味着 S3 Storage Class（Standard/IA/Glacier）作为 query-level 的 setting 也能传递，实际命中点（compact / vacuum / cold-store）需要在 06 文档基础上扩展。</li>
+<li><strong><code>Iceberg/Delta</code> 走的不是同一套 cache</strong>：它们各自有 metadata cache（如 <code>IcebergTableCache</code>），但和本篇的 FUSE 缓存槽是并列关系；具体在 10 文档展开。</li>
+</ul>
+</main>
+<footer class="foot"><div class="wrap">Markdown 自动生成 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>
