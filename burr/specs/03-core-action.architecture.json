@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Action 体系：Function「算」+ Reducer「写」",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "binary",
+        "label": "二分模型",
+        "focus": [
+          "func",
+          "reducer",
+          "action"
+        ],
+        "note": "算与写分离，是整个框架的纪律来源。"
+      },
+      {
+        "id": "decorator",
+        "label": "@action 零魔法",
+        "focus": [
+          "action",
+          "decorator"
+        ],
+        "note": "装饰器只是参数收集，无运行时黑盒。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "func",
+      "type": "backend",
+      "label": "«interface» Function",
+      "sublabel": "reads · inputs · run(state)→dict",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        210,
+        64
+      ],
+      "tag": "算"
+    },
+    {
+      "id": "reducer",
+      "type": "backend",
+      "label": "«interface» Reducer",
+      "sublabel": "writes · update(result,state)→State",
+      "pos": [
+        400,
+        110
+      ],
+      "size": [
+        210,
+        64
+      ],
+      "tag": "写"
+    },
+    {
+      "id": "action",
+      "type": "backend",
+      "label": "Action（抽象基类）",
+      "sublabel": "同时实现两接口",
+      "pos": [
+        760,
+        110
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "decorator",
+      "type": "backend",
+      "label": "@action 装饰器",
+      "sublabel": "零魔法 · 参数即 inputs",
+      "pos": [
+        400,
+        340
+      ],
+      "size": [
+        210,
+        62
+      ]
+    },
+    {
+      "id": "subclasses",
+      "type": "messagebus",
+      "label": "具体 Action 家族",
+      "sublabel": "ConfigurableAction / streaming",
+      "pos": [
+        760,
+        340
+      ],
+      "size": [
+        196,
+        62
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "func",
+      "to": "action",
+      "label": "实现",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [
+        [
+          145,
+          60
+        ],
+        [
+          858,
+          60
+        ]
+      ]
+    },
+    {
+      "from": "reducer",
+      "to": "action",
+      "label": "实现"
+    },
+    {
+      "from": "decorator",
+      "to": "action",
+      "label": "生成子类",
+      "variant": "dashed"
+    },
+    {
+      "from": "action",
+      "to": "subclasses",
+      "label": "派生",
+      "variant": "dashed",
+      "labelDy": 24
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "二分模型",
+      "items": [
+        "Function「算」：state → 结果字典",
+        "Reducer「写」：结果 → 新状态",
+        "validate_inputs 与 is_async 内建"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "零魔法装饰器",
+      "items": [
+        "@action 读函数签名收集 reads/writes/inputs",
+        "参数如何变 inputs 一目了然",
+        "无运行时字节码注入"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "类层次",
+      "items": [
+        "Function/Reducer 是 interface",
+        "Action 抽象基类合体两者",
+        "具体家族支持流式与配置化"
+      ]
+    }
+  ]
+}

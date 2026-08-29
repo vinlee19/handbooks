@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "get_next_node：条件路由决策",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1140,
+      592
+    ],
+    "views": [
+      {
+        "id": "route",
+        "label": "路由主链",
+        "focus": [
+          "prior",
+          "adj",
+          "cond",
+          "next"
+        ],
+        "note": "先判第一步，再按邻接表逐条件求值。"
+      },
+      {
+        "id": "entry",
+        "label": "入口分支",
+        "focus": [
+          "prior",
+          "entrypt"
+        ],
+        "note": "prior_step 为 None 时返回 entrypoint 动作。"
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "entry",
+      "label": "入口判定"
+    },
+    {
+      "id": "branch",
+      "label": "第一步分支"
+    },
+    {
+      "id": "route",
+      "label": "邻接与条件"
+    },
+    {
+      "id": "hit",
+      "label": "命中"
+    }
+  ],
+  "phases": [
+    {
+      "id": "p1",
+      "label": "定位",
+      "fromCol": 0,
+      "toCol": 0
+    },
+    {
+      "id": "p2",
+      "label": "分支",
+      "fromCol": 1,
+      "toCol": 2
+    },
+    {
+      "id": "p3",
+      "label": "条件与命中",
+      "fromCol": 3,
+      "toCol": 4
+    }
+  ],
+  "mainPath": [
+    "prior",
+    "adj",
+    "cond",
+    "next"
+  ],
+  "nodes": [
+    {
+      "id": "prior",
+      "lane": "entry",
+      "col": 0,
+      "type": "security",
+      "label": "None 判定",
+      "sublabel": "graph.py 路由入口",
+      "width": 92
+    },
+    {
+      "id": "entrypt",
+      "lane": "branch",
+      "col": 1,
+      "type": "backend",
+      "label": "entrypoint",
+      "sublabel": "graph.py:154-155",
+      "width": 130
+    },
+    {
+      "id": "adj",
+      "lane": "route",
+      "col": 2,
+      "type": "database",
+      "label": "adjacency 表",
+      "sublabel": "有序 (name, cond) 列表",
+      "width": 130
+    },
+    {
+      "id": "cond",
+      "lane": "hit",
+      "col": 3,
+      "type": "security",
+      "label": "cond.run(state)",
+      "sublabel": "PROCEED 语义",
+      "width": 120
+    },
+    {
+      "id": "next",
+      "lane": "route",
+      "col": 4,
+      "type": "backend",
+      "label": "下一节点",
+      "sublabel": "default 恒真兜底",
+      "width": 120
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "from": "prior",
+      "to": "entrypt",
+      "label": "是（第一步）",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop",
+      "labelSegment": 1
+    },
+    {
+      "id": "e2",
+      "from": "prior",
+      "to": "adj",
+      "label": "否"
+    },
+    {
+      "id": "e4",
+      "from": "adj",
+      "to": "cond",
+      "label": "逐条求值"
+    },
+    {
+      "id": "e5",
+      "from": "cond",
+      "to": "next",
+      "label": "首个 PROCEED",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "图模型",
+      "items": [
+        "Graph / Transition / Node 三件套",
+        "邻接表保序：条件按注册顺序求值",
+        "default 条件恒真兜底"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "GraphBuilder",
+      "items": [
+        "轻量校验器：三个收集方法",
+        "构建期即校验图完整性",
+        "Builder 产物交给 Application"
+      ]
+    }
+  ]
+}

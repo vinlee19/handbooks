@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "集成生态：外接世界的全部接口",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 600],
+    "views": [
+      { "id": "toaction", "label": "外部 → Action", "focus": ["hamilton", "haystack", "bedrock"], "note": "外部组件包一层就成了 Burr 动作。" },
+      { "id": "bridge", "label": "双向桥", "focus": ["otel", "pydantic"], "note": "OTel 血缘桥与 pydantic 类型化状态。" }
+    ]
+  },
+  "components": [
+    { "id": "hamilton", "type": "backend", "label": "hamilton.py（249 行）", "sublabel": "Driver 即 Action · 血缘最全", "pos": [40, 110], "size": [200, 64] },
+    { "id": "haystack", "type": "backend", "label": "haystack.py（390 行）", "sublabel": "Pipeline → Burr Graph", "pos": [400, 110], "size": [200, 64] },
+    { "id": "bedrock", "type": "cloud", "label": "bedrock.py（367 行）", "sublabel": "外部模型接入", "pos": [760, 110], "size": [190, 64] },
+    { "id": "otel", "type": "messagebus", "label": "OpenTelemetry 桥", "sublabel": "双向：span ↔ Burr 事件", "pos": [400, 340], "size": [200, 62] },
+    { "id": "pydantic", "type": "security", "label": "pydantic 类型化状态", "sublabel": "guarantees · 状态校验", "pos": [760, 340], "size": [190, 62] }
+  ],
+  "connections": [
+    { "from": "hamilton", "to": "haystack", "label": "同为 Action 化封装", "variant": "dashed" },
+    { "from": "haystack", "to": "bedrock", "label": "模型调用接入", "variant": "dashed" },
+    { "from": "hamilton", "to": "otel", "label": "血缘导出", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "otel", "to": "pydantic", "label": "类型化桥接", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "「外部组件 → Action」", "items": ["Hamilton(Action)：from_state 入，update_state 出", "HaystackAction 包 Component", "haystack_pipeline_to_burr_graph 整条转换"] },
+    { "dot": "violet", "title": "双向桥", "items": ["OpenTelemetry：Burr span 可导出为 OTel", "外部 OTel 也可注入 Burr 追踪", "pydantic 保证 State 类型安全"] },
+    { "dot": "emerald", "title": "选型意义", "items": ["集成层让已有 LLM 栈平滑迁移", "血缘最全的是 Hamilton 集成", "其余生态：LangChain 等见官方文档"] }
+  ]
+}

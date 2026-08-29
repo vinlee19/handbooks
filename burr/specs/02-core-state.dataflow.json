@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "State 深度剖析：copy-on-write 与 StateDelta",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      490
+    ],
+    "views": [
+      {
+        "id": "cow",
+        "label": "写时复制",
+        "focus": [
+          "old",
+          "apply",
+          "new"
+        ],
+        "note": "浅拷贝顶层 dict，只深拷贝 delta 声明要读的键。"
+      },
+      {
+        "id": "serde",
+        "label": "序列化",
+        "focus": [
+          "delta",
+          "serde"
+        ],
+        "note": "追踪与持久化共用一条序列化管线。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "旧状态"
+    },
+    {
+      "label": "apply"
+    },
+    {
+      "label": "新状态"
+    },
+    {
+      "label": "序列化"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "old",
+      "type": "database",
+      "label": "旧 State S₀",
+      "sublabel": "_state = {counter: 5, …}",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "apply",
+      "type": "backend",
+      "label": "apply_operation",
+      "sublabel": "state.py:302",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "delta",
+      "type": "database",
+      "label": "StateDelta",
+      "sublabel": "变更建模为一等公民",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "new",
+      "type": "database",
+      "label": "新 State S₁",
+      "sublabel": "浅拷贝顶层 + 定向 deepcopy",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "serde",
+      "type": "backend",
+      "label": "serde 管线",
+      "sublabel": "追踪 / 持久化复用",
+      "stage": 3,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "from": "old",
+      "to": "apply",
+      "label": "① 浅拷贝 dict"
+    },
+    {
+      "from": "delta",
+      "to": "apply",
+      "label": "② 只 deepcopy reads"
+    },
+    {
+      "from": "apply",
+      "to": "new",
+      "label": "不可变新状态",
+      "variant": "emphasis"
+    },
+    {
+      "from": "new",
+      "to": "serde",
+      "label": "序列化输出",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "State 的本质",
+      "items": [
+        "包着 dict 的不可变值对象",
+        "apply_operation 产生新 State 而非原地改",
+        "旧状态永远有效 → 时间旅行免费"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "copy-on-write",
+      "items": [
+        "① copy.copy 浅拷贝顶层（O(键数)）",
+        "大对象只是引用拷贝 O(1)",
+        "② 只 deepcopy delta.reads() 声明的键"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "StateDelta",
+      "items": [
+        "把变更建模成一等公民",
+        "reads/writes 声明驱动精确深拷贝",
+        "serde 管线被追踪与持久化共用"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "追踪客户端与服务端：~/.burr 磁盘布局",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "layout",
+        "label": "目录树",
+        "focus": [
+          "root",
+          "appdir",
+          "log"
+        ],
+        "note": "每次运行一个 app_id 目录，log.jsonl 追加全部事件。"
+      },
+      {
+        "id": "contract",
+        "label": "事件契约",
+        "focus": [
+          "appdir",
+          "log"
+        ],
+        "note": "事件 → 钩子映射与身份文件契约。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "root",
+      "type": "database",
+      "label": "~/.burr/",
+      "sublabel": "LocalTrackingClient 根",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        176,
+        64
+      ]
+    },
+    {
+      "id": "appdir",
+      "type": "database",
+      "label": "app-abc123/",
+      "sublabel": "每次运行一个目录",
+      "pos": [
+        400,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "graph",
+      "type": "database",
+      "label": "graph.json",
+      "sublabel": "状态机 + 动作源码",
+      "pos": [
+        760,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "meta",
+      "type": "database",
+      "label": "metadata.json",
+      "sublabel": "partition / 父子指针",
+      "pos": [
+        40,
+        340
+      ],
+      "size": [
+        186,
+        62
+      ]
+    },
+    {
+      "id": "log",
+      "type": "database",
+      "label": "log.jsonl ★",
+      "sublabel": "全部事件（追加式）",
+      "pos": [
+        400,
+        340
+      ],
+      "size": [
+        186,
+        64
+      ],
+      "tag": "核心"
+    },
+    {
+      "id": "children",
+      "type": "database",
+      "label": "children.jsonl",
+      "sublabel": "仅当有子应用 · 写父目录",
+      "pos": [
+        760,
+        340
+      ],
+      "size": [
+        186,
+        62
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "单次运行目录",
+      "wraps": [
+        "appdir",
+        "graph",
+        "meta",
+        "log",
+        "children"
+      ],
+      "pad": 16
+    }
+  ],
+  "connections": [
+    {
+      "from": "root",
+      "to": "appdir",
+      "label": "按 app_id 组织"
+    },
+    {
+      "from": "appdir",
+      "to": "graph",
+      "label": "快照状态机"
+    },
+    {
+      "from": "appdir",
+      "to": "meta",
+      "label": "身份元数据",
+      "variant": "dashed"
+    },
+    {
+      "from": "appdir",
+      "to": "log",
+      "label": "追加事件",
+      "variant": "emphasis",
+      "labelDy": 55
+    },
+    {
+      "from": "appdir",
+      "to": "children",
+      "label": "并行子应用",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "身份与契约",
+      "items": [
+        "LocalTrackingClient 身份与文件契约",
+        "事件 → 钩子的映射表",
+        "annotations.jsonl 由 UI 服务端写入"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "事件时间线",
+      "items": [
+        "log.jsonl 追加式记录全部事件",
+        "磁盘布局即事件时间线",
+        "UI 直接消费这批文件（10 篇）"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "父子关系",
+      "items": [
+        "children.jsonl 写在父应用目录",
+        "并行子应用血缘可追溯",
+        "与 08 篇 SubGraphTask 呼应"
+      ]
+    }
+  ]
+}

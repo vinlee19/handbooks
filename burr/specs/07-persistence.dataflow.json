@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "持久化与断点恢复：PersisterHook 写链",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      500
+    ],
+    "views": [
+      {
+        "id": "write",
+        "label": "写侧",
+        "focus": [
+          "builder",
+          "hook",
+          "save"
+        ],
+        "note": "builder 把 persister 包装成 PostRunStepHook。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "装配"
+    },
+    {
+      "label": "钩子"
+    },
+    {
+      "label": "落库"
+    },
+    {
+      "label": "恢复"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "builder",
+      "type": "backend",
+      "label": "state_persister(p)",
+      "sublabel": "ApplicationBuilder 装配",
+      "stage": 0,
+      "row": 1,
+      "width": 160
+    },
+    {
+      "id": "hook",
+      "type": "backend",
+      "label": "PersisterHook",
+      "sublabel": "PostRunStepHook · :214-234",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "save",
+      "type": "database",
+      "label": "p.save(pk, seq…)",
+      "sublabel": "status: completed/failed",
+      "stage": 2,
+      "row": 1,
+      "width": 150
+    },
+    {
+      "id": "load",
+      "type": "database",
+      "label": "BaseStateLoader",
+      "sublabel": "读侧协议 :54",
+      "stage": 3,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "from": "builder",
+      "to": "hook",
+      "label": "包装为钩子"
+    },
+    {
+      "from": "hook",
+      "to": "save",
+      "label": "post_run_step",
+      "variant": "emphasis"
+    },
+    {
+      "from": "save",
+      "to": "load",
+      "label": "断点恢复读取",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "协议两接口",
+      "items": [
+        "写侧 BaseStateSaver（:112）",
+        "读侧 BaseStateLoader（:54）",
+        "合体 BasePersistence + 异步孪生"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "钩子时机",
+      "items": [
+        "post_run_step(..., exception)",
+        "exception 非 None 标 failed",
+        "每步完成后立即持久化"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "可恢复执行",
+      "items": [
+        "State 内嵌游标（04 篇）",
+        "恢复时从最近 persisted seq 继续",
+        "与 tracking 共用分区键"
+      ]
+    }
+  ]
+}

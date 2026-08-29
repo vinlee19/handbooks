@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "端到端执行全景：30 行示例的完整旅程",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      528
+    ],
+    "views": [
+      {
+        "id": "build",
+        "label": "构建阶段",
+        "focus": [
+          "code",
+          "builder",
+          "counter"
+        ],
+        "note": "T0 构建阶段：Builder 产出 Application。"
+      },
+      {
+        "id": "loop",
+        "label": "自环执行",
+        "focus": [
+          "counter",
+          "cond"
+        ],
+        "note": "counter 动作自环，expr 条件控制终止。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "代码"
+    },
+    {
+      "label": "构建"
+    },
+    {
+      "label": "自环"
+    },
+    {
+      "label": "收束"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "code",
+      "type": "external",
+      "label": "hello-world 30 行",
+      "sublabel": "用户进程",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "builder",
+      "type": "backend",
+      "label": "ApplicationBuilder",
+      "sublabel": "actions + transitions",
+      "stage": 1,
+      "row": 1,
+      "width": 130
+    },
+    {
+      "id": "counter",
+      "type": "backend",
+      "label": "counter 动作",
+      "sublabel": "reads/writes: counter",
+      "stage": 2,
+      "row": 0
+    },
+    {
+      "id": "cond",
+      "type": "security",
+      "label": "counter < 10 ?",
+      "sublabel": "自环条件 · default 兜底",
+      "stage": 2,
+      "row": 2,
+      "width": 124
+    },
+    {
+      "id": "result",
+      "type": "database",
+      "label": "Result(\"counter\")",
+      "sublabel": "读字段进结果 · 流式返回",
+      "stage": 3,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "from": "code",
+      "to": "builder",
+      "label": "T0 构建阶段"
+    },
+    {
+      "from": "builder",
+      "to": "counter",
+      "label": "entrypoint",
+      "variant": "emphasis"
+    },
+    {
+      "from": "counter",
+      "to": "cond",
+      "label": "自环",
+      "labelDx": 30
+    },
+    {
+      "from": "cond",
+      "to": "counter",
+      "label": "继续自环",
+      "variant": "emphasis",
+      "labelDx": -30
+    },
+    {
+      "from": "cond",
+      "to": "result",
+      "label": "default 退出",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "前 11 篇收束",
+      "items": [
+        "State 不可变 + StateDelta（02）",
+        "Action 二分模型（03）",
+        "Application 游标（04）驱动自环"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "30 行的状态机",
+      "items": [
+        "counter 动作：reads/writes 都是 counter",
+        "entrypoint 自环 + 条件表达式",
+        "default 条件恒真兜底退出"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "进阶形态",
+      "items": [
+        "多模态聊天机器人复用同一骨架",
+        "tracking/persistence 无缝叠加",
+        "端到端时序总图见本章"
+      ]
+    }
+  ]
+}

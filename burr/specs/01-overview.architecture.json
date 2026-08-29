@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Burr 全景：刻意低抽象的 AI 状态机框架",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "pkg",
+        "label": "Python 包本体",
+        "focus": [
+          "pkg",
+          "visibility"
+        ],
+        "note": "零基础依赖，flit 构建，20+ extras。"
+      },
+      {
+        "id": "ecosystem",
+        "label": "周边",
+        "focus": [
+          "telemetry_ui",
+          "website",
+          "redirect"
+        ],
+        "note": "遥测 UI、营销站与旧包名重定向。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "pkg",
+      "type": "backend",
+      "label": "burr/ Python 包",
+      "sublabel": "本库本体 ~19.7k 行",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ],
+      "tag": "核心"
+    },
+    {
+      "id": "visibility",
+      "type": "database",
+      "label": "visibility/",
+      "sublabel": "span 追踪 tracing.py",
+      "pos": [
+        340,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "examples",
+      "type": "external",
+      "label": "examples/",
+      "sublabel": "随 wheel 分发的 5 个演示",
+      "pos": [
+        640,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "telemetry_ui",
+      "type": "frontend",
+      "label": "telemetry/ui/",
+      "sublabel": "React 遥测 UI（Vite 6 + TS）",
+      "pos": [
+        920,
+        110
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "website",
+      "type": "external",
+      "label": "website/",
+      "sublabel": "Next.js 15 营销站点",
+      "pos": [
+        340,
+        330
+      ],
+      "size": [
+        186,
+        62
+      ]
+    },
+    {
+      "id": "redirect",
+      "type": "database",
+      "label": "burr-redirect/",
+      "sublabel": "PyPI 旧包名重定向壳",
+      "pos": [
+        640,
+        330
+      ],
+      "size": [
+        186,
+        62
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "pkg",
+      "to": "visibility",
+      "label": "span 追踪",
+      "variant": "dashed"
+    },
+    {
+      "from": "visibility",
+      "to": "telemetry_ui",
+      "label": "事件供 UI 展示",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [
+        [
+          433,
+          60
+        ],
+        [
+          1018,
+          60
+        ]
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "设计哲学",
+      "items": [
+        "刻意「低抽象」：状态机而非黑盒框架",
+        "零基础依赖：pip install apache-burr 即用",
+        "flit 构建 + 20+ extras 按需安装"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "仓库构成",
+      "items": [
+        "burr/ Python 包是全部运行时",
+        "telemetry.py 是 ASF 后的 no-op 桩",
+        "version.py 用 importlib.metadata 读版本"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "阅读建议",
+      "items": [
+        "按 02-05 篇读核心四件套",
+        "06-09 篇是观测与持久化",
+        "12 篇用 30 行示例收束全链"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "并行执行：map-reduce 跑进线程池与事件循环",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      500
+    ],
+    "views": [
+      {
+        "id": "prep",
+        "label": "任务化",
+        "focus": [
+          "main",
+          "wipe",
+          "task"
+        ],
+        "note": "子应用看不到父游标：先 wipe 私有键。"
+      },
+      {
+        "id": "exec",
+        "label": "并发执行",
+        "focus": [
+          "parallel",
+          "sub"
+        ],
+        "note": "同步线程池 / asyncio.gather / Ray 三形态。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "主应用"
+    },
+    {
+      "label": "任务构建"
+    },
+    {
+      "label": "并发"
+    },
+    {
+      "label": "子应用"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "main",
+      "type": "backend",
+      "label": "主应用并行步",
+      "sublabel": "某一步是并行动作",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "wipe",
+      "type": "security",
+      "label": "① wipe 私有键",
+      "sublabel": "子应用不许看到游标",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "task",
+      "type": "backend",
+      "label": "② SubGraphTask 构建",
+      "sublabel": "任务化并行动作",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "parallel",
+      "type": "messagebus",
+      "label": "③ 并发执行 :276-305",
+      "sublabel": "线程池 / gather / Ray",
+      "stage": 3,
+      "row": 0
+    },
+    {
+      "id": "sub",
+      "type": "backend",
+      "label": "子应用 T1",
+      "sublabel": "真 Application 实例",
+      "stage": 3,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "from": "main",
+      "to": "wipe",
+      "label": "进入并行步"
+    },
+    {
+      "from": "wipe",
+      "to": "task",
+      "label": "干净子状态"
+    },
+    {
+      "from": "task",
+      "to": "parallel",
+      "label": "提交任务",
+      "variant": "emphasis"
+    },
+    {
+      "from": "parallel",
+      "to": "sub",
+      "label": "执行实例",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Executor 协议",
+      "items": [
+        "同步：with parallel_executor_factory() as ex",
+        "异步：async_utils.arealize(gather)",
+        "分布式：RayExecutor（ray.py）可替换"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "隔离",
+      "items": [
+        "① wipe 掉 __ 私有键",
+        "子应用不许看到父游标",
+        "结果按 map-reduce 语义回收"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "构建细节",
+      "items": [
+        "SubGraphTask 持有子图与子状态",
+        "并行执行面有独立物理视图",
+        "失败传播遵循 Executor 协议"
+      ]
+    }
+  ]
+}

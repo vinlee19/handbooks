@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "React 遥测 UI：把执行历史变成可导航视图",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 560],
+    "views": [
+      { "id": "routes", "label": "路由视图", "focus": ["apptsx", "projects", "applist"], "note": "路由表驱动项目→应用→步骤三层下钻。" },
+      { "id": "admin", "label": "管理视图", "focus": ["admin"], "note": "索引任务与健康检查。" }
+    ]
+  },
+  "components": [
+    { "id": "apptsx", "type": "backend", "label": "src/App.tsx", "sublabel": "路由表", "pos": [40, 110], "size": [176, 64] },
+    { "id": "projects", "type": "frontend", "label": "ProjectList", "sublabel": "项目列表 · 创建时间/应用数", "pos": [400, 110], "size": [196, 64] },
+    { "id": "applist", "type": "frontend", "label": "AppList", "sublabel": "应用卡片 · 状态/步数/血缘", "pos": [760, 110], "size": [196, 64] },
+    { "id": "admin", "type": "frontend", "label": "AdminView", "sublabel": "indexing_jobs · ready 检查", "pos": [400, 340], "size": [196, 64] },
+    { "id": "api", "type": "messagebus", "label": "生成的 API 客户端", "sublabel": "GET /api/v0/projects …", "pos": [760, 340], "size": [196, 62] }
+  ],
+  "connections": [
+    { "from": "apptsx", "to": "projects", "label": "/projects" },
+    { "from": "projects", "to": "applist", "label": "/project/:id" },
+    { "from": "apptsx", "to": "admin", "label": "/admin", "variant": "dashed" },
+    { "from": "applist", "to": "api", "label": "分页 + 搜索", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "api", "to": "projects", "label": "数据回填", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "技术栈", "items": ["Vite 6 + TypeScript 工程", "API 客户端是「生成」的而非手写", "遥测 UI 源码在 telemetry/ui/"] },
+    { "dot": "violet", "title": "下钻结构", "items": ["项目（+分区）列表 → 应用卡片", "应用卡片：状态/最后活跃/步数", "父子血缘图标（09 篇 children）"] },
+    { "dot": "emerald", "title": "管理面", "items": ["admin 视图展示索引任务", "S3 后端的 indexing_jobs", "ready 健康检查端点"] }
+  ]
+}

@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Application 运行时：游标活在 State 里",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "internals",
+        "label": "内部结构",
+        "focus": [
+          "app",
+          "graph",
+          "adapters"
+        ],
+        "note": "唯一可变字段是 _state，图只读。"
+      },
+      {
+        "id": "cursor",
+        "label": "游标机制",
+        "focus": [
+          "state",
+          "sentinels"
+        ],
+        "note": "__PRIOR_STEP / __SEQUENCE_ID 两个哨兵键决定下一步。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "app",
+      "type": "backend",
+      "label": "Application",
+      "sublabel": "application.py:835 · 构造仅限内部",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        200,
+        64
+      ]
+    },
+    {
+      "id": "graph",
+      "type": "database",
+      "label": "_graph : Graph",
+      "sublabel": "图 + 邻接表（只读）",
+      "pos": [
+        340,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "state",
+      "type": "database",
+      "label": "_state : State",
+      "sublabel": "唯一可变字段 _set_state:2031",
+      "pos": [
+        640,
+        110
+      ],
+      "size": [
+        196,
+        64
+      ],
+      "tag": "游标载体"
+    },
+    {
+      "id": "sentinels",
+      "type": "database",
+      "label": "两个哨兵键",
+      "sublabel": "__PRIOR_STEP / __SEQUENCE_ID",
+      "pos": [
+        920,
+        110
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "adapters",
+      "type": "messagebus",
+      "label": "LifecycleAdapterSet",
+      "sublabel": "全部观测切面 · TracerFactoryContextHook",
+      "pos": [
+        340,
+        340
+      ],
+      "size": [
+        210,
+        64
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "app",
+      "to": "graph",
+      "label": "只读遍历"
+    },
+    {
+      "from": "app",
+      "to": "state",
+      "label": "_set_state 推进",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [
+        [
+          140,
+          60
+        ],
+        [
+          738,
+          60
+        ]
+      ],
+      "labelAt": [
+        440,
+        60
+      ]
+    },
+    {
+      "from": "state",
+      "to": "sentinels",
+      "label": "决定下一步"
+    },
+    {
+      "from": "app",
+      "to": "adapters",
+      "label": "post_application_create",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "内部结构",
+      "items": [
+        "Application 构造仅限内部/Builder",
+        "_graph 与 _public_facing_graph（含 entrypoint）",
+        "构造后立即触发 post_application_create 钩子"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "游标机制",
+      "items": [
+        "位置活在 State 里，而非运行时变量",
+        "__PRIOR_STEP 记录上一步",
+        "__SEQUENCE_ID 记录序号"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "可恢复性",
+      "items": [
+        "State 序列化即携带游标",
+        "持久化后可从任意步恢复",
+        "这正是断点恢复的基石（07 篇）"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "生命周期钩子：11 个事件的全周期触发",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      500
+    ],
+    "views": [
+      {
+        "id": "timeline",
+        "label": "触发时间线",
+        "focus": [
+          "create",
+          "pre",
+          "span"
+        ],
+        "note": "从 build 完成到每步 span 的派发顺序。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "创建"
+    },
+    {
+      "label": "运行"
+    },
+    {
+      "label": "步骤"
+    },
+    {
+      "label": "内部"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "create",
+      "type": "backend",
+      "label": "build 完成",
+      "sublabel": "post_application_create",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "pre",
+      "type": "backend",
+      "label": "run() 进入",
+      "sublabel": "pre_run_execute_call",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "step",
+      "type": "backend",
+      "label": "步骤 N 开始",
+      "sublabel": "pre_run_step",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "span",
+      "type": "messagebus",
+      "label": "action 内部 span",
+      "sublabel": "pre_start_span · log_attrs",
+      "stage": 3,
+      "row": 1,
+      "width": 130
+    }
+  ],
+  "flows": [
+    {
+      "from": "create",
+      "to": "pre",
+      "label": "钩子派发"
+    },
+    {
+      "from": "pre",
+      "to": "step",
+      "label": "进入步骤"
+    },
+    {
+      "from": "step",
+      "to": "span",
+      "label": "LLM 子调用等",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Hook 协议",
+      "items": [
+        "11 个事件 × 同步/异步双版本",
+        "LifecycleAdapterSet 统一管理",
+        "注册时爬 MRO 而非显式声明"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "全周期覆盖",
+      "items": [
+        "build 完成 → run 进入 → 每步前后",
+        "span 级：LLM 子调用也可追踪",
+        "异常路径同样有事件"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "追踪",
+      "items": [
+        "visibility/tracing.py 提供 span",
+        "追踪事件喂给遥测 UI（10 篇）",
+        "OpenTelemetry 双向桥（11 篇）"
+      ]
+    }
+  ]
+}
