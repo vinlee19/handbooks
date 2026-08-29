@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>08 · 设计精髓与创新点 — pg_mooncake 源码深度解析</title>
+<style>
+:root{
+  --pg:#336791; --ext:#6366f1; --moon:#059669; --duck:#d97706; --dmk:#ea580c;
+  --ice:#0284c7; --ink:#0f172a; --mut:#64748b; --line:#e2e8f0; --bg:#f8fafc;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg);line-height:1.75}
+.wrap{max-width:1100px;margin:0 auto;padding:0 28px}
+a{color:var(--ext);text-decoration:none}
+a:hover{text-decoration:underline}
+code,pre,.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+code.path{background:#eef2ff;color:#4338ca;padding:1px 7px;border-radius:6px;font-size:.86em;white-space:nowrap}
+code.k{background:#f1f5f9;border:1px solid var(--line);padding:1px 6px;border-radius:6px;font-size:.86em}
+.topbar{position:sticky;top:0;z-index:9;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.topbar .wrap{display:flex;align-items:center;gap:18px;height:52px;font-size:14px}
+.topbar .logo{font-weight:800;color:var(--ext);font-size:15px}
+.topbar a{color:var(--mut)}
+.hero{background:linear-gradient(135deg,#fefce8 0%,#f0fdfa 100%);border-bottom:1px solid var(--line);padding:30px 0 26px}
+.hero .tag{display:inline-block;background:#0f172a;color:#fff;border-radius:999px;padding:2px 14px;font-size:12.5px;font-weight:600}
+.hero h1{font-size:28px;margin:12px 0 6px}
+.hero p.sub{color:#334155;font-size:15px;margin:0;max-width:860px}
+main{padding:30px 0 60px}
+h2{font-size:23px;border-left:5px solid #0f172a;padding-left:12px;margin:42px 0 14px}
+h3{font-size:17.5px;margin:26px 0 10px;color:#1e293b}
+.fig{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 18px 8px;margin:24px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.fig svg{width:100%;height:auto;display:block}
+.fig-cap{text-align:center;color:var(--mut);font-size:13px;padding:12px 0 8px;border-top:1px dashed var(--line);margin-top:14px}
+.callout{border-radius:12px;padding:14px 18px;margin:18px 0;font-size:14.5px;border:1px solid}
+.callout b:first-child{display:block;margin-bottom:4px}
+.tip{background:#ecfdf5;border-color:#a7f3d0}.tip b:first-child{color:#047857}
+.warn{background:#fffbeb;border-color:#fde68a}.warn b:first-child{color:#b45309}
+.key{background:#eef2ff;border-color:#c7d2fe}.key b:first-child{color:#4338ca}
+table.t{width:100%;border-collapse:collapse;font-size:14px;margin:16px 0;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+table.t th{background:#f1f5f9;text-align:left;padding:9px 14px;border-bottom:2px solid var(--line);font-size:13px;color:#334155}
+table.t td{padding:9px 14px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+footer{border-top:1px solid var(--line);padding:26px 0 44px;color:var(--mut);font-size:13.5px}
+.pager{display:flex;justify-content:space-between;gap:14px;margin-top:34px}
+.pager a{flex:1;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 18px;color:var(--ink)}
+.pager a:hover{border-color:#0f172a;text-decoration:none}
+.pager .dir{font-size:12px;color:var(--mut);display:block}
+ol.dec{padding-left:0;list-style:none;counter-reset:d}
+ol.dec li{counter-increment:d;position:relative;padding:10px 0 10px 52px;margin:6px 0}
+ol.dec li::before{content:counter(d);position:absolute;left:0;top:10px;width:34px;height:34px;line-height:34px;text-align:center;background:#0f172a;color:#fff;border-radius:10px;font-weight:800}
+</style>
+</head>
+<body>
+<div class="topbar"><div class="wrap">
+  <span class="logo">🧁 pg_mooncake 源码深度解析</span>
+  <a href="index.html">总览</a><a href="01-architecture.html">架构总览</a><a href="02-postgres-extension.html">扩展层</a><a href="03-moonlink-engine.html">moonlink</a><a href="04-cdc-replication.html">CDC 复制</a><a href="05-storage-iceberg.html">存储与 Iceberg</a><a href="06-query-duckdb.html">查询路径</a><a href="07-data-flow.html">端到端数据流</a><a href="08-design-philosophy.html"><b style="color:#0f172a">设计精髓</b></a>
+</div></div>
+
+<div class="hero"><div class="wrap">
+  <span class="tag">第 08 章 · 终章</span>
+  <h1>设计精髓：八个决策、一份权衡清单、一条调试路线</h1>
+  <p class="sub">把全部源码读完后回望：这个项目真正的创新不是某个算法，而是一组互相成就的架构决策。本章逐一复盘它们，并给出诚实的局限清单与动手调试路线。</p>
+</div></div>
+
+<main class="wrap">
+
+<h2>8.1 八个关键设计决策</h2>
+<ol class="dec">
+  <li><b>空壳表 AM 作为“路标”</b>——不实现数据路径，只把 <code class="k">rd_tableam</code> 当作查询路由的稳定锚点（src/table.rs）。换来原生目录管理/权限/工具链兼容，代价是“看起来像表但不是表”的认知成本。</li>
+  <li><b>引擎内嵌为 bgworker</b>——moonlink 与 Postgres 同进程同生共死，Unix socket 通信零网络开销；崩溃隔离靠 Postgres 的 worker 重启机制（15s），不需要任何看门狗代码。</li>
+  <li><b>控制面 RPC、数据面文件</b>——RPC 只传指令与元数据（最长载荷是文件清单），数据永远以文件路径共享。带宽占用与数据规模彻底解耦。</li>
+  <li><b>LSN 作为唯一时钟</b>——Postgres 的 <code class="k">XactLastCommitEnd</code> 贯穿写入（复制位点）与读取（扫描快照）两条链路，一个标量同时回答“读哪、等到哪、恢复到哪”。</li>
+  <li><b>每表 actor + 结果回流</b>——单写者消除一切数据竞争；重活 spawn 出去、结果作为事件回流队列，串行核心保持极薄。</li>
+  <li><b>Union Read 物化内存数据</b>——查询不必等 flush：已提交未落盘的行物化成临时 Parquet 参与扫描。新鲜度与落盘节奏解耦，这是“亚秒级”的直接来源。</li>
+  <li><b>开放格式优先</b>——数据文件是标准 Iceberg（任何引擎可读），删除向量/索引放 Puffin 附件；moonlink 死机也不损坏数据，第三方引擎最多读到旧快照。</li>
+  <li><b>复用而不重造</b>——路由用 pg_duckdb、扫描用 parquet_scan 克隆、Iceberg 提交用 apache/iceberg-rust、统计裁剪用 DuckDB 原生过滤框架。自研代码只出现在“胶水”与“增量语义”上。</li>
+</ol>
+
+<h2>8.2 与同类方案的对比</h2>
+<div class="fig">
+<svg viewBox="0 0 980 430" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <text x="20" y="28" font-size="15" font-weight="700" fill="#334155">在 Postgres 上做列存分析的四种路线</text>
+  <g font-size="11.5">
+    <rect x="20" y="48" width="220" height="350" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+    <text x="130" y="74" text-anchor="middle" font-weight="700" fill="#475569">① FDW / 外部队列</text>
+    <text x="130" y="104" text-anchor="middle" fill="#64748b">pg_parquet / duckdb_fdw /</text>
+    <text x="130" y="122" text-anchor="middle" fill="#64748b">外部 ETL 定期导出</text>
+    <text x="130" y="156" text-anchor="middle" fill="#dc2626">✗ 新鲜度：分钟~小时级</text>
+    <text x="130" y="180" text-anchor="middle" fill="#dc2626">✗ 无增量语义（全量重写）</text>
+    <text x="130" y="204" text-anchor="middle" fill="#16a34a">✔ 实现简单</text>
+    <text x="130" y="232" text-anchor="middle" fill="#64748b">身份：一张“外部表”</text>
+
+    <rect x="255" y="48" width="220" height="350" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+    <text x="365" y="74" text-anchor="middle" font-weight="700" fill="#475569">② 原生列存扩展</text>
+    <text x="365" y="104" text-anchor="middle" fill="#64748b">hydra / citus columnar</text>
+    <text x="365" y="134" text-anchor="middle" fill="#16a34a">✔ 与 Postgres 深度一体</text>
+    <text x="365" y="158" text-anchor="middle" fill="#dc2626">✗ 私有格式：引擎锁定</text>
+    <text x="365" y="182" text-anchor="middle" fill="#dc2626">✗ UPDATE/DELETE 受限</text>
+    <text x="365" y="206" text-anchor="middle" fill="#dc2626">✗ 无湖仓生态（Spark/Trino</text>
+    <text x="365" y="224" text-anchor="middle" fill="#dc2626">　读不到你的数据）</text>
+    <text x="365" y="252" text-anchor="middle" fill="#64748b">身份：另一种堆存储</text>
+
+    <rect x="490" y="48" width="220" height="350" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+    <text x="600" y="74" text-anchor="middle" font-weight="700" fill="#475569">③ 外部湖仓 + 独立服务</text>
+    <text x="600" y="104" text-anchor="middle" fill="#64748b">Debezium + Flink + Iceberg</text>
+    <text x="600" y="134" text-anchor="middle" fill="#16a34a">✔ 完整湖仓能力</text>
+    <text x="600" y="158" text-anchor="middle" fill="#dc2626">✗ 运维 3~5 个组件</text>
+    <text x="600" y="182" text-anchor="middle" fill="#dc2626">✗ 延迟秒~分钟级</text>
+    <text x="600" y="206" text-anchor="middle" fill="#dc2626">✗ Postgres 侧查询要经</text>
+    <text x="600" y="224" text-anchor="middle" fill="#dc2626">　另一套引擎/网关</text>
+    <text x="600" y="252" text-anchor="middle" fill="#64748b">身份：数据平台</text>
+
+    <rect x="725" y="48" width="235" height="350" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="2"/>
+    <text x="842" y="74" text-anchor="middle" font-weight="700" fill="#047857">④ pg_mooncake 路线</text>
+    <text x="842" y="102" text-anchor="middle" fill="#065f46">逻辑复制 + moonlink</text>
+    <text x="842" y="120" text-anchor="middle" fill="#065f46">+ DuckDB 直读</text>
+    <text x="842" y="150" text-anchor="middle" fill="#16a34a">✔ 亚秒新鲜度（Union Read）</text>
+    <text x="842" y="174" text-anchor="middle" fill="#16a34a">✔ 开放 Iceberg 格式</text>
+    <text x="842" y="198" text-anchor="middle" fill="#16a34a">✔ 单扩展安装、零外部组件</text>
+    <text x="842" y="222" text-anchor="middle" fill="#16a34a">✔ Postgres 原生 SQL 体验</text>
+    <text x="842" y="246" text-anchor="middle" fill="#d97706">△ 镜像表只读（写走源表）</text>
+    <text x="842" y="270" text-anchor="middle" fill="#d97706">△ 复制槽 WAL 保留依赖引擎</text>
+    <text x="842" y="294" text-anchor="middle" fill="#d97706">　健康（水位回路背压）</text>
+    <text x="842" y="322" text-anchor="middle" fill="#64748b">身份：表的一面“列存镜子”</text>
+    <text x="842" y="352" text-anchor="middle" fill="#94a3b8">本质 = 把 ③ 的平台能力</text>
+    <text x="842" y="370" text-anchor="middle" fill="#94a3b8">压缩进一个 Postgres 进程</text>
+  </g>
+</svg>
+<div class="fig-cap">图 8-1 · 四种路线对比：pg_mooncake 的定位是“零运维成本换取亚秒级开放格式列存”</div>
+</div>
+
+<h2>8.3 控制面 / 数据面分离的几何学</h2>
+<div class="fig">
+<svg viewBox="0 0 980 340" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <text x="20" y="28" font-size="15" font-weight="700" fill="#334155">两类通道，两种负载，互不干扰</text>
+  <!-- control plane -->
+  <rect x="20" y="48" width="440" height="260" rx="10" fill="#eef2ff" stroke="#a5b4fc"/>
+  <text x="240" y="76" text-anchor="middle" font-size="13.5" font-weight="700" fill="#4338ca">控制面：bincode over Unix Socket</text>
+  <rect x="40" y="92" width="180" height="180" rx="8" fill="#fff" stroke="#a5b4fc"/>
+  <text x="130" y="118" text-anchor="middle" font-size="12" font-weight="700" fill="#4338ca">载荷特征</text>
+  <text x="130" y="146" text-anchor="middle" font-size="11" fill="#4f46e5">10 种 RPC 指令</text>
+  <text x="130" y="168" text-anchor="middle" font-size="11" fill="#4f46e5">Arrow IPC schema</text>
+  <text x="130" y="190" text-anchor="middle" font-size="11" fill="#4f46e5">文件清单(几 KB~几 MB)</text>
+  <text x="130" y="216" text-anchor="middle" font-size="11" fill="#4f46e5">parquet footer 字节</text>
+  <text x="130" y="244" text-anchor="middle" font-size="10.5" fill="#94a3b8">量级：与表数量/文件数相关</text>
+  <text x="130" y="262" text-anchor="middle" font-size="10.5" fill="#94a3b8">与行数无关</text>
+  <rect x="240" y="92" width="200" height="180" rx="8" fill="#fff" stroke="#a5b4fc"/>
+  <text x="340" y="118" text-anchor="middle" font-size="12" font-weight="700" fill="#4338ca">质量属性</text>
+  <text x="340" y="146" text-anchor="middle" font-size="11" fill="#4f46e5">低延迟(同机 socket)</text>
+  <text x="340" y="168" text-anchor="middle" font-size="11" fill="#4f46e5">强类型(bincode 双端一致)</text>
+  <text x="340" y="190" text-anchor="middle" font-size="11" fill="#4f46e5">可演化(枚举加变体)</text>
+  <text x="340" y="216" text-anchor="middle" font-size="11" fill="#4f46e5">可独立替换(gRPC 亦可)</text>
+  <text x="340" y="244" text-anchor="middle" font-size="10.5" fill="#94a3b8">moonlink_datafusion 走同一协议</text>
+  <text x="340" y="262" text-anchor="middle" font-size="10.5" fill="#94a3b8">证明其可多客户端复用</text>
+
+  <!-- data plane -->
+  <rect x="520" y="48" width="440" height="260" rx="10" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="740" y="76" text-anchor="middle" font-size="13.5" font-weight="700" fill="#c2410c">数据面：文件系统直读</text>
+  <rect x="540" y="92" width="180" height="180" rx="8" fill="#fff" stroke="#fdba74"/>
+  <text x="630" y="118" text-anchor="middle" font-size="12" font-weight="700" fill="#9a3412">载荷特征</text>
+  <text x="630" y="146" text-anchor="middle" font-size="11" fill="#c2410c">Parquet 数据文件</text>
+  <text x="630" y="168" text-anchor="middle" font-size="11" fill="#c2410c">Puffin 附件</text>
+  <text x="630" y="190" text-anchor="middle" font-size="11" fill="#c2410c">Iceberg manifest</text>
+  <text x="630" y="216" text-anchor="middle" font-size="11" fill="#c2410c">本地 or S3/GCS</text>
+  <text x="630" y="244" text-anchor="middle" font-size="10.5" fill="#94a3b8">量级：GB~TB 级</text>
+  <text x="630" y="262" text-anchor="middle" font-size="10.5" fill="#94a3b8">由 DuckDB 并行扫描消费</text>
+  <rect x="740" y="92" width="200" height="180" rx="8" fill="#fff" stroke="#fdba74"/>
+  <text x="840" y="118" text-anchor="middle" font-size="12" font-weight="700" fill="#9a3412">质量属性</text>
+  <text x="840" y="146" text-anchor="middle" font-size="11" fill="#c2410c">零拷贝过进程边界</text>
+  <text x="840" y="168" text-anchor="middle" font-size="11" fill="#c2410c">DuckDB 原生并行/向量化</text>
+  <text x="840" y="190" text-anchor="middle" font-size="11" fill="#c2410c">页面缓存友好</text>
+  <text x="840" y="216" text-anchor="middle" font-size="11" fill="#c2410c">第三方引擎可直接消费</text>
+  <text x="840" y="244" text-anchor="middle" font-size="10.5" fill="#94a3b8">“路径即契约”：写者与读者</text>
+  <text x="840" y="262" text-anchor="middle" font-size="10.5" fill="#94a3b8">只共享文件名与格式</text>
+</svg>
+<div class="fig-cap">图 8-2 · 控制面/数据面分离：RPC 传“去哪读”，文件系统管“怎么读”</div>
+</div>
+
+<h2>8.4 诚实的局限清单（读源码才能看见的）</h2>
+<table class="t">
+  <tr><th>局限</th><th>源码证据</th><th>影响 / 缓解</th></tr>
+  <tr><td>镜像表只读</td><td>duckdb_mooncake <code class="k">PlanInsert/Delete/Update</code> 抛 NotImplementedException；表 AM 写回调全是 <code class="k">unimplemented!()</code></td><td>写入必须经源表（或 load_files）。这是刻意取舍：单写入口让 CDC 语义永远简单</td></tr>
+  <tr><td>VACUUM/CLUSTER 会 panic</td><td>AM 的 <code class="k">relation_vacuum / relation_copy_for_cluster</code> 未实现</td><td>对空壳表执行这些命令没有意义，panic 即“误用报警”</td></tr>
+  <tr><td>复制模式仅 NOT NULL</td><td>create_table 的 pg_attribute 查询只拼类型 + NOT NULL</td><td>PK/唯一约束/默认值不复制——镜像表是分析副本，不是热备</td></tr>
+  <tr><td>WAL 保留依赖引擎健康</td><td>confirmed_flush_lsn = min(所有表持久化水位)</td><td>moonlink 长期停滞 → 源库 WAL 膨胀。监控复制槽 restart_lsn 是运维必配</td></tr>
+  <tr><td>引擎全局单点</td><td>一个实例只有一个 moonlink bgworker，所有库的表都在其中</td><td>bgworker 崩溃 → 全部表复制中断 ~15s（重启后自动追平）</td></tr>
+  <tr><td>DuckDB 版本强绑定</td><td>OVERRIDE_GIT_DESCRIBE=v1.4.1 必须与 pg_duckdb 内嵌版本一致</td><td>升级三件套要同步；社区预编译扩展由 CI 保证兼容矩阵</td></tr>
+  <tr><td>无 ALTER TABLE 支持</td><td>src/ 无任何 ALTER 拦截；引擎有 AlterTable 事件但 SQL 侧未暴露</td><td>源表加列后需重建镜像（或未来版本补齐 alter_table RPC 通路）</td></tr>
+  <tr><td>ANALYZE 对镜像表无效</td><td><code class="k">scan_analyze_next_block</code> 返回 false；estimate_size 全 0</td><td>无影响：触及镜像表的查询整体交给 DuckDB，由其 Parquet 统计做计划</td></tr>
+</table>
+
+<h2>8.5 动手调试路线（debug-learning 分支指南）</h2>
+<div class="callout tip"><b>🛠 快速上手</b>
+<pre style="margin:8px 0 0;font-family:Menlo,monospace;font-size:12.5px;color:#065f46">
+make pg_duckdb &amp;&amp; make duckdb_mooncake &amp;&amp; make install   # 构建三件套
+make test                                                  # pg_regress: sanity / partitioned_table
+cd moonlink &amp;&amp; cargo test -p moonlink                      # 引擎单测（~600 个）
+psql -c "CALL mooncake.create_table('c','r')"              # 复现链路
+psql -c "EXPLAIN SELECT * FROM c"                          # 应显示 DuckDB 计划
+ls $PGDATA/pg_mooncake/                                    # 观察 socket/parquet/wal 的诞生
+psql -c "SELECT * FROM mooncake.list_tables()"             # commit_lsn / flush_lsn 水位
+</pre></div>
+<ul>
+  <li><b>看写入进度</b>：<code class="k">mooncake.list_tables()</code> 的 commit_lsn 与 flush_lsn 差值 = 内存中未落盘的数据量；复制槽 <code class="k">pg_replication_slots</code> 的 confirmed_flush_lsn 停滞 = 引擎持久化卡住。</li>
+  <li><b>看查询路径</b>：EXPLAIN 输出若不是 DuckDB 计划，先查 <code class="k">duckdb.extensions</code> 是否有 autoload 的 mooncake、<code class="k">duckdb.allow_community_extensions</code> 是否开启。</li>
+  <li><b>读状态断点</b>（Rust 侧）：`moonlink/src/moonlink/src/table_handler.rs` 的 <code class="k">event_loop</code>、`union_read/read_state_manager.rs` 的 <code class="k">try_read</code> 是两条链路的咽喉。</li>
+  <li><b>读状态断点</b>（C++ 侧）：`duckdb_mooncake/src/storage/mooncake_scan.cpp` 的 <code class="k">MooncakeMultiFileList::LazyInitialize</code> 观察文件裁剪；`mooncake_table_metadata.cpp` 的 <code class="k">GetDeleteFilter</code> 观察位图合并。</li>
+  <li><b> chaos 测试</b>：moonlink 内置 <code class="k">chaos-test</code> feature（故障注入重放框架），是理解崩溃语义的最佳教材。</li>
+</ul>
+
+<div class="callout key"><b>🎓 结语</b>
+pg_mooncake 用约 940 行扩展代码 + 一个独立引擎，把“实时 CDC → Arrow 内存列存 → Parquet/Iceberg → DuckDB 向量查询”整条流水线装进了 Postgres 进程。它对“扩展边界”“一致性时钟”“开放格式”三个问题的回答，比任何单个组件的实现都更值得借鉴——这也是把它作为湖仓/HTAP 架构教学样本的价值。</div>
+
+<div class="pager">
+  <a href="07-data-flow.html"><span class="dir">◀ 上一篇</span><b>07 · 端到端数据流</b></a>
+  <a href="index.html"><span class="dir">回到 ▶</span><b>总览导航</b></a>
+</div>
+</main>
+
+<footer><div class="wrap">pg_mooncake 源码深度解析 · 第 08 章 · 基于 commit b7c67e0 · 全系列完</div></footer>
+</body>
+</html>

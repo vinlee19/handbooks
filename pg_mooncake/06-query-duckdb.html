@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>06 · 查询路径：pg_duckdb + duckdb_mooncake — pg_mooncake 源码深度解析</title>
+<style>
+:root{
+  --pg:#336791; --ext:#6366f1; --moon:#059669; --duck:#d97706; --dmk:#ea580c;
+  --ice:#0284c7; --ink:#0f172a; --mut:#64748b; --line:#e2e8f0; --bg:#f8fafc;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg);line-height:1.75}
+.wrap{max-width:1100px;margin:0 auto;padding:0 28px}
+a{color:var(--ext);text-decoration:none}
+a:hover{text-decoration:underline}
+code,pre,.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+code.path{background:#eef2ff;color:#4338ca;padding:1px 7px;border-radius:6px;font-size:.86em;white-space:nowrap}
+code.k{background:#f1f5f9;border:1px solid var(--line);padding:1px 6px;border-radius:6px;font-size:.86em}
+.topbar{position:sticky;top:0;z-index:9;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.topbar .wrap{display:flex;align-items:center;gap:18px;height:52px;font-size:14px}
+.topbar .logo{font-weight:800;color:var(--ext);font-size:15px}
+.topbar a{color:var(--mut)}
+.hero{background:linear-gradient(135deg,#fffbeb 0%,#fff7ed 100%);border-bottom:1px solid var(--line);padding:30px 0 26px}
+.hero .tag{display:inline-block;background:var(--duck);color:#fff;border-radius:999px;padding:2px 14px;font-size:12.5px;font-weight:600}
+.hero h1{font-size:28px;margin:12px 0 6px}
+.hero p.sub{color:#334155;font-size:15px;margin:0;max-width:860px}
+main{padding:30px 0 60px}
+h2{font-size:23px;border-left:5px solid var(--duck);padding-left:12px;margin:42px 0 14px}
+h3{font-size:17.5px;margin:26px 0 10px;color:#1e293b}
+.fig{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 18px 8px;margin:24px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.fig svg{width:100%;height:auto;display:block}
+.fig-cap{text-align:center;color:var(--mut);font-size:13px;padding:12px 0 8px;border-top:1px dashed var(--line);margin-top:14px}
+.codeblock{background:#0b1220;color:#dbe4f3;border-radius:12px;padding:0 0 14px;overflow:auto;font-size:13px;line-height:1.65;margin:18px 0}
+.codeblock .fname{display:block;background:#111c33;color:#93c5fd;padding:8px 16px;font-size:12px;border-bottom:1px solid #1e293b;font-family:ui-monospace,Menlo,monospace}
+.codeblock pre{margin:0;padding:14px 18px}
+.codeblock .c{color:#64748b}.codeblock .k{color:#c4b5fd}.codeblock .s{color:#86efac}.codeblock .f{color:#7dd3fc}
+.callout{border-radius:12px;padding:14px 18px;margin:18px 0;font-size:14.5px;border:1px solid}
+.callout b:first-child{display:block;margin-bottom:4px}
+.tip{background:#ecfdf5;border-color:#a7f3d0}.tip b:first-child{color:#047857}
+.warn{background:#fffbeb;border-color:#fde68a}.warn b:first-child{color:#b45309}
+.key{background:#eef2ff;border-color:#c7d2fe}.key b:first-child{color:#4338ca}
+table.t{width:100%;border-collapse:collapse;font-size:14px;margin:16px 0;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+table.t th{background:#f1f5f9;text-align:left;padding:9px 14px;border-bottom:2px solid var(--line);font-size:13px;color:#334155}
+table.t td{padding:9px 14px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+footer{border-top:1px solid var(--line);padding:26px 0 44px;color:var(--mut);font-size:13.5px}
+.pager{display:flex;justify-content:space-between;gap:14px;margin-top:34px}
+.pager a{flex:1;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 18px;color:var(--ink)}
+.pager a:hover{border-color:var(--duck);text-decoration:none}
+.pager .dir{font-size:12px;color:var(--mut);display:block}
+</style>
+</head>
+<body>
+<div class="topbar"><div class="wrap">
+  <span class="logo">🧁 pg_mooncake 源码深度解析</span>
+  <a href="index.html">总览</a><a href="01-architecture.html">架构总览</a><a href="02-postgres-extension.html">扩展层</a><a href="03-moonlink-engine.html">moonlink</a><a href="04-cdc-replication.html">CDC 复制</a><a href="05-storage-iceberg.html">存储与 Iceberg</a><a href="06-query-duckdb.html"><b style="color:var(--duck)">查询路径</b></a><a href="07-data-flow.html">端到端数据流</a><a href="08-design-philosophy.html">设计精髓</a>
+</div></div>
+
+<div class="hero"><div class="wrap">
+  <span class="tag">第 06 章</span>
+  <h1>查询路径：一条 SQL 如何被“劫持”进 DuckDB</h1>
+  <p class="sub">从 planner 钩子的强制路由，到 ATTACH 自动接湖仓，再到 mooncake_scan 对 parquet_scan 的“克隆改造”——本章拆开读取侧的每一环。</p>
+</div></div>
+
+<main class="wrap">
+
+<h2>6.1 查询路由：pg_duckdb 的 planner 钩子</h2>
+<p>pg_mooncake 自己没有任何查询钩子；路由完全由 pg_duckdb 完成。判断依据朴素而可靠：<b>关系的表访问方法指针是否在注册表里</b>。</p>
+<div class="fig">
+<svg viewBox="0 0 980 480" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <text x="20" y="28" font-size="15" font-weight="700" fill="#334155">SELECT 的路由决策树（pgduckdb_hooks.cpp）</text>
+  <rect x="330" y="46" width="320" height="46" rx="9" fill="#0b1220"/>
+  <text x="490" y="74" text-anchor="middle" fill="#93c5fd" font-size="13">SQL 进入 planner（DuckdbPlannerHook_Cpp）</text>
+  <path d="M490,92 L490,116" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <rect x="300" y="118" width="380" height="50" rx="9" fill="#fff" stroke="#94a3b8"/>
+  <text x="490" y="140" text-anchor="middle" font-size="12.5" fill="#334155">扫描查询树：每个 RangeTblEntry 查 rd_tableam</text>
+  <text x="490" y="158" text-anchor="middle" font-size="11" fill="#64748b">IsDuckdbTable(relid) → DuckdbTableAmGetName 查注册表（:66-80）</text>
+  <path d="M330,168 L200,216" stroke="#6366f1" stroke-width="2.2" marker-end="url(#mB)"/>
+  <path d="M650,168 L780,216" stroke="#d97706" stroke-width="2.2" marker-end="url(#mD)"/>
+  <rect x="60" y="218" width="300" height="96" rx="9" fill="#eef2ff" stroke="#818cf8"/>
+  <text x="210" y="244" text-anchor="middle" font-size="12.5" font-weight="700" fill="#4338ca">命中 mooncake / duckdb AM</text>
+  <text x="210" y="266" text-anchor="middle" font-size="11.5" fill="#4f46e5">NeedsDuckdbExecution = true（:203）</text>
+  <text x="210" y="288" text-anchor="middle" font-size="11.5" fill="#4f46e5">整条 SQL（含 JOIN 的普通表）交给 DuckDB</text>
+  <rect x="620" y="218" width="320" height="96" rx="9" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="780" y="244" text-anchor="middle" font-size="12.5" font-weight="700" fill="#475569">未命中</text>
+  <text x="780" y="266" text-anchor="middle" font-size="11.5" fill="#64748b">照常走 Postgres 原生 planner/executor</text>
+  <text x="780" y="288" text-anchor="middle" font-size="11.5" fill="#64748b">（完全无感，零开销）</text>
+
+  <rect x="60" y="338" width="440" height="120" rx="9" fill="#fffbeb" stroke="#fde68a"/>
+  <text x="280" y="364" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b45309">DML（INSERT/UPDATE/DELETE）额外检查 IsAllowedStatement</text>
+  <text x="280" y="388" text-anchor="middle" font-size="11.5" fill="#92400e">只允许“结果关系是 DuckDB 表”的 DML 通过；</text>
+  <text x="280" y="408" text-anchor="middle" font-size="11.5" fill="#92400e">普通 Postgres 表不允许经 DuckDB 写（防止绕过 WAL/约束）</text>
+  <text x="280" y="434" text-anchor="middle" font-size="11" fill="#d97706">⚠ 当前 duckdb_mooncake 的 PlanInsert/Delete/Update 直接抛</text>
+  <text x="280" y="452" text-anchor="middle" font-size="11" fill="#d97706">NotImplementedException → 镜像表只读，写必须走源表</text>
+
+  <rect x="540" y="338" width="400" height="120" rx="9" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="740" y="364" text-anchor="middle" font-size="12.5" font-weight="700" fill="#047857">EXPLAIN / 元命令同样被钩子覆盖</text>
+  <text x="740" y="388" text-anchor="middle" font-size="11.5" fill="#047857">EXPLAIN ANALYZE 显示 DuckDB 执行计划树；</text>
+  <text x="740" y="410" text-anchor="middle" font-size="11.5" fill="#047857">pgduckdb_ruleutils 反解析 DDL 时输出 USING mooncake</text>
+  <text x="740" y="436" text-anchor="middle" font-size="11" fill="#059669">分区源表不受影响：镜像表 c 本身不是分区表（AM 层面普通表），</text>
+  <text x="740" y="454" text-anchor="middle" font-size="11" fill="#059669">源表的分区结构由复制流抹平（tests/…/partitioned_table.sql 验证）</text>
+</svg>
+<div class="fig-cap">图 6-1 · 查询路由决策：以 rd_tableam 注册表为锚点，命中即整条 SQL 转向 DuckDB</div>
+</div>
+
+<h2>6.2 ATTACH 初始化链：五个环节自动接力</h2>
+<p>镜像表第一次被查询时，背后有一条全自动的初始化链——从社区仓库下载扩展二进制到湖仓挂载完成：</p>
+<div class="fig">
+<svg viewBox="0 0 980 540" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <text x="20" y="28" font-size="15" font-weight="700" fill="#334155">ATTACH 初始化链（每 backend 的 DuckDB 实例一次）</text>
+  <!-- steps -->
+  <g>
+    <rect x="20" y="48" width="180" height="120" rx="9" fill="#eef2ff" stroke="#a5b4fc"/>
+    <text x="110" y="72" text-anchor="middle" font-size="12" font-weight="700" fill="#4338ca">① CREATE EXTENSION</text>
+    <text x="110" y="94" text-anchor="middle" font-size="10.5" fill="#4f46e5">bootstrap.sql 执行：</text>
+    <text x="110" y="112" text-anchor="middle" font-size="10.5" fill="#4f46e5">duckdb.install_extension</text>
+    <text x="110" y="128" text-anchor="middle" font-size="10.5" fill="#4f46e5">('mooncake','community')</text>
+    <text x="110" y="152" text-anchor="middle" font-size="10" fill="#64748b">（pg_duckdb 的 SQL 函数）</text>
+
+    <rect x="220" y="48" width="180" height="120" rx="9" fill="#fffbeb" stroke="#fde68a"/>
+    <text x="310" y="72" text-anchor="middle" font-size="12" font-weight="700" fill="#b45309">② 登记 duckdb.extensions</text>
+    <text x="310" y="94" text-anchor="middle" font-size="10.5" fill="#92400e">pgduckdb_extensions.cpp:74</text>
+    <text x="310" y="114" text-anchor="middle" font-size="10.5" fill="#92400e">INSTALL "mooncake" FROM community</text>
+    <text x="310" y="134" text-anchor="middle" font-size="10.5" fill="#92400e">（首次：从扩展仓库下载二进制）</text>
+    <text x="310" y="156" text-anchor="middle" font-size="10" fill="#64748b">autoload = true 入库</text>
+
+    <rect x="420" y="48" width="180" height="120" rx="9" fill="#fff7ed" stroke="#fdba74"/>
+    <text x="510" y="72" text-anchor="middle" font-size="12" font-weight="700" fill="#c2410c">③ DuckDB 实例启动时 LOAD</text>
+    <text x="510" y="94" text-anchor="middle" font-size="10.5" fill="#9a3412">DuckDBManager::LoadExtensions</text>
+    <text x="510" y="114" text-anchor="middle" font-size="10.5" fill="#9a3412">（pgduckdb_duckdb.cpp:252）</text>
+    <text x="510" y="134" text-anchor="middle" font-size="10.5" fill="#9a3412">读取 autoload 行 → LOAD mooncake</text>
+    <text x="510" y="156" text-anchor="middle" font-size="10" fill="#64748b">需要 GUC allow_community_extensions</text>
+
+    <rect x="620" y="48" width="180" height="120" rx="9" fill="#fff7ed" stroke="#fdba74"/>
+    <text x="710" y="72" text-anchor="middle" font-size="12" font-weight="700" fill="#c2410c">④ 扩展 Load()</text>
+    <text x="710" y="94" text-anchor="middle" font-size="10.5" fill="#9a3412">mooncake_extension.cpp:8</text>
+    <text x="710" y="114" text-anchor="middle" font-size="10.5" fill="#9a3412">AutoLoadExtension(parquet)</text>
+    <text x="710" y="134" text-anchor="middle" font-size="10.5" fill="#9a3412">storage_extensions["mooncake"]</text>
+    <text x="710" y="156" text-anchor="middle" font-size="10" fill="#64748b">= MooncakeStorageExtension</text>
+
+    <rect x="820" y="48" width="140" height="120" rx="9" fill="#ecfdf5" stroke="#6ee7b7"/>
+    <text x="890" y="72" text-anchor="middle" font-size="12" font-weight="700" fill="#047857">⑤ dlsym 回调</text>
+    <text x="890" y="94" text-anchor="middle" font-size="10.5" fill="#047857">Pgmooncake::GetInitQuery()</text>
+    <text x="890" y="112" text-anchor="middle" font-size="10.5" fill="#047857">dlsym(RTLD_DEFAULT,</text>
+    <text x="890" y="128" text-anchor="middle" font-size="10.5" fill="#047857">"pgmooncake_get_init_query")</text>
+    <text x="890" y="152" text-anchor="middle" font-size="10" fill="#059669">拿回 ATTACH 语句</text>
+  </g>
+  <path d="M200,108 L220,108" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <path d="M400,108 L420,108" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <path d="M600,108 L620,108" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <path d="M800,108 L820,108" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+
+  <!-- attach -->
+  <rect x="20" y="200" width="940" height="150" rx="10" fill="#0b1220"/>
+  <text x="40" y="226" font-size="12" fill="#93c5fd" font-family="Menlo,monospace">// 扩展加载后立刻执行（同一进程内直接拿到本实例信息）</text>
+  <text x="40" y="252" font-size="13.5" fill="#86efac" font-family="Menlo,monospace" font-weight="700">ATTACH DATABASE 'mooncake' (TYPE mooncake, URI 'pg_mooncake/moonlink.sock', DATABASE '&lt;当前库名&gt;');</text>
+  <text x="40" y="282" font-size="12" fill="#dbe4f3" font-family="Menlo,monospace">→ MooncakeAttach(mooncake_storage.cpp:7)：解析 URI(本地 socket) + DATABASE(库名)</text>
+  <text x="40" y="304" font-size="12" fill="#dbe4f3" font-family="Menlo,monospace">→ MooncakeCatalog(持有一个 Moonlink 客户端) + MooncakeTransactionManager</text>
+  <text x="40" y="330" font-size="11.5" fill="#64748b" font-family="Menlo,monospace">Moonlink 客户端 = moonlink_ffi 静态库（C ABI 封装 moonlink_rpc，tokio UnixStream）——与扩展层走同一个 socket 文件</text>
+
+  <!-- catalog objects -->
+  <rect x="20" y="372" width="300" height="150" rx="10" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="170" y="396" font-size="12.5" font-weight="700" text-anchor="middle" fill="#065f46">MooncakeCatalog</text>
+  <text x="170" y="420" text-anchor="middle" font-size="11" fill="#047857">duckdb Catalog：列出/查找 schema</text>
+  <text x="170" y="440" text-anchor="middle" font-size="11" fill="#047857">GetSchema → MooncakeSchema</text>
+  <text x="170" y="466" text-anchor="middle" font-size="10.5" fill="#059669">LookupEntry 时向 moonlink 取表 schema</text>
+  <text x="170" y="486" text-anchor="middle" font-size="10.5" fill="#059669">（Arrow IPC → nanoarrow → CreateTableInfo）</text>
+  <text x="170" y="506" text-anchor="middle" font-size="10" fill="#94a3b8">mooncake_schema.cpp / mooncake_catalog.cpp</text>
+  <rect x="340" y="372" width="300" height="150" rx="10" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="490" y="396" font-size="12.5" font-weight="700" text-anchor="middle" fill="#065f46">MooncakeTable（DuckDB 侧）</text>
+  <text x="490" y="420" text-anchor="middle" font-size="11" fill="#047857">缓存表结构 + 所属事务的 lsn</text>
+  <text x="490" y="440" text-anchor="middle" font-size="11" fill="#047857">GetScanFunction → mooncake_scan</text>
+  <text x="490" y="466" text-anchor="middle" font-size="10.5" fill="#059669">GetTableMetadata 惰性构建文件清单</text>
+  <text x="490" y="486" text-anchor="middle" font-size="10.5" fill="#059669">（scan_table_begin，下一节）</text>
+  <text x="490" y="506" text-anchor="middle" font-size="10" fill="#94a3b8">mooncake_table.cpp</text>
+  <rect x="660" y="372" width="300" height="150" rx="10" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="810" y="396" font-size="12.5" font-weight="700" text-anchor="middle" fill="#065f46">MooncakeTransaction</text>
+  <text x="810" y="420" text-anchor="middle" font-size="11" fill="#047857">Begin 时取 lsn = Pgmooncake::GetLsn()</text>
+  <text x="810" y="440" text-anchor="middle" font-size="11" fill="#047857">= XactLastCommitEnd（dlsym）</text>
+  <text x="810" y="466" text-anchor="middle" font-size="10.5" fill="#059669">所有本事务内的扫描统一钉在该 LSN</text>
+  <text x="810" y="486" text-anchor="middle" font-size="10.5" fill="#059669">（重复读一致性）</text>
+  <text x="810" y="506" text-anchor="middle" font-size="10" fill="#94a3b8">mooncake_transaction.cpp:9</text>
+</svg>
+<div class="fig-cap">图 6-2 · 从 CREATE EXTENSION 到 ATTACH：五个自动接力环节与三个 catalog 对象</div>
+</div>
+
+<h2>6.3 mooncake_scan：站在 parquet_scan 肩膀上</h2>
+<p>duckdb_mooncake 最聪明的实现选择：<b>不写扫描器，只改造扫描器</b>。<code class="k">mooncake_scan</code> 是 <code class="k">parquet_scan</code> 表函数的克隆（<code class="path">duckdb_mooncake/src/storage/mooncake_scan.cpp:159-177</code>），仅替换四个组件：</p>
+<div class="fig">
+<svg viewBox="0 0 980 560" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <text x="20" y="28" font-size="15" font-weight="700" fill="#334155">mooncake_scan 执行管道</text>
+  <!-- pipeline -->
+  <rect x="20" y="48" width="940" height="86" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="40" y="72" font-size="12.5" font-weight="700" fill="#334155">管道流</text>
+  <g font-size="11.5">
+    <rect x="40" y="84" width="150" height="36" rx="7" fill="#e0f2fe" stroke="#38bdf8"/><text x="115" y="107" text-anchor="middle" fill="#075985">SQL + 谓词/投影</text>
+    <rect x="215" y="84" width="150" height="36" rx="7" fill="#fff" stroke="#7dd3fc"/><text x="290" y="107" text-anchor="middle" fill="#075985">MooncakeMultiFileList</text>
+    <rect x="390" y="84" width="150" height="36" rx="7" fill="#fff" stroke="#7dd3fc"/><text x="465" y="107" text-anchor="middle" fill="#075985">文件级裁剪(统计)</text>
+    <rect x="565" y="84" width="160" height="36" rx="7" fill="#fff" stroke="#7dd3fc"/><text x="645" y="107" text-anchor="middle" fill="#075985">parquet 读取器×N</text>
+    <rect x="750" y="84" width="90" height="36" rx="7" fill="#ecfdf5" stroke="#6ee7b7"/><text x="795" y="107" text-anchor="middle" fill="#047857">删行过滤</text>
+    <rect x="860" y="84" width="90" height="36" rx="7" fill="#ecfdf5" stroke="#6ee7b7"/><text x="905" y="107" text-anchor="middle" fill="#047857">Arrow 批</text>
+  </g>
+  <path d="M190,102 L215,102" stroke="#0284c7" stroke-width="2" marker-end="url(#mF)"/>
+  <path d="M365,102 L390,102" stroke="#0284c7" stroke-width="2" marker-end="url(#mF)"/>
+  <path d="M540,102 L565,102" stroke="#0284c7" stroke-width="2" marker-end="url(#mF)"/>
+  <path d="M725,102 L750,102" stroke="#059669" stroke-width="2" marker-end="url(#mC)"/>
+  <path d="M840,102 L860,102" stroke="#059669" stroke-width="2" marker-end="url(#mC)"/>
+
+  <!-- detail boxes -->
+  <rect x="20" y="158" width="455" height="200" rx="10" fill="#e0f2fe" stroke="#38bdf8"/>
+  <text x="247" y="182" text-anchor="middle" font-size="12.5" font-weight="700" fill="#075985">文件清单从哪来：MooncakeTableMetadata 解析</text>
+  <text x="40" y="206" font-size="11.5" fill="#0369a1">GetTableMetadata（mooncake_table_metadata.cpp:11）：</text>
+  <text x="40" y="226" font-size="11.5" fill="#0369a1">RPC scan_table_begin(db, table, lsn) → 平铺缓冲：</text>
+  <g font-size="10.5" font-family="Menlo,monospace">
+    <rect x="40" y="238" width="96" height="30" rx="5" fill="#4338ca"/><text x="88" y="257" text-anchor="middle" fill="#fff">data_files_len</text>
+    <rect x="136" y="238" width="96" height="30" rx="5" fill="#6366f1"/><text x="184" y="257" text-anchor="middle" fill="#fff">offsets[u32]×n</text>
+    <rect x="232" y="238" width="96" height="30" rx="5" fill="#4338ca"/><text x="280" y="257" text-anchor="middle" fill="#fff">puffin_len</text>
+    <rect x="328" y="238" width="90" height="30" rx="5" fill="#6366f1"/><text x="373" y="257" text-anchor="middle" fill="#fff">offsets</text>
+  </g>
+  <g font-size="10.5" font-family="Menlo,monospace">
+    <rect x="40" y="274" width="96" height="30" rx="5" fill="#4338ca"/><text x="88" y="293" text-anchor="middle" fill="#fff">dv_len</text>
+    <rect x="136" y="274" width="150" height="30" rx="5" fill="#059669"/><text x="211" y="293" text-anchor="middle" fill="#fff">DeletionVector: u32[4]</text>
+    <rect x="286" y="274" width="96" height="30" rx="5" fill="#4338ca"/><text x="334" y="293" text-anchor="middle" fill="#fff">pd_len</text>
+    <rect x="382" y="274" width="93" height="30" rx="5" fill="#059669"/><text x="428" y="293" text-anchor="middle" fill="#fff">u32[2]</text>
+  </g>
+  <text x="40" y="326" font-size="11" fill="#0369a1">+ 尾部路径 blob 区。DV = (data_file, puffin_file, offset, size)；</text>
+  <text x="40" y="346" font-size="11" fill="#0369a1">position_delete = (data_file, row)。结构体定义 mooncake_table_metadata.hpp:9-47</text>
+
+  <rect x="505" y="158" width="455" height="200" rx="10" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="732" y="182" text-anchor="middle" font-size="12.5" font-weight="700" fill="#c2410c">文件级裁剪：用 Parquet 统计先砍文件</text>
+  <text x="525" y="206" font-size="11.5" fill="#9a3412">MooncakeMultiFileList::LazyInitialize（mooncake_scan.cpp:39-60）：</text>
+  <text x="525" y="228" font-size="11.5" fill="#9a3412">· 对每个候选文件调用 get_parquet_metadatas RPC</text>
+  <text x="525" y="250" font-size="11.5" fill="#9a3412">　（moonlink 并行取 footer，批量 128，返回原始 bytes）</text>
+  <text x="525" y="272" font-size="11.5" fill="#9a3412">· 与 DuckDB TableFilterSet 比较 min/max → DataFileStatistics</text>
+  <text x="525" y="294" font-size="11.5" fill="#9a3412">· 统计缓存于 DuckDB ObjectCache（"mooncake_stats"，:30）</text>
+  <text x="525" y="322" font-size="11" fill="#c2410c">效果：谓词不命中的 Parquet 文件整个跳过，row group 统计再由</text>
+  <text x="525" y="342" font-size="11" fill="#c2410c">原生 parquet reader 二次裁剪 —— 两级裁剪都是“免费的”</text>
+
+  <!-- deletion filter -->
+  <rect x="20" y="376" width="940" height="164" rx="10" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="490" y="400" text-anchor="middle" font-size="12.5" font-weight="700" fill="#047857">删行过滤：MooncakeDeleteFilter（mooncake_table_metadata.cpp:45-88）</text>
+  <text x="40" y="426" font-size="11.5" fill="#065f46">① 按 DV 条目打开对应 Puffin 文件（read_through_cache 优先）→ 定位 blob → 解析 Roaring Bitmap</text>
+  <text x="40" y="448" font-size="11.5" fill="#065f46">② 合并 ReadState 里的 position_deletes（内存中已删但尚未写 Puffin 的行）→ 合并位图</text>
+  <text x="40" y="470" font-size="11.5" fill="#065f46">③ InitializeReader（mooncake_scan.cpp:121-131）把 filter 挂到每个 parquet reader 的 deletion_filter 上</text>
+  <text x="40" y="492" font-size="11.5" fill="#065f46">④ reader 出批时按位图 O(1) 跳行 —— 删除从不产生额外算子，成本摊在读路径</text>
+  <text x="40" y="520" font-size="10.5" fill="#94a3b8">Puffin blob 布局与第 05 章图 5-2 相同；scan_table_end / ReadState::Drop 负责释放缓存 pin 与删除临时文件</text>
+</svg>
+<div class="fig-cap">图 6-3 · mooncake_scan 管道：文件清单解析 → 统计裁剪 → parquet 直读 + 位图删行，全链路向量化</div>
+</div>
+
+<h2>6.4 快照一致性：一个 LSN 走天下</h2>
+<div class="fig">
+<svg viewBox="0 0 980 330" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <text x="20" y="28" font-size="15" font-weight="700" fill="#334155">从 XactLastCommitEnd 到一致扫描</text>
+  <g font-size="11.5">
+    <rect x="20" y="48" width="220" height="90" rx="9" fill="#eef2ff" stroke="#a5b4fc"/>
+    <text x="130" y="74" text-anchor="middle" font-weight="700" fill="#4338ca">Postgres backend</text>
+    <text x="130" y="98" text-anchor="middle" fill="#4f46e5">本事务提交点 LSN：</text>
+    <text x="130" y="118" text-anchor="middle" fill="#4f46e5">pg_sys::XactLastCommitEnd</text>
+    <rect x="280" y="48" width="200" height="90" rx="9" fill="#fff7ed" stroke="#fdba74"/>
+    <text x="380" y="74" text-anchor="middle" font-weight="700" fill="#c2410c">DuckDB 事务 Begin</text>
+    <text x="380" y="98" text-anchor="middle" fill="#9a3412">MooncakeTransaction</text>
+    <text x="380" y="118" text-anchor="middle" fill="#9a3412">lsn = GetLsn()（dlsym）</text>
+    <rect x="520" y="48" width="220" height="90" rx="9" fill="#ecfdf5" stroke="#6ee7b7"/>
+    <text x="630" y="74" text-anchor="middle" font-weight="700" fill="#065f46">moonlink 读状态机</text>
+    <text x="630" y="98" text-anchor="middle" fill="#047857">scan_table_begin(lsn)</text>
+    <text x="630" y="118" text-anchor="middle" fill="#047857">try_read：等四水位覆盖 lsn</text>
+    <rect x="780" y="48" width="180" height="90" rx="9" fill="#e0f2fe" stroke="#38bdf8"/>
+    <text x="870" y="74" text-anchor="middle" font-weight="700" fill="#075985">ReadState</text>
+    <text x="870" y="98" text-anchor="middle" fill="#0369a1">文件清单 + 删除向量</text>
+    <text x="870" y="118" text-anchor="middle" fill="#0369a1">（钉住缓存句柄）</text>
+  </g>
+  <path d="M240,93 L280,93" stroke="#d97706" stroke-width="2.2" marker-end="url(#mD)"/>
+  <path d="M480,93 L520,93" stroke="#059669" stroke-width="2.2" marker-end="url(#mC)"/>
+  <path d="M740,93 L780,93" stroke="#0284c7" stroke-width="2.2" marker-end="url(#mF)"/>
+
+  <rect x="20" y="164" width="940" height="140" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="40" y="190" font-size="12.5" font-weight="700" fill="#334155">三条一致性性质</text>
+  <text x="40" y="216" font-size="12" fill="#475569">① 读你所写：事务内先写源表再查镜像表 → 提交点 LSN 已推进 → 扫描等待水位覆盖 → 立即读到自己的写入（亚秒级）</text>
+  <text x="40" y="242" font-size="12" fill="#475569">② 事务内稳定：同一 DuckDB 事务的 lsn 固定 → 多次扫描看到同一快照（repeatable read 语义）</text>
+  <text x="40" y="268" font-size="12" fill="#475569">③ 无锁等待：等待发生在“读状态机就绪”上（watch 通知），不持有引擎锁、不阻塞写入路径 —— 等待成本只有一次条件变量唤醒</text>
+  <text x="40" y="294" font-size="11" fill="#94a3b8">注：若扫描 LSN 落后于当前水位很多（极端 lag），try_read 一样立即返回——只是拿到的是旧版本文件清单 + 对应删除向量，正确性不受影响</text>
+</svg>
+<div class="fig-cap">图 6-4 · LSN 快照一致性：读你所写、事务内稳定、等待无锁</div>
+</div>
+
+<div class="callout key"><b>🔑 章末小结</b>
+读取侧的全部聪明才智集中在三点：<b>借</b>（借 pg_duckdb 路由、借 parquet_scan 读文件、借 DuckDB 优化器裁剪）、<b>挂</b>（把删除过滤挂到 reader 上而不是加算子）、<b>等</b>（用 LSN 水位等待代替任何锁协议）。没有一行代码重复发明 DuckDB 已有的能力。</div>
+
+<div class="pager">
+  <a href="05-storage-iceberg.html"><span class="dir">◀ 上一篇</span><b>05 · 存储与 Iceberg</b></a>
+  <a href="07-data-flow.html"><span class="dir">下一篇 ▶</span><b>07 · 端到端数据流</b></a>
+</div>
+</main>
+
+<footer><div class="wrap">pg_mooncake 源码深度解析 · 第 06 章 · 基于 commit b7c67e0</div></footer>
+</body>
+</html>

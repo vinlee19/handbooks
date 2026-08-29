@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>05 · 存储与 Iceberg 持久化 — pg_mooncake 源码深度解析</title>
+<style>
+:root{
+  --pg:#336791; --ext:#6366f1; --moon:#059669; --duck:#d97706; --dmk:#ea580c;
+  --ice:#0284c7; --ink:#0f172a; --mut:#64748b; --line:#e2e8f0; --bg:#f8fafc;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg);line-height:1.75}
+.wrap{max-width:1100px;margin:0 auto;padding:0 28px}
+a{color:var(--ext);text-decoration:none}
+a:hover{text-decoration:underline}
+code,pre,.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+code.path{background:#eef2ff;color:#4338ca;padding:1px 7px;border-radius:6px;font-size:.86em;white-space:nowrap}
+code.k{background:#f1f5f9;border:1px solid var(--line);padding:1px 6px;border-radius:6px;font-size:.86em}
+.topbar{position:sticky;top:0;z-index:9;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.topbar .wrap{display:flex;align-items:center;gap:18px;height:52px;font-size:14px}
+.topbar .logo{font-weight:800;color:var(--ext);font-size:15px}
+.topbar a{color:var(--mut)}
+.hero{background:linear-gradient(135deg,#f0f9ff 0%,#ecfdf5 100%);border-bottom:1px solid var(--line);padding:30px 0 26px}
+.hero .tag{display:inline-block;background:var(--ice);color:#fff;border-radius:999px;padding:2px 14px;font-size:12.5px;font-weight:600}
+.hero h1{font-size:28px;margin:12px 0 6px}
+.hero p.sub{color:#334155;font-size:15px;margin:0;max-width:860px}
+main{padding:30px 0 60px}
+h2{font-size:23px;border-left:5px solid var(--ice);padding-left:12px;margin:42px 0 14px}
+h3{font-size:17.5px;margin:26px 0 10px;color:#1e293b}
+.fig{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 18px 8px;margin:24px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.fig svg{width:100%;height:auto;display:block}
+.fig-cap{text-align:center;color:var(--mut);font-size:13px;padding:12px 0 8px;border-top:1px dashed var(--line);margin-top:14px}
+.codeblock{background:#0b1220;color:#dbe4f3;border-radius:12px;padding:0 0 14px;overflow:auto;font-size:13px;line-height:1.65;margin:18px 0}
+.codeblock .fname{display:block;background:#111c33;color:#93c5fd;padding:8px 16px;font-size:12px;border-bottom:1px solid #1e293b;font-family:ui-monospace,Menlo,monospace}
+.codeblock pre{margin:0;padding:14px 18px}
+.codeblock .c{color:#64748b}.codeblock .k{color:#c4b5fd}.codeblock .s{color:#86efac}.codeblock .f{color:#7dd3fc}
+.callout{border-radius:12px;padding:14px 18px;margin:18px 0;font-size:14.5px;border:1px solid}
+.callout b:first-child{display:block;margin-bottom:4px}
+.tip{background:#ecfdf5;border-color:#a7f3d0}.tip b:first-child{color:#047857}
+.warn{background:#fffbeb;border-color:#fde68a}.warn b:first-child{color:#b45309}
+.key{background:#eef2ff;border-color:#c7d2fe}.key b:first-child{color:#4338ca}
+table.t{width:100%;border-collapse:collapse;font-size:14px;margin:16px 0;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+table.t th{background:#f1f5f9;text-align:left;padding:9px 14px;border-bottom:2px solid var(--line);font-size:13px;color:#334155}
+table.t td{padding:9px 14px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+footer{border-top:1px solid var(--line);padding:26px 0 44px;color:var(--mut);font-size:13.5px}
+.pager{display:flex;justify-content:space-between;gap:14px;margin-top:34px}
+.pager a{flex:1;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 18px;color:var(--ink)}
+.pager a:hover{border-color:var(--ice);text-decoration:none}
+.pager .dir{font-size:12px;color:var(--mut);display:block}
+</style>
+</head>
+<body>
+<div class="topbar"><div class="wrap">
+  <span class="logo">🧁 pg_mooncake 源码深度解析</span>
+  <a href="index.html">总览</a><a href="01-architecture.html">架构总览</a><a href="02-postgres-extension.html">扩展层</a><a href="03-moonlink-engine.html">moonlink</a><a href="04-cdc-replication.html">CDC 复制</a><a href="05-storage-iceberg.html"><b style="color:var(--ice)">存储与 Iceberg</b></a><a href="06-query-duckdb.html">查询路径</a><a href="07-data-flow.html">端到端数据流</a><a href="08-design-philosophy.html">设计精髓</a>
+</div></div>
+
+<div class="hero"><div class="wrap">
+  <span class="tag">第 05 章</span>
+  <h1>存储与 Iceberg 持久化：Parquet、Puffin 与开放表格式</h1>
+  <p class="sub">这一章讲数据“落地”的全部细节：内存批怎么写成 Parquet、删除怎么变成 Puffin 里的 Roaring 位图、每次快照怎么成为一次真正的 Iceberg 提交、以及崩溃之后怎么把世界拼回来。</p>
+</div></div>
+
+<main class="wrap">
+
+<h2>5.1 持久化全景：两个“快照”、一次提交</h2>
+<p>先厘清贯穿全章的两个概念：<b>mooncake 快照</b>是引擎内存里的版本推进（磁盘文件集合 + 内存批 + 删除向量的自洽组合）；<b>Iceberg 快照</b>是把某个 mooncake 快照<b>持久化</b>为开放格式（写 manifest、提交 catalog）。前者频繁且廉价，后者昂贵且攒批——两者由 LSN（<code class="k">moonlink.table-flush-lsn</code> 属性）关联。</p>
+<div class="fig">
+<svg viewBox="0 0 980 520" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <text x="20" y="28" font-size="15" font-weight="700" fill="#334155">持久化全景：从内存批到湖仓提交</text>
+  <!-- columns -->
+  <rect x="20" y="46" width="215" height="440" rx="10" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="127" y="70" font-size="13" font-weight="700" text-anchor="middle" fill="#065f46">内存态</text>
+  <rect x="36" y="84" width="183" height="60" rx="8" fill="#fff" stroke="#6ee7b7"/>
+  <text x="127" y="106" font-size="11.5" text-anchor="middle" fill="#065f46">MemSlice</text>
+  <text x="127" y="124" font-size="10.5" text-anchor="middle" fill="#047857">Arrow RecordBatch 攒批 + MemIndex</text>
+  <rect x="36" y="156" width="183" height="60" rx="8" fill="#fff" stroke="#6ee7b7"/>
+  <text x="127" y="178" font-size="11.5" text-anchor="middle" fill="#065f46">内存删除向量</text>
+  <text x="127" y="196" font-size="10.5" text-anchor="middle" fill="#047857">BatchDeletionVector（未落盘的删改）</text>
+  <rect x="36" y="228" width="183" height="60" rx="8" fill="#fff" stroke="#6ee7b7"/>
+  <text x="127" y="250" font-size="11.5" text-anchor="middle" fill="#065f46">mooncake 快照</text>
+  <text x="127" y="268" font-size="10.5" text-anchor="middle" fill="#047857">disk_files ∪ mem − deletes</text>
+  <text x="127" y="284" font-size="10.5" text-anchor="middle" fill="#047857">（version = 提交 LSN）</text>
+  <text x="127" y="330" font-size="10.5" text-anchor="middle" fill="#64748b">周期 tick / 事件驱动推进</text>
+
+  <rect x="255" y="46" width="215" height="440" rx="10" fill="#fffbeb" stroke="#fde68a"/>
+  <text x="362" y="70" font-size="13" font-weight="700" text-anchor="middle" fill="#b45309">本地盘</text>
+  <rect x="271" y="84" width="183" height="66" rx="8" fill="#fff" stroke="#fde68a"/>
+  <text x="362" y="106" font-size="11.5" text-anchor="middle" fill="#92400e">data_*.parquet</text>
+  <text x="362" y="124" font-size="10.5" text-anchor="middle" fill="#b45309">DiskSliceWriter：128MiB 分割</text>
+  <text x="362" y="140" font-size="10.5" text-anchor="middle" fill="#b45309">AsyncArrowWriter（arrow-parquet）</text>
+  <rect x="271" y="162" width="183" height="66" rx="8" fill="#fff" stroke="#fde68a"/>
+  <text x="362" y="184" font-size="11.5" text-anchor="middle" fill="#92400e">*_index 文件</text>
+  <text x="362" y="202" font-size="10.5" text-anchor="middle" fill="#b45309">persisted bucket hash map</text>
+  <text x="362" y="218" font-size="10.5" text-anchor="middle" fill="#b45309">（row_id → 文件/行位置）</text>
+  <rect x="271" y="240" width="183" height="66" rx="8" fill="#fff" stroke="#fde68a"/>
+  <text x="362" y="262" font-size="11.5" text-anchor="middle" fill="#92400e">wal/（引擎私有）</text>
+  <text x="362" y="280" font-size="10.5" text-anchor="middle" fill="#b45309">JSON 事件流 + 元数据</text>
+  <text x="362" y="296" font-size="10.5" text-anchor="middle" fill="#b45309">（5.6 节）</text>
+  <rect x="271" y="318" width="183" height="66" rx="8" fill="#fff" stroke="#fde68a"/>
+  <text x="362" y="340" font-size="11.5" text-anchor="middle" fill="#92400e">read_through_cache/</text>
+  <text x="362" y="358" font-size="10.5" text-anchor="middle" fill="#b45309">远端文件本地缓存（5.4）</text>
+
+  <rect x="490" y="46" width="230" height="440" rx="10" fill="#e0f2fe" stroke="#38bdf8"/>
+  <text x="605" y="70" font-size="13" font-weight="700" text-anchor="middle" fill="#075985">Iceberg 提交（攒批）</text>
+  <rect x="506" y="84" width="198" height="76" rx="8" fill="#fff" stroke="#7dd3fc"/>
+  <text x="605" y="106" font-size="11.5" text-anchor="middle" fill="#075985">sync_data_files</text>
+  <text x="605" y="124" font-size="10.5" text-anchor="middle" fill="#0369a1">本地 Parquet 导入为</text>
+  <text x="605" y="140" font-size="10.5" text-anchor="middle" fill="#0369a1">Iceberg DataFile（统计入 manifest）</text>
+  <rect x="506" y="172" width="198" height="76" rx="8" fill="#fff" stroke="#7dd3fc"/>
+  <text x="605" y="194" font-size="11.5" text-anchor="middle" fill="#075985">sync_deletion_vector</text>
+  <text x="605" y="212" font-size="10.5" text-anchor="middle" fill="#0369a1">删除向量 → Puffin blob</text>
+  <text x="605" y="228" font-size="10.5" text-anchor="middle" fill="#0369a1">（每数据文件一个 blob）</text>
+  <rect x="506" y="260" width="198" height="76" rx="8" fill="#fff" stroke="#7dd3fc"/>
+  <text x="605" y="282" font-size="11.5" text-anchor="middle" fill="#075985">sync_file_indices</text>
+  <text x="605" y="300" font-size="10.5" text-anchor="middle" fill="#0369a1">文件索引 → Puffin blob</text>
+  <text x="605" y="316" font-size="10.5" text-anchor="middle" fill="#0369a1">（moonlink 私有索引上湖）</text>
+  <rect x="506" y="348" width="198" height="76" rx="8" fill="#fff" stroke="#7dd3fc"/>
+  <text x="605" y="370" font-size="11.5" text-anchor="middle" fill="#075985">Transaction::fast_append</text>
+  <text x="605" y="388" font-size="10.5" text-anchor="middle" fill="#0369a1">+ snapshot 属性</text>
+  <text x="605" y="404" font-size="10.5" text-anchor="middle" fill="#0369a1">moonlink.table-flush-lsn</text>
+
+  <rect x="740" y="46" width="220" height="440" rx="10" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="850" y="70" font-size="13" font-weight="700" text-anchor="middle" fill="#334155">Catalog / 存储</text>
+  <rect x="756" y="84" width="188" height="100" rx="8" fill="#fff" stroke="#cbd5e1"/>
+  <text x="850" y="106" font-size="11.5" text-anchor="middle" fill="#334155">FileCatalog（默认）</text>
+  <text x="850" y="124" font-size="10.5" text-anchor="middle" fill="#64748b">Hadoop 风格：metadata.json</text>
+  <text x="850" y="140" font-size="10.5" text-anchor="middle" fill="#64748b">直接落在 warehouse 目录</text>
+  <text x="850" y="160" font-size="10.5" text-anchor="middle" fill="#64748b">（file_catalog.rs）</text>
+  <rect x="756" y="196" width="188" height="90" rx="8" fill="#fff" stroke="#cbd5e1"/>
+  <text x="850" y="218" font-size="11.5" text-anchor="middle" fill="#334155">RestCatalog（feature）</text>
+  <text x="850" y="236" font-size="10.5" text-anchor="middle" fill="#64748b">apache/iceberg-rust REST</text>
+  <text x="850" y="252" font-size="10.5" text-anchor="middle" fill="#64748b">（rest_catalog.rs）</text>
+  <rect x="756" y="298" width="188" height="90" rx="8" fill="#fff" stroke="#cbd5e1"/>
+  <text x="850" y="320" font-size="11.5" text-anchor="middle" fill="#334155">GlueCatalog（feature）</text>
+  <text x="850" y="338" font-size="10.5" text-anchor="middle" fill="#64748b">AWS Glue</text>
+  <text x="850" y="354" font-size="10.5" text-anchor="middle" fill="#64748b">（glue_catalog.rs）</text>
+  <text x="850" y="420" font-size="10.5" text-anchor="middle" fill="#94a3b8">catalog_utils::create_catalog(:29)</text>
+  <text x="850" y="436" font-size="10.5" text-anchor="middle" fill="#94a3b8">按配置三选一</text>
+
+  <!-- arrows -->
+  <path d="M235,120 L271,120" stroke="#d97706" stroke-width="2.4" marker-end="url(#mD)"/>
+  <text x="253" y="112" font-size="10" text-anchor="middle" fill="#b45309">flush</text>
+  <path d="M456,130 L506,120" stroke="#0284c7" stroke-width="2.4" marker-end="url(#mF)"/>
+  <text x="481" y="118" font-size="10" text-anchor="middle" fill="#0369a1">导入</text>
+  <path d="M720,200 L756,180" stroke="#0284c7" stroke-width="2.4" marker-end="url(#mF)"/>
+  <text x="740" y="186" font-size="10" text-anchor="middle" fill="#0369a1">commit</text>
+  <path d="M235,270 L271,270" stroke="#94a3b8" stroke-width="0"/>
+  <path d="M127,300 Q127,330 253,330" stroke="#94a3b8" stroke-width="0"/>
+  <path d="M219,262 L271,278" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#mA)"/>
+  <text x="245" y="300" font-size="10" text-anchor="middle" fill="#64748b">版本引用</text>
+  <path d="M456,286 L506,270" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#mA)"/>
+  <text x="483" y="300" font-size="10" text-anchor="middle" fill="#64748b">blob 引用</text>
+</svg>
+<div class="fig-cap">图 5-1 · 持久化四段式：内存 → 本地 Parquet/索引 → Iceberg 导入与 Puffin 附件 → Catalog 提交</div>
+</div>
+
+<h2>5.2 flush 细节：DiskSliceWriter 与文件索引</h2>
+<div class="codeblock"><span class="fname">moonlink/src/moonlink/src/storage/mooncake_table/disk_slice.rs（要点）</span>
+<pre><span class="c">// flush 流程（mooncake_table.rs:864 prepare_disk_slice → :912 flush_disk_slice）</span>
+<span class="k">fn</span> <span class="f">write</span>(&amp;<span class="k">mut</span> self) {
+    <span class="k">for</span> batch <span class="k">in</span> <span class="k">self</span>.record_batches {          <span class="c">// 已抽干的 MemSlice 批</span>
+        <span class="k">let</span> batch = apply_deletions(batch, &amp;deletion_vector);  <span class="c">// 物理剔除已删行</span>
+        writer.write(batch).await;               <span class="c">// AsyncArrowWriter 追加</span>
+        <span class="k">if</span> writer.in_progress_size() &gt;= <span class="f">128</span>.MiB { <span class="c">// parquet_file_size（debug 下 2MiB）</span>
+            <span class="k">let</span> file = writer.close().await;     <span class="c">// 切换新文件 → data_&lt;n&gt;.parquet</span>
+            index_builder.record_file(file, row_range);
+        }
+    }
+    <span class="c">// GlobalIndexBuilder：为每个 row_id 记录 (data_file, row_id) 位置</span>
+    <span class="c">// → persisted_bucket_hash_map（storage/index/persisted_bucket_hash_map.rs）</span>
+}</pre></div>
+<ul>
+  <li><b>删除物理应用</b>：flush 时把“这些行已删除”从 Parquet 里剔掉，避免每个读者都重复过滤（删改先记账在删除向量，落盘时清算）。</li>
+  <li><b>文件索引</b>：<code class="k">row_id → (file, row_offset)</code> 的持久化桶哈希表。UPDATE = 旧行删除向量标记 + 新行插入新位置，索引让“点查/回改”不必全表扫描。它也被同步为 Puffin blob（5.3），使外部引擎可复用。</li>
+  <li><b>flush 完成记账</b>：<code class="k">FlushResult</code> 事件回流 → <code class="k">apply_flush_result</code>（:959）把 disk slice 加入 <code class="k">next_snapshot_task.new_disk_slices</code> → <code class="k">try_set_next_flush_lsn</code>（:985）推进 flush 水位。</li>
+</ul>
+
+<h2>5.3 Puffin：删除向量与文件索引的“行李箱”格式</h2>
+<p>Iceberg 原生没有行级删除向量和哈希索引，moonlink 借用 Iceberg 生态的 <b>Puffin 附件文件</b>承载它们。duckdb_mooncake 读取时按同样的二进制布局解析（<code class="path">duckdb_mooncake/src/storage/mooncake_table_metadata.cpp:76</code> 的注释就是这份格式说明）：</p>
+<div class="fig">
+<svg viewBox="0 0 980 400" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <text x="20" y="28" font-size="15" font-weight="700" fill="#334155">Puffin blob 布局（删除向量示例）</text>
+  <!-- blob layout -->
+  <g font-size="11">
+    <rect x="20" y="46" width="90" height="60" rx="6" fill="#4338ca"/><text x="65" y="70" text-anchor="middle" fill="#fff">4 bytes</text><text x="65" y="88" text-anchor="middle" fill="#c7d2fe">blob 长度</text>
+    <rect x="110" y="46" width="90" height="60" rx="6" fill="#6366f1"/><text x="155" y="70" text-anchor="middle" fill="#fff">4 bytes</text><text x="155" y="88" text-anchor="middle" fill="#c7d2fe">magic</text>
+    <rect x="200" y="46" width="110" height="60" rx="6" fill="#059669"/><text x="255" y="70" text-anchor="middle" fill="#fff">8 bytes</text><text x="255" y="88" text-anchor="middle" fill="#a7f3d0">行数(LE u64)</text>
+    <rect x="310" y="46" width="110" height="60" rx="6" fill="#0284c7"/><text x="365" y="70" text-anchor="middle" fill="#fff">4 bytes</text><text x="365" y="88" text-anchor="middle" fill="#bae6fd">foffset(LE u32)</text>
+    <rect x="420" y="46" width="330" height="60" rx="6" fill="#d97706"/>
+    <text x="585" y="70" text-anchor="middle" fill="#fff">Roaring Bitmap 序列化缓冲（被删行号集合）</text>
+    <text x="585" y="88" text-anchor="middle" fill="#fde68a">croaring/roaring crate 序列化格式</text>
+    <rect x="750" y="46" width="210" height="60" rx="6" fill="#dc2626"/><text x="855" y="70" text-anchor="middle" fill="#fff">4 bytes</text><text x="855" y="88" text-anchor="middle" fill="#fecaca">CRC32C 校验</text>
+  </g>
+  <text x="20" y="130" font-size="12" fill="#475569">删除向量描述条目（ReadState 里的 deletion_vectors，每个数据文件一条，u32×4）：</text>
+  <g font-size="11">
+    <rect x="20" y="146" width="220" height="44" rx="6" fill="#eef2ff" stroke="#a5b4fc"/><text x="130" y="172" text-anchor="middle" fill="#4338ca">data_file_index（属于哪个 Parquet）</text>
+    <rect x="250" y="146" width="220" height="44" rx="6" fill="#eef2ff" stroke="#a5b4fc"/><text x="360" y="172" text-anchor="middle" fill="#4338ca">puffin_file_index（在哪个 Puffin）</text>
+    <rect x="480" y="146" width="220" height="44" rx="6" fill="#eef2ff" stroke="#a5b4fc"/><text x="590" y="172" text-anchor="middle" fill="#4338ca">offset（blob 在文件内偏移）</text>
+    <rect x="710" y="146" width="230" height="44" rx="6" fill="#eef2ff" stroke="#a5b4fc"/><text x="825" y="172" text-anchor="middle" fill="#4338ca">size（blob 长度）</text>
+  </g>
+
+  <!-- iceberg commit sequence -->
+  <rect x="20" y="216" width="940" height="164" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="40" y="242" font-size="13" font-weight="700" fill="#334155">一次 Iceberg 快照提交的序列（iceberg_table_syncer.rs:723 sync_snapshot_impl）</text>
+  <g font-size="11.5">
+    <rect x="40" y="256" width="164" height="100" rx="8" fill="#fff" stroke="#7dd3fc"/>
+    <text x="122" y="280" text-anchor="middle" fill="#075985">① 惰性建/载表</text>
+    <text x="122" y="298" text-anchor="middle" fill="#64748b">initialize_iceberg_table</text>
+    <text x="122" y="316" text-anchor="middle" fill="#64748b">_for_once（首次提交时）</text>
+    <text x="122" y="338" text-anchor="middle" fill="#64748b">schema/分区spec 就位</text>
+    <rect x="222" y="256" width="164" height="100" rx="8" fill="#fff" stroke="#7dd3fc"/>
+    <text x="304" y="280" text-anchor="middle" fill="#075985">② 导入数据文件</text>
+    <text x="304" y="298" text-anchor="middle" fill="#64748b">sync_data_files(:230)</text>
+    <text x="304" y="316" text-anchor="middle" fill="#64748b">新 disk slices → DataFile</text>
+    <text x="304" y="338" text-anchor="middle" fill="#64748b">（行数/列统计一并写入）</text>
+    <rect x="404" y="256" width="164" height="100" rx="8" fill="#fff" stroke="#7dd3fc"/>
+    <text x="486" y="280" text-anchor="middle" fill="#075985">③ 写删除向量</text>
+    <text x="486" y="298" text-anchor="middle" fill="#64748b">sync_deletion_vector(:488)</text>
+    <text x="486" y="316" text-anchor="middle" fill="#64748b">prepare_deletion_vector_blob(:377)</text>
+    <text x="486" y="338" text-anchor="middle" fill="#64748b">清单：deletion_vector_manifest</text>
+    <rect x="586" y="256" width="164" height="100" rx="8" fill="#fff" stroke="#7dd3fc"/>
+    <text x="668" y="280" text-anchor="middle" fill="#075985">④ 写文件索引</text>
+    <text x="668" y="298" text-anchor="middle" fill="#64748b">sync_file_indices(:683)</text>
+    <text x="668" y="316" text-anchor="middle" fill="#64748b">file_index_manifest_manager</text>
+    <text x="668" y="338" text-anchor="middle" fill="#64748b">（同样是 Puffin blob）</text>
+    <rect x="768" y="256" width="172" height="100" rx="8" fill="#e0f2fe" stroke="#38bdf8"/>
+    <text x="854" y="280" text-anchor="middle" fill="#075985" font-weight="700">⑤ fast_append + commit</text>
+    <text x="854" y="298" text-anchor="middle" fill="#0369a1">Transaction::fast_append(:795)</text>
+    <text x="854" y="316" text-anchor="middle" fill="#0369a1">属性：moonlink.table-flush-lsn</text>
+    <text x="854" y="338" text-anchor="middle" fill="#0369a1">txn.commit(&amp;catalog)(:817)</text>
+  </g>
+  <path d="M204,306 L222,306" stroke="#0284c7" stroke-width="2" marker-end="url(#mF)"/>
+  <path d="M386,306 L404,306" stroke="#0284c7" stroke-width="2" marker-end="url(#mF)"/>
+  <path d="M568,306 L586,306" stroke="#0284c7" stroke-width="2" marker-end="url(#mF)"/>
+  <path d="M750,306 L768,306" stroke="#0284c7" stroke-width="2" marker-end="url(#mF)"/>
+</svg>
+<div class="fig-cap">图 5-2 · Puffin blob 二进制布局与 Iceberg 提交五步序列</div>
+</div>
+<div class="callout key"><b>🔑 兼容性博弈</b>
+数据文件是 100% 标准 Iceberg（任何 Iceberg 引擎都能读 Parquet 行）；moonlink 的增量价值（删除向量、索引、亚秒新鲜度）都在 Puffin 附件与快照属性里——不理解它们的普通 Iceberg 读者会读到“略旧但完整”的数据，这本身就是一种优雅的降级。</div>
+
+<h2>5.4 对象存储缓存：让 S3 像本地盘一样被反复读</h2>
+<p>当 warehouse 在 S3/GCS 上时，每次扫描都要读远端。moonlink 内置一个<b>写穿透/读穿透的本地磁盘缓存</b>（<code class="path">storage/cache/object_storage/object_storage_cache.rs</code>，约 700 行）：</p>
+<table class="t">
+  <tr><th>机制</th><th>实现</th><th>意义</th></tr>
+  <tr><td>引用计数 + 钉住</td><td><code class="k">CacheTrait::get_cache_entry / import_cache_entry</code> 返回 <code class="k">NonEvictableHandle</code></td><td>正在被快照/扫描引用的文件绝不被 LRU 淘汰；ReadState Drop 时解钉</td></tr>
+  <tr><td>写穿透</td><td>flush 直接写缓存目录再上传远端</td><td>刚写的数据立即本地可读</td></tr>
+  <tr><td>读穿透</td><td>Union Read 时把远端文件拉入 <code class="k">read_through_cache/</code></td><td>重复扫描命中本地</td></tr>
+  <tr><td>元数据缓存</td><td>moka 内存缓存（storage/cache/metadata/moka_cache.rs）</td><td>Parquet footer 等热元数据不落盘</td></tr>
+</table>
+
+<h2>5.5 压缩（Compaction）：把碎片与删除整理成大文件</h2>
+<div class="fig">
+<svg viewBox="0 0 980 430" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <text x="20" y="28" font-size="15" font-weight="700" fill="#334155">数据压缩前后（storage/compaction/compactor.rs:388 CompactionBuilder）</text>
+  <!-- before -->
+  <rect x="20" y="48" width="420" height="240" rx="10" fill="#fffbeb" stroke="#fde68a"/>
+  <text x="230" y="74" font-size="13" font-weight="700" text-anchor="middle" fill="#b45309">压缩前</text>
+  <g>
+    <rect x="46" y="92" width="104" height="40" rx="6" fill="#fff" stroke="#fcd34d"/><text x="98" y="117" text-anchor="middle" font-size="11" fill="#92400e">f1（12%删除）</text>
+    <rect x="166" y="92" width="104" height="40" rx="6" fill="#fff" stroke="#fcd34d"/><text x="218" y="117" text-anchor="middle" font-size="11" fill="#92400e">f2（3%删除）</text>
+    <rect x="286" y="92" width="104" height="40" rx="6" fill="#fff" stroke="#fcd34d"/><text x="338" y="117" text-anchor="middle" font-size="11" fill="#92400e">f3（45%删除）</text>
+    <rect x="46" y="146" width="104" height="40" rx="6" fill="#fff" stroke="#fcd34d"/><text x="98" y="171" text-anchor="middle" font-size="11" fill="#92400e">f4（小文件）</text>
+    <rect x="166" y="146" width="104" height="40" rx="6" fill="#fff" stroke="#fcd34d"/><text x="218" y="171" text-anchor="middle" font-size="11" fill="#92400e">f5（小文件）</text>
+    <rect x="286" y="146" width="104" height="40" rx="6" fill="#fff" stroke="#fcd34d"/><text x="338" y="171" text-anchor="middle" font-size="11" fill="#92400e">f6（小文件）</text>
+  </g>
+  <text x="230" y="216" font-size="11.5" text-anchor="middle" fill="#92400e">触发条件（DataCompactionConfig）：文件数 ∈ [min,max]</text>
+  <text x="230" y="236" font-size="11.5" text-anchor="middle" fill="#92400e">且删除比例 ≥ data_file_deletion_percentage</text>
+  <text x="230" y="262" font-size="10.5" text-anchor="middle" fill="#b45309">optimize_table('c', 'data'|'full') 或周期策略触发</text>
+
+  <!-- arrow -->
+  <path d="M448,168 L530,168" stroke="#0284c7" stroke-width="3" marker-end="url(#mF)"/>
+  <text x="489" y="152" font-size="11" text-anchor="middle" fill="#0369a1">读取→应用删除</text>
+  <text x="489" y="192" font-size="11" text-anchor="middle" fill="#0369a1">重写→重映射索引</text>
+
+  <!-- after -->
+  <rect x="540" y="48" width="420" height="240" rx="10" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="750" y="74" font-size="13" font-weight="700" text-anchor="middle" fill="#047857">压缩后</text>
+  <rect x="570" y="100" width="360" height="44" rx="6" fill="#fff" stroke="#6ee7b7"/>
+  <text x="750" y="127" text-anchor="middle" font-size="11.5" fill="#065f46">f_new_1（≈ data_file_final_size，删除已物理剔除）</text>
+  <rect x="570" y="156" width="360" height="44" rx="6" fill="#fff" stroke="#6ee7b7"/>
+  <text x="750" y="183" text-anchor="middle" font-size="11.5" fill="#065f46">f_new_2（高删除比文件的存活行并入）</text>
+  <text x="750" y="228" font-size="11.5" text-anchor="middle" fill="#047857">row_id 位置整体重映射（remapped_data_files）</text>
+  <text x="750" y="248" font-size="11.5" text-anchor="middle" fill="#047857">compact_file_indices：合并为一个新 FileIndex（:352）</text>
+  <text x="750" y="272" font-size="10.5" text-anchor="middle" fill="#059669">旧文件在下一个 Iceberg 快照里标记删除 → EvictedFilesToDelete 清理</text>
+
+  <!-- piggyback -->
+  <rect x="20" y="312" width="940" height="96" rx="10" fill="#eef2ff" stroke="#a5b4fc"/>
+  <text x="40" y="338" font-size="13" font-weight="700" fill="#4338ca">搭车提交（PersistenceSnapshotPayload，mooncake_table.rs:1603-1656）</text>
+  <text x="40" y="362" font-size="12" fill="#475569">压缩/索引合并的结果不单独提交 Iceberg，而是打包进下一次快照提交（import + index-merge + compaction 三段），</text>
+  <text x="40" y="384" font-size="12" fill="#475569">把“维护操作”的元数据开销摊薄到常规提交节奏里 —— 索引合并同理（perform_index_merge:1369，GlobalIndexBuilder.build_from_merge）</text>
+</svg>
+<div class="fig-cap">图 5-3 · 数据压缩：小文件/高删除文件重写为大文件，索引随之合并，结果搭下一次快照的车提交</div>
+</div>
+
+<h2>5.6 WAL 持久化与崩溃恢复</h2>
+<p>moonlink 有自己独立的 WAL（与 Postgres WAL 无关）：actor 每收到事件先 <code class="k">push_wal_event</code> 缓冲，周期性任务把事件流以 JSON 追加到 <code class="path">wal/&lt;db&gt;.&lt;table&gt;/wal_&lt;n&gt;</code>。真正的巧思在<b>恢复语义</b>：</p>
+<div class="fig">
+<svg viewBox="0 0 980 470" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <text x="20" y="28" font-size="15" font-weight="700" fill="#334155">WAL 三件套：持久化、截断、恢复</text>
+  <!-- persist -->
+  <rect x="20" y="48" width="300" height="180" rx="10" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="170" y="74" font-size="13" font-weight="700" text-anchor="middle" fill="#065f46">① 周期持久化（wal.rs:921）</text>
+  <text x="170" y="100" font-size="11" text-anchor="middle" fill="#334155">写新 WAL JSON 文件（事件流）</text>
+  <text x="170" y="122" font-size="11" text-anchor="middle" fill="#334155">写 PersistentWalMetadata(:317)：</text>
+  <text x="170" y="142" font-size="10.5" text-anchor="middle" fill="#64748b">live 文件清单 · highest_completion_lsn</text>
+  <text x="170" y="160" font-size="10.5" text-anchor="middle" fill="#64748b">活动事务 · persistence_snapshot_lsn</text>
+  <text x="170" y="188" font-size="10.5" text-anchor="middle" fill="#047857">先写数据文件、再提交元数据（两阶段味道）</text>
+  <text x="170" y="208" font-size="10.5" text-anchor="middle" fill="#94a3b8">MooncakeTable::do_wal_persistence_update:1139</text>
+
+  <!-- truncate -->
+  <rect x="340" y="48" width="300" height="180" rx="10" fill="#fffbeb" stroke="#fde68a"/>
+  <text x="490" y="74" font-size="13" font-weight="700" text-anchor="middle" fill="#b45309">② 安全截断（wal.rs:750）</text>
+  <text x="490" y="100" font-size="11" text-anchor="middle" fill="#334155">被最新 Iceberg 快照完全覆盖的</text>
+  <text x="490" y="120" font-size="11" text-anchor="middle" fill="#334155">WAL 文件直接删除</text>
+  <text x="490" y="148" font-size="11" text-anchor="middle" fill="#64748b">快照属性 moonlink.table-flush-lsn</text>
+  <text x="490" y="166" font-size="11" text-anchor="middle" fill="#64748b">= 该快照已包含到的 LSN</text>
+  <text x="490" y="194" font-size="10.5" text-anchor="middle" fill="#92400e">→ WAL 只是“最后一个快照之后”的</text>
+  <text x="490" y="212" font-size="10.5" text-anchor="middle" fill="#92400e">增量日志，体积天然有界</text>
+
+  <!-- recovery -->
+  <rect x="660" y="48" width="300" height="180" rx="10" fill="#e0f2fe" stroke="#38bdf8"/>
+  <text x="810" y="74" font-size="13" font-weight="700" text-anchor="middle" fill="#075985">③ 崩溃恢复（recovery_utils.rs）</text>
+  <text x="810" y="100" font-size="11" text-anchor="middle" fill="#334155">读 PersistentWalMetadata</text>
+  <text x="810" y="120" font-size="11" text-anchor="middle" fill="#334155">从 Iceberg 快照重建基线</text>
+  <text x="810" y="140" font-size="11" text-anchor="middle" fill="#0369a1">（load_snapshot_from_table：文件/删除/索引）</text>
+  <text x="810" y="166" font-size="11" text-anchor="middle" fill="#334155">回放 > persistence_snapshot_lsn 的</text>
+  <text x="810" y="184" font-size="11" text-anchor="middle" fill="#334155">WAL 事件（标记 is_recovery）</text>
+  <text x="810" y="210" font-size="10.5" text-anchor="middle" fill="#075985">→ FinishRecovery 事件 → 恢复复制流</text>
+
+  <!-- timeline -->
+  <rect x="20" y="258" width="940" height="180" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="40" y="284" font-size="13" font-weight="700" fill="#334155">一条 LSN 的恢复视角</text>
+  <line x1="60" y1="360" x2="920" y2="360" stroke="#94a3b8" stroke-width="2.5" marker-end="url(#mA)"/>
+  <rect x="100" y="300" width="240" height="34" rx="6" fill="#e0f2fe" stroke="#38bdf8"/>
+  <text x="220" y="322" text-anchor="middle" font-size="11.5" fill="#075985">Iceberg 快照覆盖区（无需回放）</text>
+  <rect x="360" y="300" width="240" height="34" rx="6" fill="#ecfdf5" stroke="#6ee7b7"/>
+  <text x="480" y="322" text-anchor="middle" font-size="11.5" fill="#065f46">WAL 已持久、未入快照 → 回放区</text>
+  <rect x="620" y="300" width="200" height="34" rx="6" fill="#fef2f2" stroke="#fca5a5"/>
+  <text x="720" y="322" text-anchor="middle" font-size="11.5" fill="#dc2626">尚未持久 → 从复制槽重传</text>
+  <text x="220" y="392" text-anchor="middle" font-size="11" fill="#0369a1">≤ iceberg_lsn</text>
+  <text x="480" y="392" text-anchor="middle" font-size="11" fill="#059669">persistence_snapshot_lsn … flush_lsn</text>
+  <text x="720" y="392" text-anchor="middle" font-size="11" fill="#dc2626">&gt; highest_completion_lsn</text>
+  <text x="490" y="424" text-anchor="middle" font-size="11.5" fill="#64748b">三层恢复材料各司其职：Iceberg 快照（重）· WAL（中）· 源库复制槽（兜底）—— 不丢、不重、可续</text>
+</svg>
+<div class="fig-cap">图 5-4 · WAL 持久化 / 截断 / 恢复：WAL 只是“快照之后的增量”，恢复由三层材料接力完成</div>
+</div>
+
+<div class="callout tip"><b>💡 Delta Lake 呢？</b>
+<code class="k">DeltaLakeTableManager / DeltaLakeTableSyncer</code>（storage/table/deltalake/*，基于 deltalake 0.28）实现了与 Iceberg 平行的第二套 TableManager——同样的同步载荷，不同的提交格式。这是“表格式可插拔”的证据，pg_mooncake 默认走 Iceberg。</div>
+
+<div class="pager">
+  <a href="04-cdc-replication.html"><span class="dir">◀ 上一篇</span><b>04 · CDC 复制引擎</b></a>
+  <a href="06-query-duckdb.html"><span class="dir">下一篇 ▶</span><b>06 · 查询路径：pg_duckdb + duckdb_mooncake</b></a>
+</div>
+</main>
+
+<footer><div class="wrap">pg_mooncake 源码深度解析 · 第 05 章 · 基于 commit b7c67e0</div></footer>
+</body>
+</html>

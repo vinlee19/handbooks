@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>07 · 端到端数据流与生命周期 — pg_mooncake 源码深度解析</title>
+<style>
+:root{
+  --pg:#336791; --ext:#6366f1; --moon:#059669; --duck:#d97706; --dmk:#ea580c;
+  --ice:#0284c7; --ink:#0f172a; --mut:#64748b; --line:#e2e8f0; --bg:#f8fafc;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg);line-height:1.75}
+.wrap{max-width:1100px;margin:0 auto;padding:0 28px}
+a{color:var(--ext);text-decoration:none}
+a:hover{text-decoration:underline}
+code,pre,.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+code.path{background:#eef2ff;color:#4338ca;padding:1px 7px;border-radius:6px;font-size:.86em;white-space:nowrap}
+code.k{background:#f1f5f9;border:1px solid var(--line);padding:1px 6px;border-radius:6px;font-size:.86em}
+.topbar{position:sticky;top:0;z-index:9;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.topbar .wrap{display:flex;align-items:center;gap:18px;height:52px;font-size:14px}
+.topbar .logo{font-weight:800;color:var(--ext);font-size:15px}
+.topbar a{color:var(--mut)}
+.hero{background:linear-gradient(135deg,#fdf4ff 0%,#eff6ff 100%);border-bottom:1px solid var(--line);padding:30px 0 26px}
+.hero .tag{display:inline-block;background:#7c3aed;color:#fff;border-radius:999px;padding:2px 14px;font-size:12.5px;font-weight:600}
+.hero h1{font-size:28px;margin:12px 0 6px}
+.hero p.sub{color:#334155;font-size:15px;margin:0;max-width:860px}
+main{padding:30px 0 60px}
+h2{font-size:23px;border-left:5px solid #7c3aed;padding-left:12px;margin:42px 0 14px}
+.fig{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 18px 8px;margin:24px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.fig svg{width:100%;height:auto;display:block}
+.fig-cap{text-align:center;color:var(--mut);font-size:13px;padding:12px 0 8px;border-top:1px dashed var(--line);margin-top:14px}
+.callout{border-radius:12px;padding:14px 18px;margin:18px 0;font-size:14.5px;border:1px solid}
+.callout b:first-child{display:block;margin-bottom:4px}
+.tip{background:#ecfdf5;border-color:#a7f3d0}.tip b:first-child{color:#047857}
+.warn{background:#fffbeb;border-color:#fde68a}.warn b:first-child{color:#b45309}
+.key{background:#eef2ff;border-color:#c7d2fe}.key b:first-child{color:#4338ca}
+footer{border-top:1px solid var(--line);padding:26px 0 44px;color:var(--mut);font-size:13.5px}
+.pager{display:flex;justify-content:space-between;gap:14px;margin-top:34px}
+.pager a{flex:1;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 18px;color:var(--ink)}
+.pager a:hover{border-color:#7c3aed;text-decoration:none}
+.pager .dir{font-size:12px;color:var(--mut);display:block}
+</style>
+</head>
+<body>
+<div class="topbar"><div class="wrap">
+  <span class="logo">🧁 pg_mooncake 源码深度解析</span>
+  <a href="index.html">总览</a><a href="01-architecture.html">架构总览</a><a href="02-postgres-extension.html">扩展层</a><a href="03-moonlink-engine.html">moonlink</a><a href="04-cdc-replication.html">CDC 复制</a><a href="05-storage-iceberg.html">存储与 Iceberg</a><a href="06-query-duckdb.html">查询路径</a><a href="07-data-flow.html"><b style="color:#7c3aed">端到端数据流</b></a><a href="08-design-philosophy.html">设计精髓</a>
+</div></div>
+
+<div class="hero"><div class="wrap">
+  <span class="tag">第 07 章</span>
+  <h1>端到端数据流：五条链路串起整个系统</h1>
+  <p class="sub">前面五章的零件，在这里装配成整车：CREATE、INSERT、SELECT、DROP、崩溃恢复——每条链路一张完整泳道图，最后用 LSN 不变式收束全局。</p>
+</div></div>
+
+<main class="wrap">
+
+<h2>7.1 CREATE TABLE：从 CALL 到复制流启动</h2>
+<div class="fig">
+<svg viewBox="0 0 980 470" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <g font-size="11.5">
+  <rect x="20" y="40" width="180" height="410" rx="10" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <rect x="210" y="40" width="190" height="410" rx="10" fill="#eef2ff" stroke="#c7d2fe"/>
+  <rect x="410" y="40" width="180" height="410" rx="10" fill="#ecfdf5" stroke="#a7f3d0"/>
+  <rect x="600" y="40" width="190" height="410" rx="10" fill="#fff7ed" stroke="#fdba74"/>
+  <rect x="800" y="40" width="160" height="410" rx="10" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="110" y="64" font-size="12.5" font-weight="700" text-anchor="middle" fill="#334155">客户端</text>
+  <text x="305" y="64" font-size="12.5" font-weight="700" text-anchor="middle" fill="#4338ca">pg_mooncake 扩展</text>
+  <text x="500" y="64" font-size="12.5" font-weight="700" text-anchor="middle" fill="#047857">moonlink 引擎</text>
+  <text x="695" y="64" font-size="12.5" font-weight="700" text-anchor="middle" fill="#c2410c">源 Postgres</text>
+  <text x="880" y="64" font-size="12.5" font-weight="700" text-anchor="middle" fill="#475569">磁盘/元数据</text>
+
+  <text x="110" y="94" text-anchor="middle" fill="#334155">CALL mooncake.create_table</text>
+  <text x="110" y="112" text-anchor="middle" fill="#334155">('iceberg_t','trades')</text>
+  <path d="M110,120 L110,140" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <text x="305" y="152" text-anchor="middle" fill="#4338ca">parse_table 规整名</text>
+  <text x="305" y="170" text-anchor="middle" fill="#4338ca">get_loopback_uri</text>
+  <path d="M210,186 L500,186" stroke="#6366f1" stroke-width="0"/>
+  <path d="M305,182 L305,198" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <path d="M305,214 L600,214" stroke="#6366f1" stroke-width="2" marker-end="url(#mB)"/>
+  <text x="452" y="208" text-anchor="middle" fill="#4338ca">① rust-postgres 连接源库</text>
+  <path d="M600,234 L305,234" stroke="#6366f1" stroke-width="2" marker-end="url(#mB)"/>
+  <text x="452" y="228" text-anchor="middle" fill="#4338ca">pg_attribute 列定义(含 NOT NULL)</text>
+  <path d="M305,254 L110,254" stroke="#475569" stroke-width="0"/>
+  <text x="305" y="272" text-anchor="middle" fill="#4338ca">CREATE TABLE iceberg_t</text>
+  <text x="305" y="290" text-anchor="middle" fill="#4338ca">(cols) USING mooncake</text>
+  <path d="M305,302 L305,318" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <path d="M210,330 L500,330" stroke="#059669" stroke-width="2.2" marker-end="url(#mC)"/>
+  <text x="355" y="324" text-anchor="middle" fill="#047857" font-weight="700">② RPC create_table(db,dst,src,src_uri,cfg)</text>
+  <path d="M500,348 L500,364" stroke="#059669" stroke-width="2" marker-end="url(#mC)"/>
+  <text x="500" y="374" text-anchor="middle" fill="#047857">元数据存储登记 · 装配组件包</text>
+  <text x="500" y="392" text-anchor="middle" fill="#047857">TableHandler actor 就绪</text>
+  <path d="M500,414 L660,414" stroke="#dc2626" stroke-width="2.2" marker-end="url(#mR)"/>
+  <text x="580" y="408" text-anchor="middle" fill="#dc2626">③ 建复制槽+分片COPY+pgoutput</text>
+  <path d="M660,432 L660,444" stroke="#dc2626" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#mR)"/>
+  <text x="880" y="436" text-anchor="middle" fill="#475569">数据目录 &lt;db&gt;.&lt;table&gt;/</text>
+  <text x="880" y="452" text-anchor="middle" fill="#475569">由 flush 陆续创建</text>
+  </g>
+</svg>
+<div class="fig-cap">图 7-1 · CREATE 链路：借道 SQL 建空壳表 → RPC 注册 → 复制流启动</div>
+</div>
+
+<h2>7.2 INSERT：一行数据的完整旅程（写入→可查）</h2>
+<div class="fig">
+<svg viewBox="0 0 980 500" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <g font-size="11.5">
+  <rect x="20" y="40" width="170" height="440" rx="10" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <rect x="200" y="40" width="180" height="440" rx="10" fill="#ecfdf5" stroke="#a7f3d0"/>
+  <rect x="390" y="40" width="190" height="440" rx="10" fill="#fff7ed" stroke="#fdba74"/>
+  <rect x="590" y="40" width="190" height="440" rx="10" fill="#e0f2fe" stroke="#38bdf8"/>
+  <rect x="790" y="40" width="170" height="440" rx="10" fill="#fffbeb" stroke="#fde68a"/>
+  <text x="105" y="64" font-size="12.5" font-weight="700" text-anchor="middle" fill="#334155">客户端</text>
+  <text x="290" y="64" font-size="12.5" font-weight="700" text-anchor="middle" fill="#047857">moonlink 复制侧</text>
+  <text x="485" y="64" font-size="12.5" font-weight="700" text-anchor="middle" fill="#c2410c">TableHandler actor</text>
+  <text x="685" y="64" font-size="12.5" font-weight="700" text-anchor="middle" fill="#075985">后台任务</text>
+  <text x="875" y="64" font-size="12.5" font-weight="700" text-anchor="middle" fill="#b45309">磁盘/湖仓</text>
+
+  <text x="105" y="94" text-anchor="middle" fill="#334155">INSERT INTO trades …</text>
+  <text x="105" y="112" text-anchor="middle" fill="#334155">COMMIT</text>
+  <path d="M105,122 L105,142" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <text x="290" y="156" text-anchor="middle" fill="#047857">pgoutput 事件到达</text>
+  <text x="290" y="174" text-anchor="middle" fill="#047857">Sink → TableEvent::Append</text>
+  <path d="M290,186 L440,186" stroke="#ea580c" stroke-width="2.2" marker-end="url(#mE)"/>
+  <text x="485" y="200" text-anchor="middle" fill="#c2410c">append：MemSlice + MemIndex</text>
+  <text x="485" y="218" text-anchor="middle" fill="#c2410c">push_wal_event(缓冲)</text>
+  <path d="M485,230 L485,248" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <text x="485" y="262" text-anchor="middle" fill="#c2410c">Commit(lsn)：推进基线</text>
+  <text x="485" y="280" text-anchor="middle" fill="#c2410c">mem_slice ≥ 阈值 → flush</text>
+  <path d="M485,292 L640,292" stroke="#0284c7" stroke-width="2.2" marker-end="url(#mF)"/>
+  <text x="685" y="306" text-anchor="middle" fill="#0369a1">DiskSliceWriter 写 Parquet</text>
+  <text x="685" y="324" text-anchor="middle" fill="#0369a1">(128MiB 分割 + 文件索引)</text>
+  <path d="M640,338 L485,338" stroke="#059669" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#mC)"/>
+  <text x="560" y="332" text-anchor="middle" fill="#047857">FlushResult 回流</text>
+  <text x="485" y="362" text-anchor="middle" fill="#c2410c">快照 tick → mooncake 快照推进</text>
+  <path d="M485,374 L640,374" stroke="#0284c7" stroke-width="2.2" marker-end="url(#mF)"/>
+  <text x="685" y="388" text-anchor="middle" fill="#0369a1">Iceberg 提交：导入文件</text>
+  <text x="685" y="406" text-anchor="middle" fill="#0369a1">+Puffin(DV/索引)+fast_append</text>
+  <path d="M640,418 L830,418" stroke="#d97706" stroke-width="2.2" marker-end="url(#mD)"/>
+  <text x="875" y="434" text-anchor="middle" fill="#92400e">Parquet/Puffin/manifest</text>
+  <text x="875" y="450" text-anchor="middle" fill="#92400e">catalog 推进(snapshot)</text>
+  <path d="M640,462 L290,462" stroke="#059669" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#mC)"/>
+  <text x="380" y="456" text-anchor="middle" fill="#047857">flush_lsn watch 发布 → 复制槽可推进</text>
+  </g>
+</svg>
+<div class="fig-cap">图 7-2 · INSERT 链路：WAL → 事件 → 内存 → Parquet → 快照 → 湖仓，五级水位逐级推进</div>
+</div>
+<div class="callout tip"><b>💡 新鲜度从哪来</b>
+即使 flush/快照还没发生，内存数据也已对扫描可见——Union Read 会把“已提交未落盘”的行物化成临时 Parquet 一并交给 DuckDB。所以新鲜度只受复制延迟影响（通常毫秒级），不受落盘节奏影响。</div>
+
+<h2>7.3 SELECT：一次查询的完整时序</h2>
+<div class="fig">
+<svg viewBox="0 0 980 520" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <g font-size="11.5">
+  <rect x="20" y="40" width="170" height="460" rx="10" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <rect x="200" y="40" width="180" height="460" rx="10" fill="#fffbeb" stroke="#fde68a"/>
+  <rect x="390" y="40" width="190" height="460" rx="10" fill="#fff7ed" stroke="#fdba74"/>
+  <rect x="590" y="40" width="190" height="460" rx="10" fill="#ecfdf5" stroke="#a7f3d0"/>
+  <rect x="790" y="40" width="170" height="460" rx="10" fill="#e0f2fe" stroke="#38bdf8"/>
+  <text x="105" y="64" font-size="12.5" font-weight="700" text-anchor="middle" fill="#334155">客户端</text>
+  <text x="290" y="64" font-size="12.5" font-weight="700" text-anchor="middle" fill="#b45309">Postgres+pg_duckdb</text>
+  <text x="485" y="64" font-size="12.5" font-weight="700" text-anchor="middle" fill="#c2410c">DuckDB+mooncake 扩展</text>
+  <text x="685" y="64" font-size="12.5" font-weight="700" text-anchor="middle" fill="#047857">moonlink</text>
+  <text x="875" y="64" font-size="12.5" font-weight="700" text-anchor="middle" fill="#075985">文件</text>
+
+  <text x="105" y="94" text-anchor="middle" fill="#334155">SELECT avg(price)</text>
+  <text x="105" y="112" text-anchor="middle" fill="#334155">FROM iceberg_t WHERE …</text>
+  <path d="M105,122 L105,142" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <text x="290" y="156" text-anchor="middle" fill="#b45309">planner 钩子：rd_tableam</text>
+  <text x="290" y="174" text-anchor="middle" fill="#b45309">命中注册表 → 转 DuckDB</text>
+  <path d="M290,186 L440,186" stroke="#d97706" stroke-width="2.2" marker-end="url(#mD)"/>
+  <text x="485" y="200" text-anchor="middle" fill="#c2410c">首查：LOAD 扩展 + ATTACH</text>
+  <text x="485" y="218" text-anchor="middle" fill="#c2410c">（图 6-2 五环节）</text>
+  <path d="M485,230 L485,248" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <text x="485" y="262" text-anchor="middle" fill="#c2410c">bind：取表 schema</text>
+  <path d="M440,276 L640,276" stroke="#059669" stroke-width="2" marker-end="url(#mC)"/>
+  <text x="540" y="270" text-anchor="middle" fill="#047857">get_table_schema → Arrow IPC</text>
+  <path d="M485,290 L485,306" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <text x="485" y="322" text-anchor="middle" fill="#c2410c">事务 Begin：lsn=XactLastCommitEnd</text>
+  <path d="M440,336 L640,336" stroke="#059669" stroke-width="2" marker-end="url(#mC)"/>
+  <text x="540" y="330" text-anchor="middle" fill="#047857">scan_table_begin(db,table,lsn)</text>
+  <text x="685" y="352" text-anchor="middle" fill="#047857">等水位 → Union Read</text>
+  <text x="685" y="370" text-anchor="middle" fill="#047857">(磁盘文件∪内存物化−删除)</text>
+  <path d="M640,384 L440,384" stroke="#059669" stroke-width="2" marker-end="url(#mC)"/>
+  <text x="540" y="378" text-anchor="middle" fill="#047857">ReadState(bincode 清单)</text>
+  <text x="485" y="402" text-anchor="middle" fill="#c2410c">mooncake_scan 组装管道</text>
+  <text x="485" y="420" text-anchor="middle" fill="#c2410c">统计裁剪 + 删除过滤挂载</text>
+  <path d="M440,434 L850,434" stroke="#d97706" stroke-width="2.2" marker-end="url(#mD)"/>
+  <text x="875" y="450" text-anchor="middle" fill="#075985">按路径直读 Parquet</text>
+  <text x="875" y="468" text-anchor="middle" fill="#075985">+Puffin 位图</text>
+  <path d="M440,482 L290,482" stroke="#d97706" stroke-width="2.2" marker-end="url(#mD)"/>
+  <text x="360" y="476" text-anchor="middle" fill="#b45309">Arrow 批 → pg 行 → 客户端</text>
+  </g>
+</svg>
+<div class="fig-cap">图 7-3 · SELECT 链路：路由 → ATTACH → schema → LSN 快照 → 文件清单 → 直读 → 向量批返回</div>
+</div>
+
+<h2>7.4 DROP 与崩溃恢复</h2>
+<div class="fig">
+<svg viewBox="0 0 980 470" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <text x="20" y="28" font-size="15" font-weight="700" fill="#334155">A · DROP TABLE 的安全删除（左）　B · 崩溃恢复（右）</text>
+  <!-- DROP -->
+  <rect x="20" y="44" width="460" height="400" rx="10" fill="#fef2f2" stroke="#fca5a5"/>
+  <text x="250" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#dc2626">DROP TABLE iceberg_t</text>
+  <text x="60" y="100" font-size="11.5" fill="#7f1d1d">① sql_drop 事件触发器拦截（DDL 已解析执行但未提交）</text>
+  <text x="60" y="126" font-size="11.5" fill="#7f1d1d">② SPI 查 pg_event_trigger_dropped_objects 过滤出表对象</text>
+  <text x="60" y="152" font-size="11.5" fill="#7f1d1d">③ 注册 PreCommit / ParallelPreCommit 事务回调</text>
+  <path d="M60,168 L440,168" stroke="#fca5a5" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="250" y="190" text-anchor="middle" font-size="11.5" font-weight="700" fill="#b91c1c">分叉：提交 or 回滚？</text>
+  <rect x="50" y="204" width="180" height="90" rx="8" fill="#fff" stroke="#fca5a5"/>
+  <text x="140" y="228" text-anchor="middle" font-size="11.5" font-weight="700" fill="#dc2626">ROLLBACK</text>
+  <text x="140" y="250" text-anchor="middle" font-size="11" fill="#7f1d1d">回调不执行</text>
+  <text x="140" y="270" text-anchor="middle" font-size="11" fill="#7f1d1d">引擎状态原样保留 ✔</text>
+  <rect x="270" y="204" width="180" height="90" rx="8" fill="#fff" stroke="#fca5a5"/>
+  <text x="360" y="228" text-anchor="middle" font-size="11.5" font-weight="700" fill="#dc2626">COMMIT</text>
+  <text x="360" y="250" text-anchor="middle" font-size="11" fill="#7f1d1d">回调触发</text>
+  <text x="360" y="270" text-anchor="middle" font-size="11" fill="#7f1d1d">RPC drop_table</text>
+  <text x="60" y="322" font-size="11.5" fill="#7f1d1d">④ moonlink：删 actor / 内存态 / WAL / 元数据行 / 数据目录</text>
+  <text x="60" y="348" font-size="11.5" fill="#7f1d1d">⑤ 复制槽随源表删除级联移除（同实例场景）</text>
+  <text x="60" y="380" font-size="11" fill="#b45309">细节：未注册 PreAbort 回调——若提交后 RPC 失败，靠重启恢复流程</text>
+  <text x="60" y="400" font-size="11" fill="#b45309">与元数据幂等清理收敛（moonlink 侧 drop 幂等）</text>
+
+  <!-- recovery -->
+  <rect x="520" y="44" width="440" height="400" rx="10" fill="#e0f2fe" stroke="#38bdf8"/>
+  <text x="740" y="70" text-anchor="middle" font-size="13" font-weight="700" fill="#075985">postmaster 重启 / bgworker 崩溃重启（15s）</text>
+  <text x="560" y="100" font-size="11.5" fill="#075985">① moonlink_service 启动 → 读 SQLite 元数据：有哪些表？</text>
+  <text x="560" y="126" font-size="11.5" fill="#075985">② 每表恢复（recovery_utils.rs recover_all_tables）</text>
+  <text x="580" y="148" font-size="11" fill="#0369a1">a. Iceberg 快照重建基线：disk_files / 删除向量 / 文件索引</text>
+  <text x="580" y="168" font-size="11" fill="#0369a1">　（从快照属性 moonlink.table-flush-lsn 拿到基线 LSN）</text>
+  <text x="580" y="192" font-size="11" fill="#0369a1">b. 回放 WAL：persistence_snapshot_lsn 之后的事件</text>
+  <text x="580" y="212" font-size="11" fill="#0369a1">c. temp/、read_through_cache/ 直接重建（可丢弃）</text>
+  <text x="560" y="240" font-size="11.5" fill="#075985">③ 恢复复制：START_REPLICATION 从槽位 confirmed LSN 续传</text>
+  <text x="580" y="262" font-size="11" fill="#0369a1">（源库一直替我们保留着未确认的 WAL——图 4-4 的回报）</text>
+  <text x="560" y="290" font-size="11.5" fill="#075985">④ FinishRecovery 事件 → actor 打开正常事件流</text>
+  <path d="M560,314 L920,314" stroke="#7dd3fc" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="740" y="340" text-anchor="middle" font-size="12" font-weight="700" fill="#075985">三层恢复材料</text>
+  <text x="740" y="366" text-anchor="middle" font-size="11.5" fill="#0369a1">Iceberg 快照（权威基线）＋ WAL（最近增量）＋ 复制槽（最终兜底）</text>
+  <text x="740" y="392" text-anchor="middle" font-size="11.5" fill="#0369a1">任意一层缺失都能由下一层补齐 —— RPO = 0（相对源库 WAL 保留策略）</text>
+  <text x="740" y="424" text-anchor="middle" font-size="11" fill="#94a3b8">DuckDB/Postgres 侧无需恢复：镜像表本来就是“空壳”，重启即用</text>
+</svg>
+<div class="fig-cap">图 7-4 · DROP 的提交期同步与崩溃恢复的三层接力</div>
+</div>
+
+<h2>7.5 全局收束：LSN 不变式</h2>
+<div class="fig">
+<svg viewBox="0 0 980 330" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <text x="20" y="28" font-size="15" font-weight="700" fill="#334155">四条水位线与其不变式 —— 整个系统的“时序宪法”</text>
+  <!-- water lines -->
+  <line x1="80" y1="70" x2="900" y2="70" stroke="#dc2626" stroke-width="3" stroke-dasharray="10 6"/>
+  <text x="80" y="60" font-size="12.5" font-weight="700" fill="#dc2626">replication_lsn（复制流已收到）</text>
+  <line x1="80" y1="130" x2="900" y2="130" stroke="#d97706" stroke-width="3" stroke-dasharray="10 6"/>
+  <text x="80" y="120" font-size="12.5" font-weight="700" fill="#d97706">commit_lsn（引擎已提交入账）</text>
+  <line x1="80" y1="190" x2="900" y2="190" stroke="#059669" stroke-width="3" stroke-dasharray="10 6"/>
+  <text x="80" y="180" font-size="12.5" font-weight="700" fill="#059669">mooncake_snapshot_lsn / flush_lsn（已可一致扫描）</text>
+  <line x1="80" y1="250" x2="900" y2="250" stroke="#0284c7" stroke-width="3" stroke-dasharray="10 6"/>
+  <text x="80" y="240" font-size="12.5" font-weight="700" fill="#0284c7">iceberg_lsn（已持久化到湖仓，崩溃可恢复）</text>
+  <text x="905" y="74" font-size="11" fill="#64748b">最新</text>
+  <text x="905" y="254" font-size="11" fill="#64748b">最旧</text>
+  <rect x="20" y="280" width="940" height="42" rx="9" fill="#eef2ff" stroke="#c7d2fe"/>
+  <text x="490" y="306" text-anchor="middle" font-size="14" font-weight="800" fill="#4338ca">iceberg_lsn ≤ mooncake_snapshot_lsn ≤ commit_lsn ≤ replication_lsn</text>
+</svg>
+<div class="fig-cap">图 7-5 · LSN 不变式：写入照它推进，扫描照它等待，恢复照它补齐</div>
+</div>
+<div class="callout key"><b>🔑 全书收束</b>
+ pg_mooncake 的所有机制——空壳 AM、进程内 bgworker、bincode RPC、文件直读、Puffin 附件、压缩搭车、WAL 三层恢复——都是在为这一条不等式服务：<b>用一条 LSN 流水线，同时解决“新鲜、一致、可恢复”三件事，且互不阻塞。</b></div>
+
+<div class="pager">
+  <a href="06-query-duckdb.html"><span class="dir">◀ 上一篇</span><b>06 · 查询路径</b></a>
+  <a href="08-design-philosophy.html"><span class="dir">下一篇 ▶</span><b>08 · 设计精髓与创新点</b></a>
+</div>
+</main>
+
+<footer><div class="wrap">pg_mooncake 源码深度解析 · 第 07 章 · 基于 commit b7c67e0</div></footer>
+</body>
+</html>

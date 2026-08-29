@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>02 · Postgres 扩展层（src/） — pg_mooncake 源码深度解析</title>
+<style>
+:root{
+  --pg:#336791; --ext:#6366f1; --moon:#059669; --duck:#d97706; --dmk:#ea580c;
+  --ice:#0284c7; --ink:#0f172a; --mut:#64748b; --line:#e2e8f0; --bg:#f8fafc;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;color:var(--ink);background:var(--bg);line-height:1.75}
+.wrap{max-width:1100px;margin:0 auto;padding:0 28px}
+a{color:var(--ext);text-decoration:none}
+a:hover{text-decoration:underline}
+code,pre,.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace}
+code.path{background:#eef2ff;color:#4338ca;padding:1px 7px;border-radius:6px;font-size:.86em;white-space:nowrap}
+code.k{background:#f1f5f9;border:1px solid var(--line);padding:1px 6px;border-radius:6px;font-size:.86em}
+.topbar{position:sticky;top:0;z-index:9;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.topbar .wrap{display:flex;align-items:center;gap:18px;height:52px;font-size:14px}
+.topbar .logo{font-weight:800;color:var(--ext);font-size:15px}
+.topbar a{color:var(--mut)}
+.hero{background:linear-gradient(135deg,#eef2ff 0%,#f0fdfa 100%);border-bottom:1px solid var(--line);padding:30px 0 26px}
+.hero .tag{display:inline-block;background:var(--ext);color:#fff;border-radius:999px;padding:2px 14px;font-size:12.5px;font-weight:600}
+.hero h1{font-size:28px;margin:12px 0 6px}
+.hero p.sub{color:#334155;font-size:15px;margin:0;max-width:860px}
+main{padding:30px 0 60px}
+h2{font-size:23px;border-left:5px solid var(--ext);padding-left:12px;margin:42px 0 14px}
+h3{font-size:17.5px;margin:26px 0 10px;color:#1e293b}
+.fig{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 18px 8px;margin:24px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.fig svg{width:100%;height:auto;display:block}
+.fig-cap{text-align:center;color:var(--mut);font-size:13px;padding:12px 0 8px;border-top:1px dashed var(--line);margin-top:14px}
+.codeblock{background:#0b1220;color:#dbe4f3;border-radius:12px;padding:0 0 14px;overflow:auto;font-size:13px;line-height:1.65;margin:18px 0}
+.codeblock .fname{display:block;background:#111c33;color:#93c5fd;padding:8px 16px;font-size:12px;border-bottom:1px solid #1e293b;font-family:ui-monospace,Menlo,monospace}
+.codeblock pre{margin:0;padding:14px 18px}
+.codeblock .c{color:#64748b}.codeblock .k{color:#c4b5fd}.codeblock .s{color:#86efac}.codeblock .f{color:#7dd3fc}
+.callout{border-radius:12px;padding:14px 18px;margin:18px 0;font-size:14.5px;border:1px solid}
+.callout b:first-child{display:block;margin-bottom:4px}
+.tip{background:#ecfdf5;border-color:#a7f3d0}.tip b:first-child{color:#047857}
+.warn{background:#fffbeb;border-color:#fde68a}.warn b:first-child{color:#b45309}
+.key{background:#eef2ff;border-color:#c7d2fe}.key b:first-child{color:#4338ca}
+table.t{width:100%;border-collapse:collapse;font-size:14px;margin:16px 0;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+table.t th{background:#f1f5f9;text-align:left;padding:9px 14px;border-bottom:2px solid var(--line);font-size:13px;color:#334155}
+table.t td{padding:9px 14px;border-bottom:1px solid #f1f5f9;vertical-align:top}
+footer{border-top:1px solid var(--line);padding:26px 0 44px;color:var(--mut);font-size:13.5px}
+.pager{display:flex;justify-content:space-between;gap:14px;margin-top:34px}
+.pager a{flex:1;background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 18px;color:var(--ink)}
+.pager a:hover{border-color:var(--ext);text-decoration:none}
+.pager .dir{font-size:12px;color:var(--mut);display:block}
+</style>
+</head>
+<body>
+<div class="topbar"><div class="wrap">
+  <span class="logo">🧁 pg_mooncake 源码深度解析</span>
+  <a href="index.html">总览</a><a href="01-architecture.html">架构总览</a><a href="02-postgres-extension.html"><b style="color:var(--ext)">扩展层</b></a><a href="03-moonlink-engine.html">moonlink</a><a href="04-cdc-replication.html">CDC 复制</a><a href="05-storage-iceberg.html">存储与 Iceberg</a><a href="06-query-duckdb.html">查询路径</a><a href="07-data-flow.html">端到端数据流</a><a href="08-design-philosophy.html">设计精髓</a>
+</div></div>
+
+<div class="hero"><div class="wrap">
+  <span class="tag">第 02 章</span>
+  <h1>Postgres 扩展层：940 行代码如何撬动整个湖仓</h1>
+  <p class="sub">src/ 是整个项目最薄、也最“反直觉”的部分——表访问方法几乎是空的，数据一条都不经过它。本章逐文件拆解它到底做了什么、为什么敢这么设计。</p>
+</div></div>
+
+<main class="wrap">
+
+<h2>2.1 文件地图</h2>
+<p>先说明一个容易误解的事实：虽然目录叫 <code class="path">src/</code>，但它是 <b>Rust</b> 代码（pgrx 框架编译为 Postgres 可加载的 cdylib），不是 C。8 个文件分工如下：</p>
+<div class="fig">
+<svg viewBox="0 0 980 470" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <rect x="20" y="20" width="940" height="430" rx="12" fill="#eef2ff" stroke="#6366f1" stroke-width="1.8"/>
+  <text x="40" y="48" font-size="15" font-weight="700" fill="#4338ca">src/ — Postgres 扩展本体（crate pg_mooncake，cdylib）</text>
+
+  <rect x="40" y="66" width="292" height="86" rx="9" fill="#fff" stroke="#a5b4fc"/>
+  <text x="186" y="90" font-size="13" font-weight="700" text-anchor="middle" fill="#3730a3">lib.rs（18 行）</text>
+  <text x="186" y="110" font-size="11.5" text-anchor="middle" fill="#4f46e5">pg_module_magic! · 打包 bootstrap.sql</text>
+  <text x="186" y="128" font-size="11.5" text-anchor="middle" fill="#4f46e5">_PG_init → bgworker::init() + table::init()</text>
+
+  <rect x="344" y="66" width="292" height="86" rx="9" fill="#fff" stroke="#a5b4fc"/>
+  <text x="490" y="90" font-size="13" font-weight="700" text-anchor="middle" fill="#3730a3">table.rs（588 行，最大文件）</text>
+  <text x="490" y="110" font-size="11.5" text-anchor="middle" fill="#4f46e5">static MOONCAKE_AM: TableAmRoutine（空壳）</text>
+  <text x="490" y="128" font-size="11.5" text-anchor="middle" fill="#4f46e5">RegisterDuckdbTableAm("mooncake", &amp;AM)</text>
+
+  <rect x="648" y="66" width="292" height="86" rx="9" fill="#fff" stroke="#a5b4fc"/>
+  <text x="794" y="90" font-size="13" font-weight="700" text-anchor="middle" fill="#3730a3">functions.rs（232 行）</text>
+  <text x="794" y="110" font-size="11.5" text-anchor="middle" fill="#4f46e5">create_table / create_snapshot / list_tables</text>
+  <text x="794" y="128" font-size="11.5" text-anchor="middle" fill="#4f46e5">load_files / optimize_table / drop 事件触发器</text>
+
+  <rect x="40" y="166" width="292" height="86" rx="9" fill="#fff" stroke="#a5b4fc"/>
+  <text x="186" y="190" font-size="13" font-weight="700" text-anchor="middle" fill="#3730a3">bgworker.rs（38 行）</text>
+  <text x="186" y="210" font-size="11.5" text-anchor="middle" fill="#4f46e5">BackgroundWorkerBuilder("moonlink")</text>
+  <text x="186" y="228" font-size="11.5" text-anchor="middle" fill="#4f46e5">#[tokio::main] start → moonlink_service</text>
+
+  <rect x="344" y="166" width="292" height="86" rx="9" fill="#fff" stroke="#a5b4fc"/>
+  <text x="490" y="190" font-size="13" font-weight="700" text-anchor="middle" fill="#3730a3">duckdb_mooncake.rs（29 行）</text>
+  <text x="490" y="210" font-size="11.5" text-anchor="middle" fill="#4f46e5">#[no_mangle] 导出三个 C 符号</text>
+  <text x="490" y="228" font-size="11.5" text-anchor="middle" fill="#4f46e5">get_init_query / get_lsn / drop_cstring</text>
+
+  <rect x="648" y="166" width="292" height="86" rx="9" fill="#fff" stroke="#a5b4fc"/>
+  <text x="794" y="190" font-size="13" font-weight="700" text-anchor="middle" fill="#3730a3">utils.rs（31 行）</text>
+  <text x="794" y="210" font-size="11.5" text-anchor="middle" fill="#4f46e5">DATABASE 静态量 · block_on（current-thread）</text>
+  <text x="794" y="228" font-size="11.5" text-anchor="middle" fill="#4f46e5">get_stream → Mutex&lt;UnixStream&gt;(moonlink.sock)</text>
+
+  <rect x="40" y="266" width="596" height="70" rx="9" fill="#0b1220"/>
+  <text x="338" y="292" font-size="12.5" text-anchor="middle" fill="#93c5fd" font-family="Menlo,monospace">sql/bootstrap.sql：CREATE SCHEMA mooncake;</text>
+  <text x="338" y="314" font-size="12.5" text-anchor="middle" fill="#93c5fd" font-family="Menlo,monospace">SELECT duckdb.install_extension('mooncake', 'community');</text>
+
+  <rect x="648" y="266" width="292" height="70" rx="9" fill="#fff" stroke="#a5b4fc"/>
+  <text x="794" y="292" font-size="12.5" text-anchor="middle" fill="#3730a3">bin/pgrx_embed.rs（1 行）</text>
+  <text x="794" y="314" font-size="11.5" text-anchor="middle" fill="#4f46e5">pgrx_embed!() 生成扩展安装 SQL</text>
+
+  <rect x="40" y="350" width="900" height="84" rx="9" fill="#f8fafc" stroke="#cbd5e1" stroke-dasharray="6 4"/>
+  <text x="490" y="376" font-size="13" font-weight="700" text-anchor="middle" fill="#334155">没有的东西（同样重要）</text>
+  <text x="490" y="398" font-size="12" text-anchor="middle" fill="#64748b">没有任何 Postgres 钩子（planner/utility hook 都不在此扩展） · 没有 GUC 定义 · 没有目录表</text>
+  <text x="490" y="418" font-size="12" text-anchor="middle" fill="#64748b">没有行数据转换代码（无 Arrow/元组转换）—— 查询路由全部委托给 pg_duckdb 的钩子</text>
+</svg>
+<div class="fig-cap">图 2-1 · src/ 文件地图：8 个文件，每个都小到可以一次读完</div>
+</div>
+
+<h2>2.2 扩展入口：_PG_init 做的两件事</h2>
+<div class="codeblock"><span class="fname">src/lib.rs</span>
+<pre>pg_module_magic!();                          <span class="c">// Postgres 动态库入口约定</span>
+extension_sql_file!(<span class="s">"./sql/bootstrap.sql"</span>);  <span class="c">// CREATE EXTENSION 时执行</span>
+
+<span class="k">#[pg_guard]</span>
+<span class="k">pub extern</span> <span class="s">"C-unwind"</span> <span class="k">fn</span> <span class="f">_PG_init</span>() {
+    bgworker::init();   <span class="c">// ① 注册 moonlink 后台工作进程（仅 postmaster 阶段生效）</span>
+    table::init();      <span class="c">// ② 把 MOONCAKE_AM 注册进 pg_duckdb 的表 AM 注册表</span>
+}</pre></div>
+<div class="callout key"><b>🔑 关键理解</b>
+<code class="k">_PG_init</code> 在<b>每个加载本库的 Postgres 进程</b>里都会执行一次：postmaster 里注册 bgworker；每个 backend 里把 <code class="k">MOONCAKE_AM</code> 指针登记进 pg_duckdb 的进程内注册表 <code class="k">duckdb_table_ams</code>（<code class="path">pg_duckdb/src/pgduckdb_table_am.cpp:502</code>）。之后 planner 钩子只要看到某关系的 <code class="k">rd_tableam</code> 命中该注册表，就知道“这表归 DuckDB 管”。</div>
+
+<h2>2.3 空壳表访问方法：全项目的点睛之笔</h2>
+<p><code class="path">src/table.rs</code> 定义了一个完整的 <code class="k">TableAmRoutine</code> 静态结构 <code class="k">MOONCAKE_AM</code>。Postgres 要求 AM 的每个槽位都有值，但它把<b>所有涉及行数据的回调都填成了 <code class="k">unimplemented!()</code></b>（一旦被调用即 panic），只保留少数“结构性”回调给出无害实现：</p>
+<div class="fig">
+<svg viewBox="0 0 980 560" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <text x="20" y="30" font-size="15" font-weight="700" fill="#334155">MOONCAKE_AM 回调表剖析（src/table.rs:9-61）</text>
+  <!-- table skeleton -->
+  <rect x="20" y="46" width="470" height="500" rx="10" fill="#0b1220"/>
+  <text x="40" y="72" font-size="12.5" fill="#86efac" font-family="Menlo,monospace" font-weight="700">✔ 有实现的回调（与数据无关）</text>
+  <text x="40" y="96" font-size="12" fill="#dbe4f3" font-family="Menlo,monospace">slot_callbacks        → TTSOpsMinimalTuple</text>
+  <text x="40" y="118" font-size="12" fill="#dbe4f3" font-family="Menlo,monospace">scan_begin / scan_end → 分配/释放扫描描述符</text>
+  <text x="40" y="140" font-size="12" fill="#dbe4f3" font-family="Menlo,monospace">relation_set_new_filenode(-locator)</text>
+  <text x="180" y="140" font-size="12" fill="#64748b" font-family="Menlo,monospace">→ 空操作，不建任何物理文件</text>
+  <text x="40" y="162" font-size="12" fill="#dbe4f3" font-family="Menlo,monospace">relation_nontransactional_truncate → 空操作</text>
+  <text x="40" y="184" font-size="12" fill="#dbe4f3" font-family="Menlo,monospace">relation_size / estimate_size → 全 0</text>
+  <text x="180" y="184" font-size="12" fill="#64748b" font-family="Menlo,monospace">（planner 眼里永远是空表）</text>
+  <text x="40" y="206" font-size="12" fill="#dbe4f3" font-family="Menlo,monospace">scan_analyze_next_block → false（ANALYZE 读不到行）</text>
+  <text x="40" y="228" font-size="12" fill="#dbe4f3" font-family="Menlo,monospace">relation_needs_toast_table → false</text>
+  <text x="40" y="264" font-size="12.5" fill="#fca5a5" font-family="Menlo,monospace" font-weight="700">✘ unimplemented!() 的回调（永远不该被调用）</text>
+  <text x="40" y="288" font-size="12" fill="#fda4af" font-family="Menlo,monospace">tuple_insert / multi_insert / tuple_delete</text>
+  <text x="40" y="310" font-size="12" fill="#fda4af" font-family="Menlo,monospace">tuple_update / tuple_lock · scan_getnextslot</text>
+  <text x="40" y="332" font-size="12" fill="#fda4af" font-family="Menlo,monospace">index_fetch_* · bitmap/sample 扫描 · 并行扫描</text>
+  <text x="40" y="354" font-size="12" fill="#fda4af" font-family="Menlo,monospace">relation_vacuum / relation_copy_for_cluster …</text>
+  <text x="40" y="390" font-size="12" fill="#93c5fd" font-family="Menlo,monospace" font-weight="700">含义：Postgres 核心永远不会触碰这表的数据。</text>
+  <text x="40" y="412" font-size="12" fill="#93c5fd" font-family="Menlo,monospace">若发生 = 逻辑 bug，直接 panic 暴露问题。</text>
+  <text x="40" y="448" font-size="12.5" fill="#fcd34d" font-family="Menlo,monospace" font-weight="700">init() 的真正动作：</text>
+  <text x="40" y="470" font-size="12" fill="#dbe4f3" font-family="Menlo,monospace">extern "C" { RegisterDuckdbTableAm(name, am) }</text>
+  <text x="40" y="492" font-size="12" fill="#dbe4f3" font-family="Menlo,monospace">→ pg_duckdb 进程内注册表 duckdb_table_ams</text>
+  <text x="40" y="514" font-size="12" fill="#dbe4f3" font-family="Menlo,monospace">→ {"mooncake" ⇒ &amp;MOONCAKE_AM}</text>
+
+  <!-- right side flow -->
+  <rect x="530" y="46" width="430" height="240" rx="10" fill="#fffbeb" stroke="#fde68a"/>
+  <text x="745" y="74" font-size="13.5" font-weight="700" text-anchor="middle" fill="#b45309">CREATE TABLE c(...) USING mooncake 时发生什么</text>
+  <rect x="550" y="88" width="390" height="34" rx="7" fill="#fff" stroke="#fcd34d"/>
+  <text x="745" y="110" font-size="12" text-anchor="middle" fill="#92400e">Postgres 解析 ACCESS METHOD mooncake → 调 handler</text>
+  <path d="M745,122 L745,138" stroke="#d97706" stroke-width="2" marker-end="url(#mD)"/>
+  <rect x="550" y="140" width="390" height="34" rx="7" fill="#fff" stroke="#fcd34d"/>
+  <text x="745" y="162" font-size="12" text-anchor="middle" fill="#92400e">mooncake_am_handler 返回 &amp;MOONCAKE_AM → 存入 rd_tableam</text>
+  <path d="M745,174 L745,190" stroke="#d97706" stroke-width="2" marker-end="url(#mD)"/>
+  <rect x="550" y="192" width="390" height="34" rx="7" fill="#fff" stroke="#fcd34d"/>
+  <text x="745" y="214" font-size="12" text-anchor="middle" fill="#92400e">relation_set_new_filelocator：no-op，磁盘上零字节</text>
+  <path d="M745,226 L745,242" stroke="#d97706" stroke-width="2" marker-end="url(#mD)"/>
+  <rect x="550" y="244" width="390" height="34" rx="7" fill="#fef3c7" stroke="#f59e0b"/>
+  <text x="745" y="266" font-size="12" font-weight="700" text-anchor="middle" fill="#92400e">结果：一张“元数据存在、数据不存在”的空壳表</text>
+
+  <rect x="530" y="306" width="430" height="240" rx="10" fill="#eef2ff" stroke="#c7d2fe"/>
+  <text x="745" y="334" font-size="13.5" font-weight="700" text-anchor="middle" fill="#4338ca">SELECT * FROM c 时发生什么</text>
+  <rect x="550" y="348" width="390" height="34" rx="7" fill="#fff" stroke="#a5b4fc"/>
+  <text x="745" y="370" font-size="12" text-anchor="middle" fill="#4f46e5">planner 钩子：rd_tableam 命中注册表 → IsDuckdbTable=true</text>
+  <path d="M745,382 L745,398" stroke="#6366f1" stroke-width="2" marker-end="url(#mB)"/>
+  <rect x="550" y="400" width="390" height="34" rx="7" fill="#fff" stroke="#a5b4fc"/>
+  <text x="745" y="422" font-size="12" text-anchor="middle" fill="#4f46e5">整条 SQL 改由内嵌 DuckDB 规划执行（pg_duckdb）</text>
+  <path d="M745,434 L745,450" stroke="#6366f1" stroke-width="2" marker-end="url(#mB)"/>
+  <rect x="550" y="452" width="390" height="34" rx="7" fill="#fff" stroke="#a5b4fc"/>
+  <text x="745" y="474" font-size="12" text-anchor="middle" fill="#4f46e5">DuckDB 走 mooncake_scan 读 Parquet（不经表 AM！）</text>
+  <rect x="550" y="498" width="390" height="36" rx="7" fill="#e0e7ff" stroke="#818cf8"/>
+  <text x="745" y="521" font-size="12" font-weight="700" text-anchor="middle" fill="#3730a3">表 AM 只当“路标”，从不当“通道”</text>
+</svg>
+<div class="fig-cap">图 2-2 · 空壳表 AM 剖析：注册进 pg_duckdb 才是它的唯一使命，行数据回调 panic 是特性不是缺陷</div>
+</div>
+<div class="callout tip"><b>💡 为什么要费这个劲</b>
+用真表 AM 而不是 FDW/视图，换来的是：① <code class="k">pg_dump</code>/<code class="k">\d</code>/权限/依赖等目录管理全部原生；② pg_duckdb 的 ruleutils 能把表定义反解析成 <code class="k">USING mooncake</code>；③ planner 钩子有稳定的识别锚点（rd_tableam 指针）。代价是必须“装作”一张表——这就是那些空实现回调的由来。</div>
+
+<h2>2.4 mooncake.create_table：一次“借道自己”的 DDL</h2>
+<p>创建镜像表的过程堪称精巧：过程先<b>用一条独立的 SQL 连接</b>（rust-postgres + native-tls，而非 SPI）读取源表列定义，然后执行 <code class="k">CREATE TABLE … USING mooncake</code>，最后才通过 RPC 通知 moonlink 开始复制。这样设计让“源库”与“目标库”可以是<b>两个不同的 Postgres 实例</b>（<code class="k">src_uri</code> 参数）。</p>
+<div class="codeblock"><span class="fname">src/functions.rs（节选，行号为对应源码位置）</span>
+<pre><span class="c">// L24-43：存储过程入口</span>
+<span class="k">#[pg_extern</span>(sql = <span class="s">"..."</span><span class="k">)</span>]
+<span class="k">fn</span> <span class="f">create_table</span>(dst: &amp;<span class="k">str</span>, src: &amp;<span class="k">str</span>, src_uri: <span class="k">Option</span>&lt;&amp;<span class="k">str</span>&gt;,
+                table_config: <span class="k">Option</span>&lt;pgrx::JsonB&gt;) -&gt; TableResult&lt;()&gt; {
+    <span class="k">let</span> dst_table = parse_table(dst)?;                 <span class="c">// L146：正则解析 schema.table（支持引号标识符）</span>
+    <span class="k">let</span> src_table = parse_table(src)?;
+    <span class="k">let</span> dst_uri = get_loopback_uri()?;                 <span class="c">// L165：postgresql:///db?host=&lt;unix_socket_dir&gt;&amp;port=…&amp;user=…</span>
+    <span class="k">let</span> src_uri = src_uri.unwrap_or(&amp;dst_uri);         <span class="c">// 默认源 = 本实例（环回）</span>
+    create_mooncake_table(&amp;dst_table, &amp;dst_uri, &amp;src_table, src_uri)?;  <span class="c">// ① 先建空壳表</span>
+    <span class="k">let</span> mut stream = get_stream();                     <span class="c">// ② 再通知 moonlink（阻塞式 RPC）</span>
+    block_on(moonlink_rpc::create_table(&amp;mut stream, DATABASE.to_owned(),
+        dst_table.to_string(), src_table.to_string(),
+        src_uri.to_owned(), config_str))
+}
+
+<span class="c">// L198-232：用 rust-postgres 直连内省 pg_attribute，拼出列定义并执行 DDL</span>
+<span class="k">fn</span> <span class="f">create_mooncake_table</span>(…) -&gt; Result&lt;()&gt; {
+    <span class="k">let</span> query = <span class="s">"SELECT string_agg(
+        format_type(a.atttypid, a.atttypmod) ||
+        CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END, ', ')
+        FROM pg_attribute a WHERE a.attrelid = $1
+          AND a.attnum &gt; 0 AND NOT a.attisdropped"</span>;
+    <span class="c">// ...对 src 连接执行，拿到 "col1 type NOT NULL, col2 type, …"</span>
+    dst_client.execute(<span class="s">"CREATE TABLE … USING mooncake"</span>, &amp;[])?;
+}</pre></div>
+
+<div class="fig">
+<svg viewBox="0 0 980 470" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <text x="20" y="28" font-size="15" font-weight="700" fill="#334155">CALL mooncake.create_table('c', 'r') 全流程</text>
+  <!-- lanes -->
+  <rect x="20" y="44" width="170" height="410" rx="10" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <rect x="200" y="44" width="190" height="410" rx="10" fill="#eef2ff" stroke="#c7d2fe"/>
+  <rect x="400" y="44" width="190" height="410" rx="10" fill="#fffbeb" stroke="#fde68a"/>
+  <rect x="600" y="44" width="180" height="410" rx="10" fill="#ecfdf5" stroke="#a7f3d0"/>
+  <rect x="790" y="44" width="170" height="410" rx="10" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="105" y="70" font-size="13" font-weight="700" text-anchor="middle" fill="#334155">psql / 调用方</text>
+  <text x="295" y="70" font-size="13" font-weight="700" text-anchor="middle" fill="#4338ca">create_table 过程</text>
+  <text x="495" y="70" font-size="13" font-weight="700" text-anchor="middle" fill="#b45309">Postgres（目标实例）</text>
+  <text x="690" y="70" font-size="13" font-weight="700" text-anchor="middle" fill="#047857">moonlink bgworker</text>
+  <text x="875" y="70" font-size="13" font-weight="700" text-anchor="middle" fill="#c2410c">源实例</text>
+
+  <path d="M105,96 L295,96" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <text x="200" y="90" font-size="11.5" text-anchor="middle" fill="#475569">CALL mooncake.create_table</text>
+  <path d="M295,116 L295,132" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <text x="360" y="128" font-size="11" text-anchor="start" fill="#64748b">parse_table 正则规整名称；构造 loopback URI</text>
+  <path d="M295,152 L495,152" stroke="#6366f1" stroke-width="2" marker-end="url(#mB)"/>
+  <text x="395" y="146" font-size="11" text-anchor="middle" fill="#4338ca">① rust-postgres 连接（native-tls）</text>
+  <path d="M495,172 L875,172" stroke="#d97706" stroke-width="2" marker-end="url(#mD)"/>
+  <text x="685" y="166" font-size="11" text-anchor="middle" fill="#b45309">查询 pg_attribute：列名 + format_type + NOT NULL</text>
+  <path d="M875,192 L495,192" stroke="#d97706" stroke-width="2" marker-end="url(#mD)"/>
+  <text x="685" y="186" font-size="11" text-anchor="middle" fill="#b45309">返回列定义串（PK/索引/默认值不复制）</text>
+  <path d="M495,212 L495,228" stroke="#d97706" stroke-width="2" marker-end="url(#mD)"/>
+  <text x="495" y="248" font-size="11.5" text-anchor="middle" fill="#b45309">CREATE TABLE c(...) USING mooncake</text>
+  <text x="495" y="266" font-size="10.5" text-anchor="middle" fill="#d97706">（走空壳 AM，relation_set_new_filelocator no-op）</text>
+  <path d="M295,288 L600,288" stroke="#059669" stroke-width="2.2" marker-end="url(#mC)"/>
+  <text x="448" y="282" font-size="11.5" text-anchor="middle" fill="#047857" font-weight="700">② RPC create_table(database, table, src, src_uri, config)</text>
+  <path d="M690,308 L690,324" stroke="#059669" stroke-width="2" marker-end="url(#mC)"/>
+  <text x="690" y="344" font-size="11.5" text-anchor="middle" fill="#047857">注册表元数据(SQLite) · 组装 TableHandler</text>
+  <text x="690" y="362" font-size="11.5" text-anchor="middle" fill="#047857">恢复/新建 WAL · 准备 Iceberg 表</text>
+  <path d="M600,382 L875,382" stroke="#dc2626" stroke-width="2.2" marker-end="url(#mR)"/>
+  <text x="738" y="376" font-size="11.5" text-anchor="middle" fill="#dc2626">③ 建逻辑复制槽 + 初始拷贝 + 订阅 pgoutput</text>
+  <path d="M600,406 L295,406" stroke="#059669" stroke-width="2" marker-end="url(#mC)"/>
+  <text x="448" y="400" font-size="11" text-anchor="middle" fill="#047857">RPC 返回 OK → CALL 完成</text>
+  <path d="M105,428 L295,428" stroke="#475569" stroke-width="0"/>
+  <text x="200" y="446" font-size="11" text-anchor="middle" fill="#64748b">此后镜像表 c 可被 SELECT（数据由复制流陆续到达）</text>
+</svg>
+<div class="fig-cap">图 2-3 · create_table 时序：先在目标实例“借道自己”建空壳表，再让 moonlink 从源实例拉取数据</div>
+</div>
+
+<h2>2.5 DROP 的两阶段同步：事件触发器 + 事务回调</h2>
+<p>删除镜像表必须解决一个经典难题：<b>DDL 可能回滚</b>。如果 <code class="k">sql_drop</code> 事件触发时立刻通知 moonlink 删表，而随后事务 ROLLBACK，引擎状态就丢了。解法是把 RPC 推迟到<b>事务预提交回调</b>里：</p>
+<div class="codeblock"><span class="fname">src/functions.rs:45-82（节选）</span>
+<pre><span class="k">#[pg_extern</span>(sql = <span class="s">"..."</span><span class="k">)</span>]
+<span class="k">fn</span> <span class="f">mooncake_drop_trigger</span>(trigger: &amp;pgrx::PgTrigger) -&gt; Result&lt;()&gt; {
+    <span class="c">// SPI 查询本次 DROP 的对象，过滤 object_type = 'table'</span>
+    <span class="k">let</span> dropped_tables: Vec&lt;String&gt; = /* pg_event_trigger_dropped_objects */;
+    <span class="k">for</span> table <span class="k">in</span> dropped_tables {
+        <span class="k">let</span> tbl = table.clone();
+        pgrx::register_xact_callback(PgXactCallbackEvent::PreCommit, <span class="k">move</span> || {
+            <span class="c">// 只在事务真正提交时才通知引擎删表</span>
+            block_on(moonlink_rpc::drop_table(&amp;mut stream, DATABASE…, tbl))
+        });
+        <span class="c">// 并行 worker 提交路径（ParallelPreCommit）同样注册</span>
+    }
+}</pre></div>
+<div class="fig">
+<svg viewBox="0 0 980 300" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+  <text x="20" y="28" font-size="15" font-weight="700" fill="#334155">DROP TABLE c 的事务安全删除</text>
+  <rect x="20" y="46" width="220" height="220" rx="10" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <rect x="260" y="46" width="240" height="220" rx="10" fill="#eef2ff" stroke="#c7d2fe"/>
+  <rect x="520" y="46" width="200" height="220" rx="10" fill="#ecfdf5" stroke="#a7f3d0"/>
+  <rect x="740" y="46" width="220" height="220" rx="10" fill="#fffbeb" stroke="#fde68a"/>
+  <text x="130" y="72" font-size="12.5" font-weight="700" text-anchor="middle" fill="#334155">事务上下文</text>
+  <text x="380" y="72" font-size="12.5" font-weight="700" text-anchor="middle" fill="#4338ca">事件触发器（sql_drop）</text>
+  <text x="620" y="72" font-size="12.5" font-weight="700" text-anchor="middle" fill="#047857">事务预提交回调</text>
+  <text x="850" y="72" font-size="12.5" font-weight="700" text-anchor="middle" fill="#b45309">moonlink</text>
+  <text x="130" y="100" font-size="11.5" text-anchor="middle" fill="#475569">DROP TABLE c;</text>
+  <text x="130" y="120" font-size="11.5" text-anchor="middle" fill="#475569">（尚未提交）</text>
+  <path d="M240,96 L260,96" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <text x="380" y="104" font-size="11.5" text-anchor="middle" fill="#4f46e5">收集被删表名（SPI）</text>
+  <text x="380" y="128" font-size="11.5" text-anchor="middle" fill="#4f46e5">注册 PreCommit / ParallelPreCommit</text>
+  <text x="380" y="150" font-size="11" text-anchor="middle" fill="#64748b">此刻什么都不删</text>
+  <text x="380" y="186" font-size="11.5" fill="#dc2626" text-anchor="middle" font-weight="700">若 ROLLBACK →</text>
+  <text x="380" y="206" font-size="11" fill="#dc2626" text-anchor="middle">回调不执行，引擎状态原样保留 ✔</text>
+  <path d="M500,96 L520,96" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <text x="620" y="104" font-size="11.5" text-anchor="middle" fill="#047857">提交时刻触发回调</text>
+  <text x="620" y="128" font-size="11.5" text-anchor="middle" fill="#047857">RPC drop_table(database, table)</text>
+  <path d="M720,96 L740,96" stroke="#475569" stroke-width="2" marker-end="url(#mA)"/>
+  <text x="850" y="104" font-size="11.5" text-anchor="middle" fill="#b45309">删除内存状态 / WAL / 元数据行</text>
+  <text x="850" y="128" font-size="11.5" text-anchor="middle" fill="#b45309">清空该表数据目录</text>
+  <text x="850" y="160" font-size="11" fill="#64748b" text-anchor="middle">（复制槽随源表删除而移除）</text>
+</svg>
+<div class="fig-cap">图 2-4 · DROP 同步：把破坏性 RPC 延迟到 PreCommit，天然获得“回滚安全”</div>
+</div>
+
+<h2>2.6 后台工作进程与每后端状态</h2>
+<div class="codeblock"><span class="fname">src/bgworker.rs</span>
+<pre><span class="k">pub</span>(<span class="k">crate</span>) <span class="k">fn</span> <span class="f">init</span>() {
+    BackgroundWorkerBuilder::new(<span class="s">"moonlink"</span>)
+        .set_library(<span class="s">"pg_mooncake"</span>)        <span class="c">// 从本 .so 找入口</span>
+        .set_function(<span class="s">"moonlink_main"</span>)
+        .enable_shmem_access(<span class="k">None</span>)          <span class="c">// 需要共享内存访问权限</span>
+        .set_start_time(BgWorkerStartTime::ConsistentState)
+        .set_restart_time(Some(Duration::from_secs(<span class="f">15</span>)))  <span class="c">// 崩溃 15s 后重启</span>
+        .load();
+}
+
+<span class="k">#[tokio::main]</span>
+<span class="k">pub async fn</span> <span class="f">start</span>() {
+    <span class="k">let</span> config = ServiceConfig {
+        base_path: <span class="s">"pg_mooncake"</span>.to_owned(),  <span class="c">// 相对 cwd = $PGDATA</span>
+        data_server_uri: <span class="k">None</span>, rest_api_port: <span class="k">None</span>,
+        otel_ingestion_api_port: <span class="k">None</span>, tcp_port: <span class="k">None</span>,   <span class="c">// 内嵌模式全部关闭</span>
+        log_directory: <span class="k">None</span>, otel_export_target: <span class="k">None</span>,
+    };
+    start_with_config(config).await.unwrap();
+}</pre></div>
+<p>每个 backend 里则维持着极简的“每进程一份”状态（<code class="path">src/utils.rs</code>）：</p>
+<table class="t">
+  <tr><th>静态量 / 函数</th><th>内容</th><th>为什么这样</th></tr>
+  <tr><td><code class="k">DATABASE: LazyLock&lt;String&gt;</code></td><td>当前数据库名（<code class="k">get_database_name(MyDatabaseId)</code>）</td><td>RPC 都带 database 参数；backend 生命周期内不变，缓存一次即可</td></tr>
+  <tr><td><code class="k">block_on()</code></td><td>懒初始化的 <b>current-thread</b> tokio runtime</td><td>在 Postgres 进程内嵌异步调用但不能抢主线程；单线程运行时零竞争</td></tr>
+  <tr><td><code class="k">get_stream()</code></td><td><code class="k">Mutex&lt;UnixStream&gt;</code>，首次连接 <code class="k">pg_mooncake/moonlink.sock</code></td><td>每 backend 只建一条 RPC 长连接，Mutex 串行化避免帧交错</td></tr>
+</table>
+<div class="callout warn"><b>⚠️ 串行化的代价</b>：Mutex 意味着同一 backend 内的 RPC 是串行的，但对典型负载（一个事务里几次控制面调用）完全够用；真正并行的扫描流量走的是 DuckDB→moonlink_ffi 的独立连接池（第 06 章）。</div>
+
+<h2>2.7 三个导出符号：跨语言回头的桥</h2>
+<p><code class="path">src/duckdb_mooncake.rs</code> 导出三个 <code class="k">#[no_mangle]</code> C 符号。它们的存在前提是：<b>pg_mooncake.so 与 DuckDB（含 mooncake 扩展）已经加载在同一个进程地址空间</b>，所以 C++ 扩展可以直接 <code class="k">dlsym(RTLD_DEFAULT, …)</code> 找到它们——这是两种语言、两个扩展之间零胶水代码的通信方式：</p>
+<div class="codeblock"><span class="fname">src/duckdb_mooncake.rs</span>
+<pre><span class="k">#[no_mangle]</span>
+<span class="k">extern</span> <span class="s">"C"</span> <span class="k">fn</span> <span class="f">pgmooncake_get_init_query</span>() -&gt; *mut c_char {
+    <span class="c">// 取当前数据库名 → 拼出 DuckDB ATTACH 语句</span>
+    <span class="k">let</span> init_query = format!(<span class="s">"ATTACH DATABASE 'mooncake' (TYPE mooncake, \
+        URI 'pg_mooncake/moonlink.sock', DATABASE '{database}')"</span>);
+    CString::new(init_query).unwrap().into_raw()   <span class="c">// 所有权移交 C++ 侧（用 pgmooncake_drop_cstring 释放）</span>
+}
+
+<span class="k">#[no_mangle]</span>
+<span class="k">extern</span> <span class="s">"C"</span> <span class="k">fn</span> <span class="f">pgmooncake_get_lsn</span>() -&gt; u64 {
+    <span class="k">unsafe</span> { pgrx::pg_sys::XactLastCommitEnd }   <span class="c">// 本 backend 最近一次提交记录的结束 LSN</span>
+}</pre></div>
+<ul>
+  <li><code class="k">pgmooncake_get_init_query</code>：把“如何接入本实例的湖仓”编码成一条 DuckDB SQL，由扩展加载时执行（详见第 06 章）。</li>
+  <li><code class="k">pgmooncake_get_lsn</code>：DuckDB 每开一个事务用它取快照 LSN——这是<b>读写一致性的锚点</b>（第 07 章 LSN 不变式）。</li>
+  <li><code class="k">pgmooncake_drop_cstring</code>：让 C++ 侧把 CString 的内存还回 Rust 分配器，避免跨分配器 free。</li>
+</ul>
+<div class="callout key"><b>🔑 小结：扩展层的全部职责</b>
+① 登记 AM 路标；② 提供建/删/维护表的 SQL 入口；③ 拉起并守护 moonlink 引擎；④ 向 DuckDB 泄漏两条信息（接入方式 + 快照 LSN）。它不碰数据、不做路由、不管理事务——把这些全部让渡给 pg_duckdb 与 moonlink。</div>
+
+<div class="pager">
+  <a href="01-architecture.html"><span class="dir">◀ 上一篇</span><b>01 · 架构总览</b></a>
+  <a href="03-moonlink-engine.html"><span class="dir">下一篇 ▶</span><b>03 · moonlink 引擎核心</b></a>
+</div>
+</main>
+
+<footer><div class="wrap">pg_mooncake 源码深度解析 · 第 02 章 · 基于 commit b7c67e0</div></footer>
+</body>
+</html>

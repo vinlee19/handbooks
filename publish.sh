@@ -25,7 +25,7 @@ while IFS='|' read -r -u 3 name icon title desc accent src; do
   # 跳过注释行与空行；name 只允许小写字母/数字/连字符，防止误删目录
   case "$name" in ''|\#*) continue ;; esac
   case "$name" in
-    *[!a-z0-9-]*|'') echo "!! 跳过非法 name: '$name'（只允许小写字母/数字/连字符）"; continue ;;
+    *[!a-z0-9_-]*|'') echo "!! 跳过非法 name: '$name'（只允许小写字母/数字/连字符/下划线）"; continue ;;
   esac
   if [ ! -d "$src" ]; then
     echo "!! 跳过 $name：源目录不存在 $src"
