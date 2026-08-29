@@ -1,0 +1,244 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "事务生命周期与乐观并发提交",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1040,
+      590
+    ],
+    "views": [
+      {
+        "id": "happy",
+        "label": "提交主链",
+        "focus": [
+          "begin",
+          "local",
+          "flush",
+          "sql",
+          "conflict",
+          "commit"
+        ],
+        "note": "从 Begin 到新快照落库的完整主链。"
+      },
+      {
+        "id": "conflict",
+        "label": "冲突重试",
+        "focus": [
+          "conflict",
+          "retry",
+          "local"
+        ],
+        "note": "冲突后回到本地变更重新 Flush。"
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "iface",
+      "label": "接口层"
+    },
+    {
+      "id": "state",
+      "label": "状态层"
+    },
+    {
+      "id": "catalog",
+      "label": "目录数据库"
+    },
+    {
+      "id": "exception",
+      "label": "冲突重试",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "open",
+      "label": "开启",
+      "fromCol": 0,
+      "toCol": 0
+    },
+    {
+      "id": "local",
+      "label": "本地变更",
+      "fromCol": 1,
+      "toCol": 1
+    },
+    {
+      "id": "orchestrate",
+      "label": "编排与提交",
+      "fromCol": 2,
+      "toCol": 4
+    },
+    {
+      "id": "done",
+      "label": "落库",
+      "fromCol": 5,
+      "toCol": 5
+    }
+  ],
+  "mainPath": [
+    "begin",
+    "local",
+    "flush",
+    "sql",
+    "conflict",
+    "commit"
+  ],
+  "nodes": [
+    {
+      "id": "begin",
+      "lane": "iface",
+      "col": 0,
+      "type": "backend",
+      "label": "Begin",
+      "sublabel": "专用连接"
+    },
+    {
+      "id": "local",
+      "lane": "state",
+      "col": 1,
+      "type": "database",
+      "label": "LocalChanges",
+      "sublabel": "文件/内联/删除+锁"
+    },
+    {
+      "id": "flush",
+      "lane": "iface",
+      "col": 2,
+      "type": "backend",
+      "label": "FlushChanges",
+      "sublabel": ":1383 分发点"
+    },
+    {
+      "id": "sql",
+      "lane": "state",
+      "col": 3,
+      "type": "backend",
+      "label": "CommitSQL",
+      "sublabel": ":1575 整批拼装"
+    },
+    {
+      "id": "conflict",
+      "lane": "catalog",
+      "col": 4,
+      "type": "security",
+      "label": "冲突检测",
+      "sublabel": "主键 + 快照比对"
+    },
+    {
+      "id": "commit",
+      "lane": "catalog",
+      "col": 5,
+      "type": "database",
+      "label": "提交快照",
+      "sublabel": "Staged Commit"
+    },
+    {
+      "id": "retry",
+      "lane": "exception",
+      "col": 3,
+      "type": "messagebus",
+      "label": "重试循环",
+      "sublabel": "回到本地变更"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "from": "begin",
+      "to": "local",
+      "label": "开启",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop"
+    },
+    {
+      "id": "e2",
+      "from": "local",
+      "to": "flush",
+      "label": "变更就绪",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "route": "drop"
+    },
+    {
+      "id": "e3",
+      "from": "flush",
+      "to": "sql",
+      "label": "分发",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop"
+    },
+    {
+      "id": "e4",
+      "from": "sql",
+      "to": "conflict",
+      "label": "执行提交",
+      "variant": "emphasis"
+    },
+    {
+      "id": "e5",
+      "from": "conflict",
+      "to": "commit",
+      "label": "无冲突",
+      "variant": "emphasis",
+      "labelAt": [
+        561,
+        300
+      ]
+    },
+    {
+      "id": "e6",
+      "from": "conflict",
+      "to": "retry",
+      "label": "冲突",
+      "variant": "dashed",
+      "role": "error",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop"
+    },
+    {
+      "id": "e7",
+      "from": "retry",
+      "to": "local",
+      "label": "重新变更",
+      "variant": "dashed",
+      "role": "branch"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "三层架构",
+      "items": [
+        "DuckLakeTransaction 接口层：约 30 个 getter 转发",
+        "TransactionState 状态层：组合而非继承（新文件 2012 行）",
+        "schema_pins 防缓存逐出"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "三条提交路径",
+      "items": [
+        "FlushChanges 是提交编排分发点",
+        "整批 SQL 拼装后发往目录数据库",
+        "Staged Commit 支持服务端两段提交"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "冲突矩阵",
+      "items": [
+        "同表并发写靠 snapshot 比对",
+        "PostgreSQL 主键约束兜底",
+        "冲突即重试：Rollback 会清理已写文件"
+      ]
+    }
+  ]
+}

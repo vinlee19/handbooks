@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "SQL 函数与宏全景：注册机制与四大族群",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1100, 520],
+    "views": [
+      { "id": "observe", "label": "观测族", "focus": ["reg", "obs", "cdc"], "note": "元数据查询与 CDC 订阅都走表函数。" },
+      { "id": "maintain", "label": "维护族", "focus": ["maint"], "note": "合并、重写与过期是表维护三件套。" }
+    ]
+  },
+  "components": [
+    { "id": "reg", "type": "backend", "label": "注册机制", "sublabel": "21 个表函数 · 宏懒加载", "pos": [40, 150], "size": [180, 64] },
+    { "id": "obs", "type": "database", "label": "元数据观测", "sublabel": "snapshots / table_info / list_files", "pos": [380, 150], "size": [210, 64] },
+    { "id": "cdc", "type": "messagebus", "label": "CDC 三件套", "sublabel": "table_changes insertions/deletions", "pos": [680, 150], "size": [210, 64] },
+    { "id": "maint", "type": "backend", "label": "表维护函数", "sublabel": "merge_adjacent / rewrite / expire", "pos": [380, 370], "size": [210, 64] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "SQL 函数与宏", "wraps": ["reg", "obs", "cdc", "maint"], "pad": 16 }
+  ],
+  "connections": [
+    { "from": "reg", "to": "obs", "label": "注册到 Catalog" },
+    { "from": "obs", "to": "cdc", "label": "按快照订阅", "variant": "dashed" },
+    { "from": "obs", "to": "maint", "label": "作用于表", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 55 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "元数据速查", "items": ["ducklake_snapshots：id/时间/schema_version", "ducklake_table_info：列树/分区/排序/统计阈值", "ducklake_list_files 支持 AT 版本/时间"] },
+    { "dot": "violet", "title": "维护速查", "items": ["merge_adjacent_files 合并相邻小文件", "rewrite_data_files 按删除比例重写", "expire_snapshots(older_than) 过期清理"] },
+    { "dot": "emerald", "title": "配置体系", "items": ["ATTACH 选项与 Secret 体系见 CH 01/09", "内置宏懒加载降低启动开销", "元数据查询函数支持当前与最新快照双视图"] }
+  ]
+}

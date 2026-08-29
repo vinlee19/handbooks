@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "元数据目录设计：28 张表全景",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 720],
+    "views": [
+      { "id": "version", "label": "版本与提交", "focus": ["meta", "snapshot", "changes"], "note": "snapshot 是乐观并发的心脏：主键自增 + 冲突比对依据。" },
+      { "id": "catalog-tree", "label": "目录结构", "focus": ["schema", "table", "column"], "note": "begin/end_snapshot 区间决定每一行的可见版本。" },
+      { "id": "ledger", "label": "数据账本", "focus": ["datafile", "deletefile"], "note": "文件级账本：begin=NULL 仍有效，删除靠 end 游标。" }
+    ]
+  },
+  "components": [
+    { "id": "meta", "type": "database", "label": "ducklake_metadata", "sublabel": "key / value / scope 全局属性", "pos": [40, 110], "size": [190, 64] },
+    { "id": "snapshot", "type": "database", "label": "ducklake_snapshot ★", "sublabel": "版本锚点 · 每次提交 +1", "pos": [340, 110], "size": [196, 64], "tag": "心脏" },
+    { "id": "changes", "type": "database", "label": "ducklake_snapshot_changes", "sublabel": "changes_made blob", "pos": [640, 110], "size": [196, 64] },
+    { "id": "schema", "type": "database", "label": "ducklake_schema", "sublabel": "begin / end_snapshot 区间", "pos": [40, 340], "size": [190, 62] },
+    { "id": "table", "type": "database", "label": "ducklake_table ★", "sublabel": "表注册 · uuid · path", "pos": [340, 340], "size": [196, 62] },
+    { "id": "column", "type": "database", "label": "ducklake_column ★", "sublabel": "列树 · 分区 · 排序 · 统计", "pos": [640, 340], "size": [196, 62] },
+    { "id": "datafile", "type": "database", "label": "ducklake_data_file ★", "sublabel": "begin=NULL 仍有效", "pos": [340, 530], "size": [196, 62] },
+    { "id": "deletefile", "type": "database", "label": "ducklake_delete_file", "sublabel": "删除位图 / 行引用", "pos": [640, 530], "size": [196, 62] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "版本与提交（3 表）", "wraps": ["meta", "snapshot", "changes"], "pad": 14 },
+    { "kind": "region", "label": "目录结构（9 表）", "wraps": ["schema", "table", "column"], "pad": 14 },
+    { "kind": "region", "label": "数据账本", "wraps": ["datafile", "deletefile"], "pad": 14 }
+  ],
+  "connections": [
+    { "from": "meta", "to": "snapshot", "label": "全局配置" },
+    { "from": "snapshot", "to": "changes", "label": "提交变更" },
+    { "from": "schema", "to": "table", "label": "归属 schema" },
+    { "from": "table", "to": "column", "label": "列树" },
+    { "from": "table", "to": "datafile", "label": "文件账本", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "datafile", "to": "deletefile", "label": "删除引用", "variant": "dashed" },
+    { "from": "snapshot", "to": "table", "label": "begin_snapshot 锚定", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 55 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "快照即提交", "items": ["每次 commit 插入一行 snapshot", "schema/table/column 都带 begin/end 区间", "读取时按快照 id 落在区间内判可见"] },
+    { "dot": "violet", "title": "删除的表示", "items": ["DELETE 写删除文件或内联删除表", "data_file 的 end_snapshot 游标标记整体失效", "账本视图让 Time Travel 无需重写数据"] },
+    { "dot": "emerald", "title": "三组共 28 表", "items": ["版本与提交 3 表 + 目录结构 9 表", "其余：分区/统计/加密/内联/外键等", "ER 关系以 snapshot 为时间轴展开"] }
+  ]
+}

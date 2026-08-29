@@ -1,0 +1,210 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "调试实战：四条泳道的断点地图",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1100,
+      590
+    ],
+    "views": [
+      {
+        "id": "attach",
+        "label": "ATTACH 泳道",
+        "focus": [
+          "load",
+          "att"
+        ],
+        "note": "扩展加载与 ATTACH 入口。"
+      },
+      {
+        "id": "read",
+        "label": "READ 泳道",
+        "focus": [
+          "snap",
+          "scan"
+        ],
+        "note": "一条 SELECT 为什么慢从这两个断点查起。"
+      },
+      {
+        "id": "write-commit",
+        "label": "写与提交",
+        "focus": [
+          "write",
+          "rc"
+        ],
+        "note": "写冲突与重试看 RunCommitLoop。"
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "attach",
+      "label": "ATTACH 泳道"
+    },
+    {
+      "id": "read",
+      "label": "READ 泳道"
+    },
+    {
+      "id": "write",
+      "label": "WRITE 泳道"
+    },
+    {
+      "id": "commit",
+      "label": "COMMIT 泳道"
+    }
+  ],
+  "phases": [
+    {
+      "id": "load",
+      "label": "加载",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "rw",
+      "label": "读写断点",
+      "fromCol": 2,
+      "toCol": 3
+    },
+    {
+      "id": "commit",
+      "label": "提交",
+      "fromCol": 4,
+      "toCol": 4
+    }
+  ],
+  "mainPath": [
+    "load",
+    "att",
+    "snap",
+    "scan"
+  ],
+  "nodes": [
+    {
+      "id": "load",
+      "lane": "attach",
+      "col": 0,
+      "type": "backend",
+      "label": "LoadInternal",
+      "sublabel": "extension.cpp:20"
+    },
+    {
+      "id": "att",
+      "lane": "attach",
+      "col": 1,
+      "type": "backend",
+      "label": "DuckLakeAttach",
+      "sublabel": "storage.cpp:73"
+    },
+    {
+      "id": "snap",
+      "lane": "read",
+      "col": 2,
+      "type": "backend",
+      "label": "CatalogSnapshot",
+      "sublabel": "catalog.cpp:929",
+      "width": 120
+    },
+    {
+      "id": "scan",
+      "lane": "read",
+      "col": 4,
+      "type": "backend",
+      "label": "GetScanFunction",
+      "sublabel": "table_entry.cpp:363",
+      "width": 120
+    },
+    {
+      "id": "write",
+      "lane": "write",
+      "col": 2,
+      "type": "backend",
+      "label": "写入断点",
+      "sublabel": "INSERT 管道 §5"
+    },
+    {
+      "id": "rc",
+      "lane": "commit",
+      "col": 4,
+      "type": "backend",
+      "label": "RunCommitLoop",
+      "sublabel": ":1430 客户端提交"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "from": "load",
+      "to": "att"
+    },
+    {
+      "id": "e2",
+      "from": "att",
+      "to": "snap",
+      "label": "进入读取",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop",
+      "labelSegment": 1
+    },
+    {
+      "id": "e4",
+      "from": "att",
+      "to": "write",
+      "label": "进入写入",
+      "variant": "dashed",
+      "role": "branch",
+      "labelAt": [
+        230,
+        300
+      ]
+    },
+    {
+      "id": "e3",
+      "from": "snap",
+      "to": "scan"
+    },
+    {
+      "id": "e5",
+      "from": "write",
+      "to": "rc",
+      "label": "提交时",
+      "variant": "dashed",
+      "role": "branch"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "构建三步曲",
+      "items": [
+        "基于 ducklake 调试分支构建",
+        "SQLLogic 测试 + 配置矩阵回归",
+        "产物即 ducklake 扩展二进制"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "调试路径 A",
+      "items": [
+        "一条 SELECT 为什么慢：先看 CatalogSnapshot",
+        "再入 GetScanFunction 看裁剪效果",
+        "对照 CH 04 四层流水线逐层排查"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "调试路径 B / C",
+      "items": [
+        "写冲突与重试：盯 RunCommitLoop 与冲突矩阵",
+        "内联、flush 与 compaction 问题看转型链",
+        "断点地图按泳道组织，互不干扰"
+      ]
+    }
+  ]
+}

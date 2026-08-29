@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "快照与 Time Travel：一条记录、四个游标",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [880, 500],
+    "views": [
+      { "id": "commit", "label": "提交侧", "focus": ["commit", "snap", "ledger"], "note": "每次提交快照 +1，账本游标随之更新。" },
+      { "id": "visibility", "label": "可见性", "focus": ["ledger", "vis"], "note": "id ∈ [begin, end) 判定文件对快照是否可见。" }
+    ]
+  },
+  "stages": [
+    { "label": "提交" },
+    { "label": "快照" },
+    { "label": "账本" },
+    { "label": "可见性" }
+  ],
+  "nodes": [
+    { "id": "commit", "type": "backend", "label": "SQL 提交", "sublabel": "INSERT / DELETE / DDL", "stage": 0, "row": 1 },
+    { "id": "snap", "type": "database", "label": "快照 +1", "sublabel": "snapshot id 自增", "stage": 1, "row": 1 },
+    { "id": "ledger", "type": "database", "label": "账本游标更新", "sublabel": "data_file begin / end", "stage": 2, "row": 0 },
+    { "id": "changes", "type": "database", "label": "changes_made", "sublabel": "变更 blob 记录", "stage": 2, "row": 2 },
+    { "id": "vis", "type": "security", "label": "可见性判定", "sublabel": "id ∈ [begin, end)", "stage": 3, "row": 1 }
+  ],
+  "flows": [
+    { "from": "commit", "to": "snap", "label": "新版本" },
+    { "from": "snap", "to": "ledger", "label": "文件游标" },
+    { "from": "snap", "to": "changes", "label": "变更记录", "variant": "dashed" },
+    { "from": "ledger", "to": "vis", "label": "账本视图", "variant": "emphasis" },
+    { "from": "changes", "to": "vis", "label": "CDC 订阅", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "快照时间线", "items": ["snap 0 建库 → snap 1 CREATE TABLE", "snap 2 INSERT 文件A → snap 3 DELETE 删文件D", "snap 4 INSERT 文件B：时间线线性推进"] },
+    { "dot": "violet", "title": "三种钉法", "items": ["AT (VERSION => n) 固定版本", "AT (TIMESTAMP => t) 时间点", "日常读最新已提交快照单行视图"] },
+    { "dot": "emerald", "title": "Schema Evolution", "items": ["列以 begin/end 快照区间管理", "Time Travel 读旧版本自动用旧 schema", "CDC 用 table_changes 订阅增删"] }
+  ]
+}

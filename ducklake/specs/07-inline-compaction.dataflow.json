@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "数据内联与 Compaction：两个世界的转型",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      500
+    ],
+    "views": [
+      {
+        "id": "inline",
+        "label": "内联世界",
+        "focus": [
+          "small",
+          "inl",
+          "delinl"
+        ],
+        "note": "小表零 Parquet：数据住在目录数据库的表里。"
+      },
+      {
+        "id": "transform",
+        "label": "转型与合并",
+        "focus": [
+          "flush",
+          "pq",
+          "comp"
+        ],
+        "note": "超阈值 flush 成 Parquet，Compaction 合并小文件。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "写入"
+    },
+    {
+      "label": "内联世界"
+    },
+    {
+      "label": "转型"
+    },
+    {
+      "label": "文件世界"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "small",
+      "type": "external",
+      "label": "小表写入",
+      "sublabel": "低于内联阈值",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "inl",
+      "type": "database",
+      "label": "inline_data 表",
+      "sublabel": "业务列 + begin_snapshot",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "delinl",
+      "type": "database",
+      "label": "inline_delete 表",
+      "sublabel": "row_id · begin_snapshot",
+      "stage": 1,
+      "row": 2
+    },
+    {
+      "id": "flush",
+      "type": "backend",
+      "label": "flush 转型",
+      "sublabel": "超阈值触发",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "pq",
+      "type": "database",
+      "label": "Parquet 512MB",
+      "sublabel": "对象存储",
+      "stage": 3,
+      "row": 0
+    },
+    {
+      "id": "comp",
+      "type": "backend",
+      "label": "Compaction",
+      "sublabel": "merge / rewrite 两模式",
+      "stage": 3,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "from": "small",
+      "to": "inl",
+      "label": "INSERT 截留"
+    },
+    {
+      "from": "small",
+      "to": "delinl",
+      "label": "DELETE 截留",
+      "variant": "dashed"
+    },
+    {
+      "from": "inl",
+      "to": "flush",
+      "label": "超阈值"
+    },
+    {
+      "from": "delinl",
+      "to": "flush",
+      "label": "一并刷出",
+      "variant": "dashed"
+    },
+    {
+      "from": "flush",
+      "to": "pq",
+      "label": "写 Parquet",
+      "variant": "emphasis"
+    },
+    {
+      "from": "pq",
+      "to": "comp",
+      "label": "候选小文件",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "内联物理布局",
+      "items": [
+        "ducklake_inlined_data_tables 登记走内联的表",
+        "按需 CREATE 的物理表存真实行数据",
+        "行内带 begin_snapshot，与账本同一套时态可见性"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "伪文件读取",
+      "items": [
+        "SELECT 时由 InlinedDataReader 当文件读出",
+        "伪文件名标识内联数据块",
+        "小表删除同样零 Parquet"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Compaction 两模式",
+      "items": [
+        "merge_adjacent_files 合并相邻小文件",
+        "rewrite_data_files 按删除比例重写",
+        "转型前对象存储目录甚至可能为空"
+      ]
+    }
+  ]
+}

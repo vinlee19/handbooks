@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "写入路径：INSERT 物理管道与账本登记",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [900, 500],
+    "views": [
+      { "id": "inline", "label": "内联截留", "focus": ["src", "inline"], "note": "小数据截留在内联表，大数据放行写 Parquet。" },
+      { "id": "commit", "label": "登记可见", "focus": ["stats", "register"], "note": "Parquet 已落对象存储但账本没有行——对其他事务不可见。" }
+    ]
+  },
+  "stages": [
+    { "label": "数据源" },
+    { "label": "管道" },
+    { "label": "落盘" },
+    { "label": "登记" }
+  ],
+  "nodes": [
+    { "id": "src", "type": "external", "label": "数据源", "sublabel": "VALUES / 查询 / COPY FROM", "stage": 0, "row": 1 },
+    { "id": "inline", "type": "database", "label": "InlineData 截留 ★", "sublabel": "小数据进内联表 §7", "stage": 1, "row": 0 },
+    { "id": "copy", "type": "backend", "label": "COPY → Parquet", "sublabel": "512MB 自动轮转", "stage": 1, "row": 2 },
+    { "id": "obj", "type": "database", "label": "对象存储", "sublabel": "ducklake-{uuidv7}.parquet", "stage": 2, "row": 2 },
+    { "id": "stats", "type": "backend", "label": "统计回传", "sublabel": "AddWrittenFiles 解析", "stage": 2, "row": 0 },
+    { "id": "register", "type": "backend", "label": "账本登记", "sublabel": "DuckLakeDataFile 结构", "stage": 3, "row": 1 }
+  ],
+  "flows": [
+    { "from": "src", "to": "inline", "label": "并行 chunk 流" },
+    { "from": "src", "to": "copy", "label": "放行大数据" },
+    { "from": "copy", "to": "obj", "label": "写出文件" },
+    { "from": "obj", "to": "stats", "label": "filename/size/count", "variant": "dashed" },
+    { "from": "stats", "to": "register", "label": "登记账本", "variant": "emphasis" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "文件布局", "items": ["文件名模板 ducklake-{uuidv7}", "target 512MB 自动轮转", "分区 transform 决定目录路径"] },
+    { "dot": "violet", "title": "快照隔离", "items": ["Parquet 落对象存储但账本没有行", "对其他事务完全不可见", "commit 登记后才对外可见"] },
+    { "dot": "emerald", "title": "UPDATE / DELETE", "items": ["UPDATE = 删除 + 重写", "DELETE 写出删除文件", "删除过滤在读取路径生效"] }
+  ]
+}

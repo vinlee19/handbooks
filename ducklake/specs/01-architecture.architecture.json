@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "DuckLake 总体架构：SQL 目录 + Parquet 的湖仓格式",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "write",
+        "label": "写入侧",
+        "focus": [
+          "writer",
+          "ext",
+          "cat",
+          "obj"
+        ],
+        "note": "写 Parquet 落对象存储，commit 时才登记账本。"
+      },
+      {
+        "id": "read",
+        "label": "读取侧",
+        "focus": [
+          "reader",
+          "cat",
+          "obj"
+        ],
+        "note": "按快照裁剪文件列表再扫 Parquet，读到一致旧版本。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "writer",
+      "type": "backend",
+      "label": "DuckDB 写入者 (ETL)",
+      "sublabel": "INSERT / UPDATE / MERGE / DDL",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "ext",
+      "type": "backend",
+      "label": "ducklake 扩展",
+      "sublabel": "DuckLakeTransaction · 乐观提交",
+      "pos": [
+        340,
+        110
+      ],
+      "size": [
+        196,
+        64
+      ],
+      "tag": "扩展"
+    },
+    {
+      "id": "reader",
+      "type": "external",
+      "label": "DuckDB 分析者 ×N",
+      "sublabel": "SELECT AT (VERSION => 3)",
+      "pos": [
+        640,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "cat",
+      "type": "database",
+      "label": "元数据 Catalog",
+      "sublabel": "PostgreSQL 生产推荐 · 28 张表",
+      "pos": [
+        340,
+        330
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "obj",
+      "type": "database",
+      "label": "对象存储",
+      "sublabel": "Parquet · ducklake-{uuidv7}",
+      "pos": [
+        640,
+        330
+      ],
+      "size": [
+        190,
+        64
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "writer",
+      "to": "ext",
+      "label": "ATTACH + DML"
+    },
+    {
+      "from": "reader",
+      "to": "cat",
+      "label": "读快照 / 文件清单",
+      "variant": "dashed"
+    },
+    {
+      "from": "reader",
+      "to": "obj",
+      "label": "Parquet 扫描",
+      "labelDy": 55
+    },
+    {
+      "from": "ext",
+      "to": "cat",
+      "label": "登记 snapshot / files",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    },
+    {
+      "from": "writer",
+      "to": "obj",
+      "label": "COPY 写 Parquet",
+      "fromSide": "top",
+      "toSide": "right",
+      "via": [
+        [
+          135,
+          60
+        ],
+        [
+          1180,
+          60
+        ],
+        [
+          1180,
+          362
+        ]
+      ],
+      "labelAt": [
+        420,
+        60
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "设计哲学",
+      "items": [
+        "用 SQL 数据库当目录，数据文件用 Parquet",
+        "元数据在 Catalog 里，数据在对象存储里",
+        "同一进程可 ATTACH 多个 ducklake 库"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "四模块解剖",
+      "items": [
+        "storage/：catalog、事务、扫描、压缩",
+        "metadata_manager/：28 表 DDL 与 SQL 方言",
+        "functions/ 21 个表函数；common/ 快照·文件·类型"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "并发模型",
+      "items": [
+        "乐观提交循环 + 冲突重试",
+        "PostgreSQL 主键约束兜底冲突检测",
+        "快照隔离：读到的是一致旧版本"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "读取路径：四层文件裁剪流水线",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      540
+    ],
+    "views": [
+      {
+        "id": "funnel",
+        "label": "逐层裁剪",
+        "focus": [
+          "query",
+          "snap",
+          "part",
+          "stats"
+        ],
+        "note": "快照区间 → 分区 → 列统计，层层递减候选集。"
+      },
+      {
+        "id": "topn",
+        "label": "Top-N 裁剪",
+        "focus": [
+          "stats",
+          "topn"
+        ],
+        "note": "partial_max 与 LIMIT 阈值比较，跳过整段文件。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "请求"
+    },
+    {
+      "label": "快照与分区"
+    },
+    {
+      "label": "统计裁剪"
+    },
+    {
+      "label": "扫描"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "query",
+      "type": "external",
+      "label": "SELECT 查询",
+      "sublabel": "AT VERSION 快照读",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "snap",
+      "type": "backend",
+      "label": "L1 快照区间",
+      "sublabel": "begin / end_snapshot",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "part",
+      "type": "backend",
+      "label": "L2 分区裁剪",
+      "sublabel": "partition transform",
+      "stage": 1,
+      "row": 2
+    },
+    {
+      "id": "stats",
+      "type": "backend",
+      "label": "L3 列统计",
+      "sublabel": "min / max zone map",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "topn",
+      "type": "backend",
+      "label": "L4 partial_max ★",
+      "sublabel": "Top-N 前缀最大值",
+      "stage": 2,
+      "row": 0
+    },
+    {
+      "id": "scan",
+      "type": "backend",
+      "label": "MultiFileReader",
+      "sublabel": "Parquet 扫描 · 虚拟列",
+      "stage": 3,
+      "row": 1
+    },
+    {
+      "id": "dels",
+      "type": "database",
+      "label": "删除过滤",
+      "sublabel": "delete_file 三来源",
+      "stage": 3,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "from": "query",
+      "to": "snap",
+      "label": "目标表文件"
+    },
+    {
+      "from": "query",
+      "to": "part",
+      "label": "目标表文件"
+    },
+    {
+      "from": "snap",
+      "to": "stats",
+      "label": "存活文件"
+    },
+    {
+      "from": "part",
+      "to": "stats",
+      "label": "分区存活"
+    },
+    {
+      "from": "stats",
+      "to": "topn",
+      "label": "排序键前缀"
+    },
+    {
+      "from": "stats",
+      "to": "scan",
+      "label": "候选文件列表",
+      "variant": "emphasis",
+      "route": "straight",
+      "labelDy": 20
+    },
+    {
+      "from": "topn",
+      "to": "scan",
+      "label": "跳过整段文件",
+      "variant": "dashed",
+      "route": "straight",
+      "labelDy": -16,
+      "fromSide": "right",
+      "toSide": "top",
+      "via": [
+        [
+          745,
+          157
+        ]
+      ],
+      "labelAt": [
+        665,
+        157
+      ]
+    },
+    {
+      "from": "dels",
+      "to": "scan",
+      "label": "行级过滤",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "四层裁剪",
+      "items": [
+        "L1 快照区间过滤必有",
+        "L2 分区值裁剪",
+        "L3 列统计 min/max（zone map）"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Top-N 利器",
+      "items": [
+        "partial_max 记录排序键前缀最大值",
+        "与 LIMIT N 的当前阈值比较",
+        "可跳过整段文件，排序查询大幅加速"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "rowid 布局",
+      "items": [
+        "每文件 row_id_start 起始游标",
+        "物理行 → rowid 连续映射",
+        "next_row_id_start 在提交时写入"
+      ]
+    }
+  ]
+}

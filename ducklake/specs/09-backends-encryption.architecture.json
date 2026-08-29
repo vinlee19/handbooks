@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "可插拔后端与安全：四形态、Secret 与加密",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      600
+    ],
+    "views": [
+      {
+        "id": "backends",
+        "label": "四后端形态",
+        "focus": [
+          "duckdb_b",
+          "pg_b",
+          "quack",
+          "s3b"
+        ],
+        "note": "从单机文件到远程元数据服务的能力阶梯。"
+      },
+      {
+        "id": "security",
+        "label": "安全体系",
+        "focus": [
+          "secret",
+          "enc"
+        ],
+        "note": "Secret 管凭据，文件级加密管数据。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "duckdb_b",
+      "type": "database",
+      "label": "duckdb 文件后端",
+      "sublabel": "零部署 · 单进程独占",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "pg_b",
+      "type": "database",
+      "label": "PostgreSQL 后端",
+      "sublabel": "生产推荐 · 主键兜底并发",
+      "pos": [
+        340,
+        110
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "quack",
+      "type": "cloud",
+      "label": "Quack 远程服务 ★",
+      "sublabel": "gRPC 元数据服务器",
+      "pos": [
+        640,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "s3b",
+      "type": "cloud",
+      "label": "对象存储后端",
+      "sublabel": "S3 / Azure / GCS",
+      "pos": [
+        920,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "secret",
+      "type": "security",
+      "label": "Secret 凭据体系",
+      "sublabel": "S3 / PG 凭据注入",
+      "pos": [
+        340,
+        380
+      ],
+      "size": [
+        196,
+        62
+      ]
+    },
+    {
+      "id": "enc",
+      "type": "security",
+      "label": "文件级加密",
+      "sublabel": "写读双向加密流",
+      "pos": [
+        640,
+        380
+      ],
+      "size": [
+        190,
+        62
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "元数据后端",
+      "wraps": [
+        "duckdb_b",
+        "pg_b",
+        "quack"
+      ],
+      "pad": 14
+    },
+    {
+      "kind": "region",
+      "label": "安全",
+      "wraps": [
+        "secret",
+        "enc"
+      ],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    {
+      "from": "duckdb_b",
+      "to": "pg_b",
+      "label": "升级路径",
+      "variant": "dashed"
+    },
+    {
+      "from": "pg_b",
+      "to": "quack",
+      "label": "托管化",
+      "variant": "dashed"
+    },
+    {
+      "from": "secret",
+      "to": "pg_b",
+      "label": "PG 凭据",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDy": -40,
+      "labelDx": 55
+    },
+    {
+      "from": "secret",
+      "to": "s3b",
+      "label": "S3 凭据",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "via": [
+        [
+          438,
+          280
+        ],
+        [
+          1013,
+          280
+        ]
+      ],
+      "labelAt": [
+        790,
+        280
+      ]
+    },
+    {
+      "from": "enc",
+      "to": "s3b",
+      "label": "加密数据流",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "能力阶梯",
+      "items": [
+        "duckdb 文件：单机原型 / CI，SupportsAppender 批量最优",
+        "PostgreSQL：多写入者高并发，类型映射 jsonb_agg",
+        "Quack：元数据服务托管化远程部署"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Secret 体系",
+      "items": [
+        "ATTACH 时以 Secret 提供对象存储与 PG 凭据",
+        "凭据与库定义分离，可复用",
+        "多后端混挂：同一进程多 ducklake 库"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "加密",
+      "items": [
+        "文件级加密在写出与读取双向生效",
+        "密钥经 Secret 注入",
+        "扩展支持自动加载"
+      ]
+    }
+  ]
+}
