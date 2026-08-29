@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>01 · 项目全景与设计哲学 · Mooncake 源码学习</title>
+<style>
+:root{
+  --bg:#0a0e16; --panel:#0f1524; --panel2:#131b2e; --line:#22304a; --line2:#2c3d5c;
+  --tx:#dbe6f5; --tx2:#93a5c0; --tx3:#6b7d99;
+  --te:#38bdf8; --code-bg:#0b1220;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--te);text-decoration:none} a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:16px;height:54px}
+.logo{font-weight:700;font-size:16px;color:var(--tx);white-space:nowrap;flex-shrink:0}
+.logo .m{color:var(--te)}
+.topnav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
+.topnav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.topnav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.topnav a.on{color:var(--ac,#38bdf8);background:color-mix(in srgb,var(--ac,#38bdf8) 12%,transparent)}
+.hero{padding:44px 0 30px;border-bottom:1px solid var(--line);
+  background:radial-gradient(1100px 300px at 18% 0%,color-mix(in srgb,var(--ac,#38bdf8) 10%,transparent),transparent)}
+.kicker{color:var(--ac,#38bdf8);font-size:13px;font-weight:600;letter-spacing:2px}
+h1{font-size:32px;line-height:1.3;margin:10px 0 8px}
+.sub{color:var(--tx2);font-size:15px;max-width:860px}
+h2{font-size:22px;margin:46px 0 14px;display:flex;align-items:center;gap:10px}
+h2 .n{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border-radius:8px;
+ background:color-mix(in srgb,var(--ac,#38bdf8) 14%,transparent);color:var(--ac,#38bdf8);font-size:14px;font-weight:700}
+h3{font-size:17px;margin:28px 0 10px;color:var(--tx)}
+p{margin:10px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:1fr 1fr}
+@media(max-width:860px){.g2{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.card h4{margin:0 0 6px;font-size:15px}
+.card p{margin:4px 0;font-size:13.5px;color:var(--tx2)}
+.fig{margin:22px 0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px}
+.fig svg{display:block;width:100%;height:auto}
+.figcap{display:flex;gap:8px;align-items:baseline;padding:10px 4px 6px;color:var(--tx2);font-size:13px;border-top:1px dashed var(--line);margin-top:12px}
+.figcap b{color:var(--ac,#38bdf8);font-size:12.5px;white-space:nowrap}
+.co{border:1px solid var(--line);border-left:3px solid var(--ac,#38bdf8);background:var(--panel);border-radius:10px;padding:12px 16px;margin:16px 0;font-size:14px;color:var(--tx2)}
+.co b{color:var(--tx)}
+.co.warn{border-left-color:#fbbf24}.co.tip{border-left-color:#34d399}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font:12px ui-monospace,Menlo,monospace;color:#8fd3ff}
+ul,ol{color:#c7d3e6;padding-left:22px} li{margin:5px 0}
+hr{border:none;border-top:1px solid var(--line);margin:36px 0}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:44px 0 30px}
+.pager a{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 18px;color:var(--tx2);font-size:13.5px}
+.pager a:hover{border-color:var(--ac,#38bdf8);text-decoration:none;color:var(--tx)}
+.pager a.nx{text-align:right}
+.pager .lab{display:block;font-size:11px;color:var(--tx3);letter-spacing:1px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 40px}
+svg text{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.svgm{font-family:ui-monospace,Menlo,Consolas,monospace!important}
+</style>
+</head>
+<body style="--ac:#38bdf8">
+<header class="top"><div class="wrap">
+  <a class="logo" href="index.html" style="color:var(--tx)"><span class="m">🌙</span> Mooncake 源码学习</a>
+  <nav class="topnav">
+    <a href="index.html">目录</a><a class="on" href="01-overview.html">01 全景</a><a href="02-physical-architecture.html">02 物理架构</a><a href="03-transfer-engine.html">03 传输引擎</a><a href="04-rdma-deep-dive.html">04 RDMA</a><a href="05-store-architecture.html">05 Store</a><a href="06-store-master.html">06 Master</a><a href="07-store-client.html">07 Client</a><a href="08-storage-ha.html">08 存储与HA</a><a href="09-ecosystem.html">09 生态</a><a href="10-dataflow.html">10 数据流</a>
+  </nav>
+</div></header>
+
+<section class="hero"><div class="wrap">
+  <div class="kicker">CHAPTER 01 · WHY MOONCAKE</div>
+  <h1>项目全景与设计哲学</h1>
+  <p class="sub">在读任何一行代码之前，先回答三个问题：LLM 推理服务的瓶颈到底是什么？为什么缓存 KVCache（而不是缓存别的）是正确的中心化抽象？Mooncake 用怎样的架构把这件事做成一个平台？</p>
+</div></section>
+
+<main class="wrap">
+
+<h2><span class="n">1.1</span>LLM 推理的两个阶段与分离式架构</h2>
+<p>一次 LLM 推理请求分两个阶段：<strong>Prefill</strong>（预填充）把整段 prompt 一次性算完，是<strong>计算密集型</strong>的，GPU 利用率高；<strong>Decode</strong>（解码）逐 token 生成，每步都要读全部历史 KVCache，是<strong>访存密集型</strong>的，GPU 算力大量闲置。把两者混布在同一批 GPU 上，prefill 的长请求会阻塞 decode 的逐 token 步进，导致首 token 延迟（TTFT）与每 token 延迟（TPOT）互相拖累。</p>
+<p>Mooncake 的第一层答案就是 <strong>PD 分离（XpYd）</strong>：prefill 跑在 Prefill 集群、decode 跑在 Decode 集群，两者之间传输的唯一"中间产物"就是 <strong>KVCache</strong>。第二层答案是 <strong>KVCache 池化</strong>：把集群里 GPU 节点的空闲 CPU DRAM 与 SSD 组织成一个大缓存池，跨请求复用相同前缀的 KVCache——相同 system prompt、多轮对话、few-shot 模板都因此免掉重复计算。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1040 430" role="img" aria-label="单体推理 vs PD分离">
+<defs>
+<marker id="arA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5f7ba6"/></marker>
+<marker id="arB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#38bdf8"/></marker>
+</defs>
+<rect x="0" y="0" width="1040" height="430" fill="#0c1322" rx="10"/>
+<text x="30" y="36" fill="#8fa5c8" font-size="13" font-weight="bold">传统单体推理</text>
+<rect x="30" y="52" width="380" height="120" rx="10" fill="#131a2a" stroke="#31435f"/>
+<text x="50" y="80" fill="#dbe6f5" font-size="13" font-weight="bold">同一批 GPU 实例</text>
+<text x="50" y="104" fill="#93a5c0" font-size="12">prefill 长 prompt（计算突发）</text>
+<text x="50" y="126" fill="#93a5c0" font-size="12">decode 逐 token（访存瓶颈）</text>
+<text x="50" y="152" fill="#fb7185" font-size="12">⚡ 相互干扰：TTFT / TPOT 互相拖累</text>
+<rect x="30" y="190" width="380" height="70" rx="10" fill="#131a2a" stroke="#31435f"/>
+<text x="50" y="216" fill="#93a5c0" font-size="12">前缀缓存只存在于单机 GPU 显存里</text>
+<text x="50" y="240" fill="#fb7185" font-size="12">⚡ 跨请求/跨节点无法复用，重算浪费</text>
+
+<text x="470" y="130" fill="#38bdf8" font-size="20" font-weight="bold">➜</text>
+<text x="455" y="160" fill="#38bdf8" font-size="11">Mooncake 改造</text>
+
+<text x="560" y="36" fill="#8fa5c8" font-size="13" font-weight="bold">Mooncake：XpYd 分离 + KVCache 池</text>
+<rect x="560" y="52" width="200" height="86" rx="10" fill="#0f2438" stroke="#38bdf8"/>
+<text x="578" y="78" fill="#38bdf8" font-size="13" font-weight="bold">Prefill 集群 ×P</text>
+<text x="578" y="100" fill="#93a5c0" font-size="11.5">只做 prompt 计算</text>
+<text x="578" y="119" fill="#6b7d99" font-size="11">计算密集 · 高 GPU 利用</text>
+<rect x="800" y="52" width="200" height="86" rx="10" fill="#132a22" stroke="#34d399"/>
+<text x="818" y="78" fill="#34d399" font-size="13" font-weight="bold">Decode 集群 ×D</text>
+<text x="818" y="100" fill="#93a5c0" font-size="11.5">只做逐 token 生成</text>
+<text x="818" y="119" fill="#6b7d99" font-size="11">访存密集 · 批处理友好</text>
+<rect x="648" y="168" width="264" height="58" rx="10" fill="#191330" stroke="#a78bfa"/>
+<text x="666" y="192" fill="#a78bfa" font-size="12.5" font-weight="bold">KVCache 分布式池</text>
+<text x="666" y="212" fill="#93a5c0" font-size="11">空闲 CPU DRAM + SSD · 多副本</text>
+<line x1="660" y1="140" x2="730" y2="166" stroke="#38bdf8" stroke-width="2" marker-end="url(#arB)"/>
+<line x1="900" y1="140" x2="830" y2="166" stroke="#34d399" stroke-width="2" marker-end="url(#arB)"/>
+<line x1="730" y1="228" x2="690" y2="300" stroke="#a78bfa" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arB)"/>
+<line x1="830" y1="228" x2="870" y2="300" stroke="#a78bfa" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#arB)"/>
+<rect x="560" y="304" width="440" height="96" rx="10" fill="#131a2a" stroke="#31435f"/>
+<text x="578" y="330" fill="#dbe6f5" font-size="12.5" font-weight="bold">两个集群各自独立扩缩容 / 独立故障恢复</text>
+<text x="578" y="354" fill="#93a5c0" font-size="12">· prefill→decode 只传 KVCache，不传请求上下文</text>
+<text x="578" y="376" fill="#93a5c0" font-size="12">· 命中相同前缀时：池 → decode 直读，跳过 prefill</text>
+<text x="30" y="410" fill="#5b6c88" font-size="11">架构动机对应 README.md「KVCache-centric Disaggregated Architecture」与 docs/source/design/architecture.md</text>
+</svg>
+<div class="figcap"><b>图 1-1</b><span>从单体推理到 PD 分离 + KVCache 池：KVCache 成为两个集群之间的"通用货币"</span></div>
+</div>
+
+<h2><span class="n">1.2</span>KVCache-centric：以缓存为中心调度一切</h2>
+<p>传统推理服务以"请求"为调度单元；Mooncake 以 <strong>KVCache 对象</strong>为调度单元。每个请求的前缀被切成若干 <strong>token 块</strong>（对应源码中的 key 对象，见 <code>mooncake-store</code> 的 Put/Get 接口），全局调度器做三件事：</p>
+<ul>
+<li><strong>缓存感知路由</strong>：优先把请求派往已有所需前缀的实例，未命中再调度 prefill，并把算好的 KVCache 存入池中供后续复用；</li>
+<li><strong> Early-Rejection</strong>：论文发现过载时大部分请求最终都注定超时，与其排队后超时，不如在入口基于负载预测直接拒绝，把算力留给能完成的请求；</li>
+<li><strong>租约与淘汰</strong>：缓存对象用租约（lease）保护正在使用的 KV，用软/硬 pin 保护高价值前缀（详见第 06 章）。</li>
+</ul>
+
+<div class="fig">
+<svg viewBox="0 0 1040 400" role="img" aria-label="KVCache 生命周期">
+<defs>
+<marker id="arC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a78bfa"/></marker>
+</defs>
+<rect x="0" y="0" width="1040" height="400" fill="#0c1322" rx="10"/>
+<text x="30" y="36" fill="#8fa5c8" font-size="13" font-weight="bold">一个 KVCache 对象的一生（对应 mooncake-store 的对象协议）</text>
+
+<rect x="34" y="80" width="150" height="70" rx="10" fill="#0f2438" stroke="#38bdf8"/>
+<text x="109" y="108" fill="#dbe6f5" font-size="12.5" text-anchor="middle" font-weight="bold">① Prefill 产出</text>
+<text x="109" y="130" fill="#8fa5c8" font-size="11" text-anchor="middle">GPU 显存计算</text>
+
+<rect x="224" y="80" width="150" height="70" rx="10" fill="#191330" stroke="#a78bfa"/>
+<text x="299" y="108" fill="#dbe6f5" font-size="12.5" text-anchor="middle" font-weight="bold">② PutStart</text>
+<text x="299" y="130" fill="#8fa5c8" font-size="11" text-anchor="middle">Master 预分配副本</text>
+
+<rect x="414" y="80" width="150" height="70" rx="10" fill="#191330" stroke="#a78bfa"/>
+<text x="489" y="108" fill="#dbe6f5" font-size="12.5" text-anchor="middle" font-weight="bold">③ RDMA 直写</text>
+<text x="489" y="130" fill="#8fa5c8" font-size="11" text-anchor="middle">数据不经过 Master</text>
+
+<rect x="604" y="80" width="150" height="70" rx="10" fill="#191330" stroke="#a78bfa"/>
+<text x="679" y="108" fill="#dbe6f5" font-size="12.5" text-anchor="middle" font-weight="bold">④ PutEnd</text>
+<text x="679" y="130" fill="#8fa5c8" font-size="11" text-anchor="middle">副本 COMPLETE·授租约</text>
+
+<rect x="794" y="80" width="150" height="70" rx="10" fill="#132a22" stroke="#34d399"/>
+<text x="869" y="108" fill="#dbe6f5" font-size="12.5" text-anchor="middle" font-weight="bold">⑤ Get 复用</text>
+<text x="869" y="130" fill="#8fa5c8" font-size="11" text-anchor="middle">任意 decode 节点直读</text>
+
+<rect x="560" y="230" width="190" height="70" rx="10" fill="#1a2a1a" stroke="#fbbf24"/>
+<text x="655" y="258" fill="#dbe6f5" font-size="12.5" text-anchor="middle" font-weight="bold">⑥ 租约到期 / 空间不足</text>
+<text x="655" y="280" fill="#8fa5c8" font-size="11" text-anchor="middle">两遍淘汰扫描</text>
+
+<rect x="800" y="230" width="190" height="70" rx="10" fill="#241418" stroke="#fb7185"/>
+<text x="895" y="258" fill="#dbe6f5" font-size="12.5" text-anchor="middle" font-weight="bold">⑦ SSD offload</text>
+<text x="895" y="280" fill="#8fa5c8" font-size="11" text-anchor="middle">热数据下沉，冷数据淘汰</text>
+
+<line x1="184" y1="115" x2="220" y2="115" stroke="#a78bfa" stroke-width="2" marker-end="url(#arC)"/>
+<line x1="374" y1="115" x2="410" y2="115" stroke="#a78bfa" stroke-width="2" marker-end="url(#arC)"/>
+<line x1="564" y1="115" x2="600" y2="115" stroke="#a78bfa" stroke-width="2" marker-end="url(#arC)"/>
+<line x1="754" y1="115" x2="790" y2="115" stroke="#a78bfa" stroke-width="2" marker-end="url(#arC)"/>
+<line x1="830" y1="152" x2="720" y2="228" stroke="#a78bfa" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arC)"/>
+<line x1="750" y1="265" x2="796" y2="265" stroke="#a78bfa" stroke-width="2" marker-end="url(#arC)"/>
+<path d="M 869 152 L 869 190 L 120 190 L 109 154" fill="none" stroke="#34d399" stroke-width="1.8" marker-end="url(#arC)"/>
+<text x="450" y="182" fill="#34d399" font-size="11.5">前缀命中：跳过 ①②③，直接复用（多轮对话/system prompt 场景）</text>
+<text x="30" y="340" fill="#5b6c88" font-size="11">②③④ 即三段式写协议：master_service.cpp 的 PutStart / PutEnd / PutRevoke —— 写失败走 PutRevoke 回滚，</text>
+<text x="30" y="360" fill="#5b6c88" font-size="11">Master 全程只管理元数据与 buffer 地址，数据面由 Transfer Engine 在节点间 RDMA 直传。</text>
+<text x="30" y="384" fill="#5b6c88" font-size="11">⑤ 读时隐式续租：GetReplicaList 返回副本的同时授予读租约，防止读期间对象被淘汰。</text>
+</svg>
+<div class="figcap"><b>图 1-2</b><span>KVCache 对象生命周期：三段式写 → 复用 → 租约 → 淘汰/offload</span></div>
+</div>
+
+<h2><span class="n">1.3</span>四层架构分层</h2>
+<p>把仓库的十几个模块叠起来看，Mooncake 是一个清晰的四层结构：<strong>硬件层</strong>提供 GPU/NIC/DRAM/SSD；<strong>传输层</strong>（Transfer Engine）把异构硬件的搬运方式抽象成统一的 <code>submitTransfer</code> 接口；<strong>存储层</strong>（Mooncake Store）在传输层之上定义 KV 语义、副本、租约与淘汰；<strong>集成层</strong>把前两层接到 vLLM/SGLang 等推理引擎。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1040 470" role="img" aria-label="四层架构">
+<rect x="0" y="0" width="1040" height="470" fill="#0c1322" rx="10"/>
+<defs>
+<linearGradient id="lg1" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#f472b6" stop-opacity=".14"/><stop offset="1" stop-color="#f472b6" stop-opacity=".04"/></linearGradient>
+</defs>
+<text x="30" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">四层架构总览</text>
+
+<rect x="30" y="52" width="980" height="74" rx="10" fill="url(#lg1)" stroke="#f472b6"/>
+<text x="50" y="78" fill="#f472b6" font-size="12.5" font-weight="bold">L4 集成层</text>
+<text x="50" y="100" fill="#c9d9ee" font-size="12" class="svgm">mooncake-integration · python/ · mooncake-wheel · mooncake-reshard</text>
+<text x="700" y="86" fill="#8fa5c8" font-size="11.5">vLLM KV Connector · SGLang HiCache · TRT-LLM · 权重重分片规划</text>
+
+<rect x="30" y="140" width="980" height="88" rx="10" fill="#191330" stroke="#a78bfa"/>
+<text x="50" y="166" fill="#a78bfa" font-size="12.5" font-weight="bold">L3 存储层 · mooncake-store</text>
+<text x="50" y="188" fill="#c9d9ee" font-size="12">Master（元数据/租约/淘汰/副本，1024 分片） + Client（BufferAllocator/TransferSubmitter）</text>
+<text x="50" y="210" fill="#8fa5c8" font-size="11.5">对象协议：PutStart/PutEnd/PutRevoke · GetReplicaList(隐式读租约) · Copy/Move 任务 · 快照+OpLog HA</text>
+
+<rect x="30" y="242" width="980" height="88" rx="10" fill="#0f2438" stroke="#38bdf8"/>
+<text x="50" y="268" fill="#38bdf8" font-size="12.5" font-weight="bold">L2 传输层 · mooncake-transfer-engine</text>
+<text x="50" y="290" fill="#c9d9ee" font-size="12">TransferEngine（外观）→ TransferEngineImpl → MultiTransport + TransferMetadata</text>
+<text x="50" y="312" fill="#8fa5c8" font-size="11.5">19 种 Transport：RDMA/TCP/NVMe-oF/NVLink/CXL/EFA/HIP/昇腾/鲲鹏/MACA/MUSA/FlagCX/NCCL…（+ TENT 新一代）</text>
+
+<rect x="30" y="344" width="980" height="74" rx="10" fill="#131a28" stroke="#31435f"/>
+<text x="50" y="370" fill="#93a5c0" font-size="12.5" font-weight="bold">L1 硬件层</text>
+<text x="50" y="392" fill="#8fa5c8" font-size="11.5">NVIDIA/AMD/昇腾/摩尔 GPU · RoCEv2/IB 网卡 · NVLink/NVSwitch · CPU DRAM segment · NVMe SSD · 3FS 并行文件系统</text>
+
+<text x="50" y="446" fill="#6b7d99" font-size="11">分层原则：上层只依赖下层接口 —— Store 只见 TransferRequest，从不感知 RDMA 细节；推理引擎只见 put/get，从不感知拓扑。</text>
+</svg>
+<div class="figcap"><b>图 1-3</b><span>四层架构：集成 → 存储 → 传输 → 硬件，每层只依赖下一层的最小接口</span></div>
+</div>
+
+<h2><span class="n">1.4</span>FAST'25 论文核心结论</h2>
+<div class="grid g2">
+<div class="card"><h4>📈 收益数字</h4><p>· 合成负载下吞吐最高提升 <strong>525%</strong>（对比 vLLM 基线）<br>· 真实流量（Arxiv 轨迹）让 Kimi 多承接 <strong>75%</strong> 请求<br>· 过载场景 Early-Rejection 显著降低无效算力消耗</p></div>
+<div class="card"><h4>🧩 关键设计</h4><p>· <strong>Global Conductor</strong> 全局调度器：缓存感知 + 负载预测<br>· <strong>KVCache 池</strong>用空闲 CPU/DRAM/SSD，而非挤占 GPU 显存<br>· <strong>XpYd</strong> 弹性比例：按负载动态调整 prefill/decode 实例比</p></div>
+</div>
+<p>论文与请求轨迹开源在仓库 <code>FAST25-release/</code>（Mooncake-FAST25.pdf 与 jsonl trace），可用 <code>benchmarks/storage_benchmark</code> 回放复现。这篇论文获 FAST'25 <strong>最佳论文奖</strong>，是理解 Mooncake 设计动机的第一手材料。</p>
+
+<div class="co warn"><b>一个容易混淆的点：</b>Mooncake 不做推理计算。它不含任何模型权重与 attention kernel；它只是让 KVCache 在正确的时刻出现在正确的节点上。推理引擎（vLLM/SGLang）依旧是计算的执行者。</div>
+
+<div class="co tip"><b>下一章预告：</b>原理讲完后，第 02 章进入物理世界——这些 KVCache 到底存放在什么硬件上、沿着什么物理链路流动。</div>
+
+<div class="pager">
+  <a href="index.html"><span class="lab">◀ PREV</span>目录</a>
+  <a class="nx" href="02-physical-architecture.html"><span class="lab">NEXT ▶</span>02 · 物理架构</a>
+</div>
+<div class="foot">01 · 项目全景与设计哲学 · Mooncake 源码深度学习手册</div>
+</main>
+</body>
+</html>

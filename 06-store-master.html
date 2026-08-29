@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>06 · Master 深度剖析 · Mooncake 源码学习</title>
+<style>
+:root{
+  --bg:#0a0e16; --panel:#0f1524; --panel2:#131b2e; --line:#22304a; --line2:#2c3d5c;
+  --tx:#dbe6f5; --tx2:#93a5c0; --tx3:#6b7d99;
+  --te:#38bdf8; --code-bg:#0b1220;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--te);text-decoration:none} a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:16px;height:54px}
+.logo{font-weight:700;font-size:16px;color:var(--tx);white-space:nowrap;flex-shrink:0}
+.logo .m{color:var(--te)}
+.topnav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
+.topnav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.topnav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.topnav a.on{color:var(--ac,#fbbf24);background:color-mix(in srgb,var(--ac,#fbbf24) 12%,transparent)}
+.hero{padding:44px 0 30px;border-bottom:1px solid var(--line);
+  background:radial-gradient(1100px 300px at 18% 0%,color-mix(in srgb,var(--ac,#fbbf24) 10%,transparent),transparent)}
+.kicker{color:var(--ac,#fbbf24);font-size:13px;font-weight:600;letter-spacing:2px}
+h1{font-size:32px;line-height:1.3;margin:10px 0 8px}
+.sub{color:var(--tx2);font-size:15px;max-width:860px}
+h2{font-size:22px;margin:46px 0 14px;display:flex;align-items:center;gap:10px}
+h2 .n{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border-radius:8px;
+ background:color-mix(in srgb,var(--ac,#fbbf24) 14%,transparent);color:var(--ac,#fbbf24);font-size:14px;font-weight:700}
+h3{font-size:17px;margin:28px 0 10px;color:var(--tx)}
+p{margin:10px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+.fig{margin:22px 0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px}
+.fig svg{display:block;width:100%;height:auto}
+.figcap{display:flex;gap:8px;align-items:baseline;padding:10px 4px 6px;color:var(--tx2);font-size:13px;border-top:1px dashed var(--line);margin-top:12px}
+.figcap b{color:var(--ac,#fbbf24);font-size:12.5px;white-space:nowrap}
+.co{border:1px solid var(--line);border-left:3px solid var(--ac,#fbbf24);background:var(--panel);border-radius:10px;padding:12px 16px;margin:16px 0;font-size:14px;color:var(--tx2)}
+.co b{color:var(--tx)}
+.co.warn{border-left-color:#fbbf24}.co.tip{border-left-color:#34d399}.co.danger{border-left-color:#fb7185}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font:12px ui-monospace,Menlo,monospace;color:#8fd3ff}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px}
+th{background:#101a2c;color:#aebfd8;text-align:left;padding:9px 12px;border:1px solid var(--line);font-weight:600}
+td{padding:8px 12px;border:1px solid var(--line);color:#c3d0e4;vertical-align:top}
+ul,ol{color:#c7d3e6;padding-left:22px} li{margin:5px 0}
+hr{border:none;border-top:1px solid var(--line);margin:36px 0}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:44px 0 30px}
+.pager a{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 18px;color:var(--tx2);font-size:13.5px}
+.pager a:hover{border-color:var(--ac,#fbbf24);text-decoration:none;color:var(--tx)}
+.pager a.nx{text-align:right}
+.pager .lab{display:block;font-size:11px;color:var(--tx3);letter-spacing:1px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 40px}
+svg text{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.svgm{font-family:ui-monospace,Menlo,Consolas,monospace!important}
+</style>
+</head>
+<body style="--ac:#fbbf24">
+<header class="top"><div class="wrap">
+  <a class="logo" href="index.html" style="color:var(--tx)"><span class="m">🌙</span> Mooncake 源码学习</a>
+  <nav class="topnav">
+    <a href="index.html">目录</a><a href="01-overview.html">01 全景</a><a href="02-physical-architecture.html">02 物理架构</a><a href="03-transfer-engine.html">03 传输引擎</a><a href="04-rdma-deep-dive.html">04 RDMA</a><a href="05-store-architecture.html">05 Store</a><a class="on" href="06-store-master.html">06 Master</a><a href="07-store-client.html">07 Client</a><a href="08-storage-ha.html">08 存储与HA</a><a href="09-ecosystem.html">09 生态</a><a href="10-dataflow.html">10 数据流</a>
+  </nav>
+</div></header>
+
+<section class="hero"><div class="wrap">
+  <div class="kicker">CHAPTER 06 · MASTER SERVICE</div>
+  <h1>Master 深度剖析：地址簿、裁判与回收站</h1>
+  <p class="sub">MasterService（<code>mooncake-store/src/master_service.cpp</code>，5000+ 行）是 Store 的大脑：1024 个元数据分片、三段式写协议、租约与软/硬 pin、两遍淘汰扫描、副本放置策略、fork 快照与 HA 数据源。本章逐一拆开这些机制。</p>
+</div></section>
+
+<main class="wrap">
+
+<h2><span class="n">6.1</span>内部结构：分片、线程与锁序</h2>
+<p>Master 的并发模型是"分片 + 专用线程"：<code>kNumShards = 1024</code>（<code>master_service.h:1650</code>）把所有 key 的元数据按哈希打散到 1024 个 <code>MetadataShard</code>（各持一把 SpinLock），读写互不阻塞。类注释明确写出锁获取顺序（避免死锁的圣经）：<code>client_mutex_ → metadata_shard → segment_mutex_</code>。四个常驻线程各司其职：淘汰线程（10ms 周期）、快照线程、任务管理、客户端探活。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1060 440" role="img" aria-label="Master 内部结构">
+<rect x="0" y="0" width="1060" height="440" fill="#0c1322" rx="10"/>
+<text x="28" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">MasterService 内部结构</text>
+
+<rect x="40" y="56" width="620" height="150" rx="10" fill="#191330" stroke="#a78bfa"/>
+<text x="60" y="82" fill="#c9bfe8" font-size="12.5" font-weight="bold" class="svgm">metadata_shards_[1024]</text>
+<g>
+<rect x="60" y="96" width="86" height="28" rx="4" fill="#150f26" stroke="#4a3a7a"/><text x="103" y="115" fill="#8a7aa0" font-size="9.5" text-anchor="middle" class="svgm">shard 0</text>
+<rect x="152" y="96" width="86" height="28" rx="4" fill="#150f26" stroke="#4a3a7a"/><text x="195" y="115" fill="#8a7aa0" font-size="9.5" text-anchor="middle" class="svgm">shard 1</text>
+<rect x="244" y="96" width="86" height="28" rx="4" fill="#150f26" stroke="#4a3a7a"/><text x="287" y="115" fill="#8a7aa0" font-size="9.5" text-anchor="middle" class="svgm">shard 2</text>
+<rect x="336" y="96" width="60" height="28" rx="4" fill="#150f26" stroke="#4a3a7a"/><text x="366" y="115" fill="#8a7aa0" font-size="10" text-anchor="middle">…</text>
+<rect x="402" y="96" width="86" height="28" rx="4" fill="#150f26" stroke="#4a3a7a"/><text x="445" y="115" fill="#8a7aa0" font-size="9.5" text-anchor="middle" class="svgm">shard 1023</text>
+</g>
+<text x="60" y="150" fill="#93a5c0" font-size="10.5" class="svgm">每 shard: {metadata: map&lt;key,ObjectMetadata&gt;, processing_keys, replication_tasks, offloading_tasks}</text>
+<text x="60" y="172" fill="#6b7d99" font-size="10.5">MetadataAccessorRW/RO 封装加锁 + 自动清理失效内存副本（has_invalid_mem_handle）</text>
+<text x="60" y="192" fill="#7a6aa0" font-size="10">锁序：client_mutex_ → shard SpinLock → segment_mutex_</text>
+
+<rect x="40" y="222" width="300" height="90" rx="10" fill="#150f26" stroke="#4a3a7a"/>
+<text x="60" y="248" fill="#c9bfe8" font-size="12" font-weight="bold" class="svgm">SegmentManager</text>
+<text x="60" y="270" fill="#93a5c0" font-size="10.5">全局段视图 + BufferAllocator 家族</text>
+<text x="60" y="290" fill="#6b7d99" font-size="10" class="svgm">(Offset / Cachelib，--memory_allocator)</text>
+
+<rect x="360" y="222" width="300" height="90" rx="10" fill="#150f26" stroke="#4a3a7a"/>
+<text x="380" y="248" fill="#c9bfe8" font-size="12" font-weight="bold" class="svgm">AllocatorManager + AllocationStrategy</text>
+<text x="380" y="270" fill="#93a5c0" font-size="10.5">Random / FreeRatioFirst / Cxl 挑段分配</text>
+<text x="380" y="290" fill="#6b7d99" font-size="10">ReplicateConfig 决定副本数与放置偏好</text>
+
+<!-- threads -->
+<rect x="700" y="56" width="320" height="256" rx="10" fill="#101827" stroke="#31435f"/>
+<text x="720" y="82" fill="#93a5c0" font-size="12.5" font-weight="bold">常驻线程</text>
+<text x="720" y="110" fill="#ffe2a0" font-size="11" class="svgm">EvictionThreadFunc（10ms）</text>
+<text x="720" y="128" fill="#6b7d99" font-size="10">高水位 0.95 或分配失败触发 BatchEvict</text>
+<text x="720" y="154" fill="#7fd8e8" font-size="11" class="svgm">SnapshotThreadFunc（周期 fork 快照）</text>
+<text x="720" y="172" fill="#6b7d99" font-size="10">msgpack 序列化 → S3/本地上传 + catalog</text>
+<text x="720" y="198" fill="#a8f0c8" font-size="11" class="svgm">TaskManager（Copy/Move/Drain 任务）</text>
+<text x="720" y="216" fill="#6b7d99" font-size="10">客户端 FetchTasks 拉取并执行</text>
+<text x="720" y="242" fill="#f0b8c0" font-size="11" class="svgm">ClientMonitorFunc（Ping 探活）</text>
+<text x="720" y="260" fill="#6b7d99" font-size="10">超时客户端的加工中副本被回收</text>
+<text x="720" y="288" fill="#c9bfe8" font-size="11" class="svgm">MasterAdminServer（HTTP :9003）</text>
+<text x="720" y="306" fill="#6b7d99" font-size="10">Prometheus 指标 + 管理接口</text>
+
+<rect x="40" y="330" width="980" height="76" rx="10" fill="#101827" stroke="#22304a"/>
+<text x="60" y="356" fill="#93a5c0" font-size="11" class="svgm">不变量：Master 中不存在任何 KV 数据本身 —— 只有 key、大小、地址、状态、租约。 </text>
+<text x="60" y="378" fill="#5b6c88" font-size="10.5">因此 Master 的内存占用与 key 数量线性相关，与缓存总容量无关；故障切换只需恢复"地址簿"，数据原地不动。</text>
+</svg>
+<div class="figcap"><b>图 6-1</b><span>MasterService 内部结构：1024 分片 + 段管理 + 四类常驻线程</span></div>
+</div>
+
+<h2><span class="n">6.2</span>三段式写协议</h2>
+<p>一次 <code>Put(key, slices, config)</code> 在 Master 视角分三步。<code>PutStart</code> 检查 key 不存在/未过期后，为 <code>ReplicateConfig</code> 要求的每个副本分配空间（内存副本在某个 segment、磁盘副本生成 file_path），登记 <code>processing_keys</code> 并返回副本描述符列表；客户端随后并行地把数据搬到位（RDMA 直写内存副本、写本地盘的 DISK 副本）；最后 <code>PutEnd</code> 校验写入者身份并把副本标记 COMPLETE、授予初始租约。任一步失败，<code>PutRevoke</code> 触发 RAII 级回滚——副本空间随 ObjectMetadata 析构自动释放。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1060 470" role="img" aria-label="三段式写时序">
+<defs>
+<marker id="m6a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a78bfa"/></marker>
+<marker id="m6b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/></marker>
+<marker id="m6c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fb7185"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="470" fill="#0c1322" rx="10"/>
+<text x="28" y="32" fill="#8fa5c8" font-size="13" font-weight="bold">Put 三段式时序（replica_num=2 + 磁盘副本）</text>
+
+<rect x="50" y="48" width="180" height="38" rx="8" fill="#0f2438" stroke="#38bdf8"/><text x="140" y="72" fill="#7fc8e8" font-size="12" text-anchor="middle" font-weight="bold">客户端 Client</text>
+<rect x="410" y="48" width="200" height="38" rx="8" fill="#191330" stroke="#a78bfa"/><text x="510" y="72" fill="#c9bfe8" font-size="12" text-anchor="middle" font-weight="bold">Master</text>
+<rect x="740" y="48" width="150" height="38" rx="8" fill="#132a22" stroke="#34d399"/><text x="815" y="72" fill="#7fd8a8" font-size="12" text-anchor="middle" font-weight="bold">副本节点 B</text>
+<line x1="140" y1="86" x2="140" y2="430" stroke="#2a3a55" stroke-dasharray="3 4"/>
+<line x1="510" y1="86" x2="510" y2="430" stroke="#2a3a55" stroke-dasharray="3 4"/>
+<line x1="815" y1="86" x2="815" y2="430" stroke="#2a3a55" stroke-dasharray="3 4"/>
+
+<line x1="144" y1="112" x2="506" y2="112" stroke="#a78bfa" stroke-width="1.6" marker-end="url(#m6a)"/>
+<text x="325" y="106" fill="#c9bfe8" font-size="11" text-anchor="middle" class="svgm">① PutStart(key, slice_lengths, {replica_num:2, soft_pin:true})</text>
+<line x1="506" y1="124" x2="144" y2="124" stroke="#a78bfa" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#m6a)"/>
+<text x="325" y="140" fill="#8a7aa0" font-size="10.5" text-anchor="middle">检查 key → 分配 2×内存副本 + 1×DISK 副本 → processing_keys 登记 → 返回 Descriptor[]</text>
+
+<line x1="144" y1="170" x2="811" y2="170" stroke="#22d3ee" stroke-width="2.2" marker-end="url(#m6b)"/>
+<text x="475" y="164" fill="#22d3ee" font-size="11.5" text-anchor="middle" font-weight="bold">② 数据搬运（不经 Master）</text>
+<text x="475" y="188" fill="#5b7a99" font-size="10" text-anchor="middle" class="svgm">TransferWrite → RDMA WRITE 到节点 B segment；DISK 副本写本地 SSD（异步 PutEnd）</text>
+
+<line x1="144" y1="218" x2="506" y2="218" stroke="#a78bfa" stroke-width="1.6" marker-end="url(#m6a)"/>
+<text x="325" y="212" fill="#c9bfe8" font-size="11" text-anchor="middle" class="svgm">③ PutEnd(key) → mark_complete + 初始租约 + (可选)入 offload 队列</text>
+
+<rect x="300" y="248" width="420" height="54" rx="9" fill="#0f2a2a" stroke="#34d399"/>
+<text x="510" y="272" fill="#a8f0c8" font-size="11" text-anchor="middle">完成态：GetReplicaList 可见，读时隐式续读租约</text>
+<text x="510" y="291" fill="#5b9a7a" font-size="9.5" text-anchor="middle" class="svgm">processing_keys 移除 → 并发写同一 key 在 PutStart 即失败（无锁竞争）</text>
+
+<!-- failure path -->
+<rect x="60" y="330" width="940" height="110" rx="10" fill="#241418" stroke="#fb7185"/>
+<text x="80" y="356" fill="#f0b8c0" font-size="12" font-weight="bold">失败路径（任一副本传输失败）</text>
+<text x="80" y="380" fill="#a06a75" font-size="10.5" class="svgm">客户端 PutRevoke(key) → Master 删 ObjectMetadata → 副本空间 RAII 析构释放 → key 回到可写状态</text>
+<text x="80" y="402" fill="#a06a75" font-size="10.5">若客户端宕机未 Revoke：DiscardExpiredProcessingReplicas 按时限回收（discard 30s / release 600s 两档），空间先进 discarded_replicas_ 延迟释放</text>
+<text x="80" y="424" fill="#8a5a65" font-size="10">源码锚点：PutStart / PutEnd(master_service.cpp:4571 附近) / PutRevoke(:4838 附近) · AllocateAndInsertMetadata</text>
+</svg>
+<div class="figcap"><b>图 6-2</b><span>三段式写：Master 锁定空间与副本位置 → 数据点对点直写 → 提交/回滚</span></div>
+</div>
+
+<h2><span class="n">6.3</span>租约体系与软/硬 pin</h2>
+<p>缓存池最难的问题是"什么时候能删"。Mooncake 用一组时间参数把这个问题变成纯机械判断：</p>
+<table>
+<tr><th>参数</th><th>默认量级</th><th>作用</th></tr>
+<tr><td>读租约（lease）</td><td>秒级（默认 5s 档）</td><td>GetReplicaList 返回时隐式授予；租约期内对象禁止淘汰，保证"读到的数据此刻还在"</td></tr>
+<tr><td>软 pin（soft pin）</td><td>30 分钟档</td><td><code>with_soft_pin=true</code> 的高价值前缀：期内禁止淘汰（第一遍扫描不动它），过期后进入可淘汰集合</td></tr>
+<tr><td>硬 pin（hard pin）</td><td>永久</td><td><code>with_hard_pin=true</code>：永不淘汰（如 system prompt 常驻层）</td></tr>
+<tr><td>Put 超时 discard / release</td><td>30s / 600s 两档</td><td>写卡死后回收 processing 副本的时限</td></tr>
+</table>
+
+<div class="fig">
+<svg viewBox="0 0 1060 330" role="img" aria-label="租约时间轴">
+<defs>
+<marker id="m6d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="330" fill="#0c1322" rx="10"/>
+<text x="28" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">一个软 pin 对象的时间轴（非等比示意）</text>
+
+<line x1="60" y1="230" x2="1010" y2="230" stroke="#3a4a66" stroke-width="2" marker-end="url(#m6d)"/>
+<rect x="80" y="200" width="70" height="60" rx="6" fill="#241418" stroke="#fb7185" opacity=".85"/>
+<text x="115" y="196" fill="#f0b8c0" font-size="10.5" text-anchor="middle" class="svgm">PROCESSING</text>
+<rect x="150" y="200" width="130" height="60" rx="6" fill="#0f2a2a" stroke="#34d399" opacity=".9"/>
+<text x="215" y="196" fill="#a8f0c8" font-size="10.5" text-anchor="middle" class="svgm">COMPLETE + 初始租约</text>
+<rect x="280" y="200" width="150" height="60" rx="6" fill="#191330" stroke="#a78bfa" opacity=".95"/>
+<text x="355" y="196" fill="#c9bfe8" font-size="10.5" text-anchor="middle" class="svgm">软 pin 保护（30min 档）</text>
+<rect x="430" y="200" width="560" height="60" rx="6" fill="#131a28" stroke="#94a3b8" stroke-dasharray="5 4"/>
+<text x="710" y="196" fill="#93a5c0" font-size="10.5" text-anchor="middle" class="svgm">可淘汰区（读操作会隐式续读租约，把对象往右"推"）</text>
+
+<g font-size="10" fill="#6b7d99">
+<text x="80" y="285" text-anchor="middle" class="svgm">t0 PutStart</text>
+<text x="215" y="285" text-anchor="middle" class="svgm">t1 PutEnd</text>
+<text x="355" y="285" text-anchor="middle" class="svgm">t2 soft pin 到期</text>
+<text x="710" y="285" text-anchor="middle">高水位触发两遍扫描</text>
+</g>
+<rect x="80" y="60" width="450" height="100" rx="10" fill="#101827" stroke="#22304a"/>
+<text x="100" y="86" fill="#ffe2a0" font-size="11.5" font-weight="bold">第一遍扫描（保守）</text>
+<text x="100" y="108" fill="#93a5c0" font-size="10.5">只淘汰：无 pin ∧ 读租约已过期 的对象</text>
+<text x="100" y="128" fill="#6b7d99" font-size="10">软 pin / 硬 pin / 租约未到的全部跳过</text>
+<rect x="560" y="60" width="460" height="100" rx="10" fill="#1a2a1a" stroke="#fbbf24"/>
+<text x="580" y="86" fill="#ffe2a0" font-size="11.5" font-weight="bold">第二遍扫描（激进，仅当仍超水位）</text>
+<text x="580" y="108" fill="#93a5c0" font-size="10.5">允许淘汰已过期的软 pin 对象（allow_evict_soft_pinned）</text>
+<text x="580" y="128" fill="#6b7d99" font-size="10">硬 pin 永不参与；被淘汰对象可先进 offload 队列下沉 SSD</text>
+<text x="80" y="316" fill="#5b6c88" font-size="10.5">触发条件：global_mem_used_ratio &gt; eviction_high_watermark_ratio(0.95) 或 PutStart 分配失败置位 need_eviction_</text>
+</svg>
+<div class="figcap"><b>图 6-3</b><span>租约与软/硬 pin 时间轴 + 两遍淘汰扫描：第一遍保守，第二遍激进</span></div>
+</div>
+
+<h2><span class="n">6.4</span>副本放置策略</h2>
+<p><code>ReplicateConfig</code>（<code>include/replica.h</code>）控制放置：<code>replica_num</code>（副本数）、<code>with_soft_pin/with_hard_pin</code>、<code>preferred_segments</code>（偏好段，常用于把副本钉到某类节点）、<code>prefer_alloc_in_same_node</code>（读亲和：副本尽量同节点，读时本地命中率高）。分配时 <code>AllocationStrategy</code> 三个实现择一：<code>Random</code>（随机段）、<code>FreeRatioFirst</code>（剩余比例最高的段优先，天然均衡）、<code>Cxl</code>（优先 CXL 内存池段）。开启磁盘副本（<code>use_disk_replica</code>）后 PutStart 额外创建一个 DISK 副本，file_path 由 key 哈希到根目录树。</p>
+
+<h2><span class="n">6.5</span>快照与 OpLog：HA 的数据基础</h2>
+<p>Master 的元数据要能被 standby 重建，靠"快照基线 + OpLog 增量"两层：</p>
+<ul>
+<li><strong>快照</strong>：快照线程周期 <code>PersistState()</code> —— <strong>fork 子进程</strong>在无锁瞬间序列化 1024 个 shard（<code>MetadataSerializer</code>，msgpack），上传到 <code>SnapshotObjectStore</code>（本地目录或 S3），catalog 记录到 embedded/redis 的 <code>SnapshotCatalogStore</code>；启动时 <code>RestoreState()</code> 反向恢复。fork 的妙处：父进程零停顿、数据一致性由 COW 天然保证。</li>
+<li><strong>OpLog</strong>：快照之后的增量以条目（<code>sequence_id / op_type / key / payload / checksum / prefix_hash</code>）追加进 <code>OpLogManager</code>，经 <code>EtcdOpLogStore</code>（或共享盘 LocalFs）传播；PUT_END/PUT_REVOKE/REMOVE 三类操作覆盖全部状态变化，REMOVE 走强持久（AppendAndPersist）。</li>
+</ul>
+
+<div class="fig">
+<svg viewBox="0 0 1060 300" role="img" aria-label="快照与 OpLog">
+<defs>
+<marker id="m6e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/></marker>
+<marker id="m6f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="300" fill="#0c1322" rx="10"/>
+<text x="28" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">主备元数据同步：快照引导 + OpLog 回放</text>
+
+<rect x="40" y="60" width="240" height="170" rx="10" fill="#241c0e" stroke="#fbbf24"/>
+<text x="160" y="86" fill="#ffe2a0" font-size="12" text-anchor="middle" font-weight="bold">Master 主</text>
+<text x="60" y="112" fill="#93a5c0" font-size="10.5" class="svgm">SnapshotThreadFunc → PersistState</text>
+<text x="60" y="134" fill="#93a5c0" font-size="10.5">fork() 子进程无锁序列化 1024 shard</text>
+<text x="60" y="156" fill="#93a5c0" font-size="10.5" class="svgm">OpLogManager::Append → etcd</text>
+<text x="60" y="178" fill="#6b7d99" font-size="10">PUT_END / PUT_REVOKE / REMOVE</text>
+<text x="60" y="198" fill="#6b7d99" font-size="10">checksum + prefix_hash 校验链</text>
+
+<rect x="400" y="60" width="240" height="170" rx="10" fill="#151322" stroke="#c084fc" stroke-dasharray="6 4"/>
+<text x="520" y="86" fill="#c9bfe8" font-size="12" text-anchor="middle" font-weight="bold">快照仓 + OpLog 通道</text>
+<text x="420" y="112" fill="#8a7aa0" font-size="10.5" class="svgm">SnapshotObjectStore: local / S3</text>
+<text x="420" y="134" fill="#8a7aa0" font-size="10.5" class="svgm">SnapshotCatalogStore: embedded/redis</text>
+<text x="420" y="160" fill="#8a7aa0" font-size="10.5" class="svgm">EtcdOpLogStore (watch prefix)</text>
+<text x="420" y="182" fill="#6b5a80" font-size="10">或 LocalFsOpLogStore（共享盘/NFS）</text>
+
+<rect x="760" y="60" width="260" height="170" rx="10" fill="#101827" stroke="#31435f"/>
+<text x="890" y="86" fill="#93a5c0" font-size="12" text-anchor="middle" font-weight="bold">Standby（HotStandbyService）</text>
+<text x="780" y="112" fill="#7fd8e8" font-size="10.5">① LoadLatestSnapshot 建基线</text>
+<text x="780" y="134" fill="#7fd8e8" font-size="10.5">② 从 snapshot_sequence_id 起回放</text>
+<text x="780" y="156" fill="#7fd8e8" font-size="10.5" class="svgm">OpLogApplier 按序应用 + 乱序缓存</text>
+<text x="780" y="178" fill="#6b7d99" font-size="10">lag 超阈值 → IsReadyForPromotion=false</text>
+<text x="780" y="198" fill="#6b7d99" font-size="10">Promote() 导出内存快照给新 MasterService</text>
+
+<line x1="280" y1="120" x2="396" y2="120" stroke="#fbbf24" stroke-width="1.6" marker-end="url(#m6e)"/>
+<line x1="640" y1="130" x2="756" y2="130" stroke="#fbbf24" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#m6e)"/>
+<text x="28" y="272" fill="#5b6c88" font-size="10.5">HA 强化（近期提交）：批量 OpLog 快照引导（#3642）· standby 未完成恢复前拒绝服务（#3497）· Supervisor/LeadershipMonitor 见第 08 章</text>
+</svg>
+<div class="figcap"><b>图 6-4</b><span>快照 + OpLog：fork 快照做基线，etcd watch 做增量，lag 检查做提升闸门</span></div>
+</div>
+
+<div class="co danger"><b>读源码最容易迷路的三处：</b>① <code>MetadataAccessorRW</code> 的隐式清理逻辑（访问即修复）；② 淘汰与 offload 的耦合（先下沉后释放，<code>offload_force_evict_</code> 兜底）；③ discarded_replicas_ 的延迟释放（防"刚释放立即被重用导致在途 RDMA 写坏数据"）。</div>
+
+<div class="pager">
+  <a href="05-store-architecture.html"><span class="lab">◀ PREV</span>05 · Store 总体架构</a>
+  <a class="nx" href="07-store-client.html"><span class="lab">NEXT ▶</span>07 · Client 深度剖析</a>
+</div>
+<div class="foot">06 · Master 深度剖析 · Mooncake 源码深度学习手册</div>
+</main>
+</body>
+</html>

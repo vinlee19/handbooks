@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>05 · Mooncake Store 总体架构 · Mooncake 源码学习</title>
+<style>
+:root{
+  --bg:#0a0e16; --panel:#0f1524; --panel2:#131b2e; --line:#22304a; --line2:#2c3d5c;
+  --tx:#dbe6f5; --tx2:#93a5c0; --tx3:#6b7d99;
+  --te:#38bdf8; --code-bg:#0b1220;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--te);text-decoration:none} a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:16px;height:54px}
+.logo{font-weight:700;font-size:16px;color:var(--tx);white-space:nowrap;flex-shrink:0}
+.logo .m{color:var(--te)}
+.topnav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
+.topnav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.topnav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.topnav a.on{color:var(--ac,#a78bfa);background:color-mix(in srgb,var(--ac,#a78bfa) 12%,transparent)}
+.hero{padding:44px 0 30px;border-bottom:1px solid var(--line);
+  background:radial-gradient(1100px 300px at 18% 0%,color-mix(in srgb,var(--ac,#a78bfa) 10%,transparent),transparent)}
+.kicker{color:var(--ac,#a78bfa);font-size:13px;font-weight:600;letter-spacing:2px}
+h1{font-size:32px;line-height:1.3;margin:10px 0 8px}
+.sub{color:var(--tx2);font-size:15px;max-width:860px}
+h2{font-size:22px;margin:46px 0 14px;display:flex;align-items:center;gap:10px}
+h2 .n{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border-radius:8px;
+ background:color-mix(in srgb,var(--ac,#a78bfa) 14%,transparent);color:var(--ac,#a78bfa);font-size:14px;font-weight:700}
+h3{font-size:17px;margin:28px 0 10px;color:var(--tx)}
+p{margin:10px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+.grid{display:grid;gap:14px}.g2{grid-template-columns:1fr 1fr}.g3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:860px){.g2,.g3{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.card h4{margin:0 0 6px;font-size:15px}
+.card p{margin:4px 0;font-size:13.5px;color:var(--tx2)}
+.fig{margin:22px 0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px}
+.fig svg{display:block;width:100%;height:auto}
+.figcap{display:flex;gap:8px;align-items:baseline;padding:10px 4px 6px;color:var(--tx2);font-size:13px;border-top:1px dashed var(--line);margin-top:12px}
+.figcap b{color:var(--ac,#a78bfa);font-size:12.5px;white-space:nowrap}
+.co{border:1px solid var(--line);border-left:3px solid var(--ac,#a78bfa);background:var(--panel);border-radius:10px;padding:12px 16px;margin:16px 0;font-size:14px;color:var(--tx2)}
+.co b{color:var(--tx)}
+.co.warn{border-left-color:#fbbf24}.co.tip{border-left-color:#34d399}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font:12px ui-monospace,Menlo,monospace;color:#8fd3ff}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px}
+th{background:#101a2c;color:#aebfd8;text-align:left;padding:9px 12px;border:1px solid var(--line);font-weight:600}
+td{padding:8px 12px;border:1px solid var(--line);color:#c3d0e4;vertical-align:top}
+ul,ol{color:#c7d3e6;padding-left:22px} li{margin:5px 0}
+hr{border:none;border-top:1px solid var(--line);margin:36px 0}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:44px 0 30px}
+.pager a{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 18px;color:var(--tx2);font-size:13.5px}
+.pager a:hover{border-color:var(--ac,#a78bfa);text-decoration:none;color:var(--tx)}
+.pager a.nx{text-align:right}
+.pager .lab{display:block;font-size:11px;color:var(--tx3);letter-spacing:1px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 40px}
+svg text{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.svgm{font-family:ui-monospace,Menlo,Consolas,monospace!important}
+</style>
+</head>
+<body style="--ac:#a78bfa">
+<header class="top"><div class="wrap">
+  <a class="logo" href="index.html" style="color:var(--tx)"><span class="m">🌙</span> Mooncake 源码学习</a>
+  <nav class="topnav">
+    <a href="index.html">目录</a><a href="01-overview.html">01 全景</a><a href="02-physical-architecture.html">02 物理架构</a><a href="03-transfer-engine.html">03 传输引擎</a><a href="04-rdma-deep-dive.html">04 RDMA</a><a class="on" href="05-store-architecture.html">05 Store</a><a href="06-store-master.html">06 Master</a><a href="07-store-client.html">07 Client</a><a href="08-storage-ha.html">08 存储与HA</a><a href="09-ecosystem.html">09 生态</a><a href="10-dataflow.html">10 数据流</a>
+  </nav>
+</div></header>
+
+<section class="hero"><div class="wrap">
+  <div class="kicker">CHAPTER 05 · MOONCAKE STORE OVERVIEW</div>
+  <h1>Mooncake Store 总体架构：控制面与数据面分离的 KV 池</h1>
+  <p class="sub">如果说 Transfer Engine 解决"怎么搬"，Mooncake Store 解决"搬什么、搬到哪、何时淘汰"。它的答案是一条贯穿始终的设计纪律：<strong>Master 只管理元数据，数据永远在节点间点对点直传</strong>。本章建立 Store 的全景认知，第 06/07 章再分别深入 Master 与 Client。</p>
+</div></section>
+
+<main class="wrap">
+
+<h2><span class="n">5.1</span>全景：一张图看懂 Mooncake Store</h2>
+<p>Mooncake Store 是面向 LLM KVCache 的分布式分层 KV 存储。它最重要的架构决策是<strong>控制面 / 数据面彻底分离</strong>：Master（元数据服务）从不见数据，只维护"哪个 key 的副本在哪台机器的哪段内存里"；真正搬运数据时，客户端拿到副本描述符（内含对端内存地址 + 网络端点），直接通过 Transfer Engine 发起 RDMA 读写。这个决策带来三个直接收益：Master 无带宽瓶颈、Master 故障切换不影响数据面、容量随节点线性扩展。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1060 560" role="img" aria-label="Store 全景架构">
+<defs>
+<marker id="s5a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a78bfa"/></marker>
+<marker id="s5b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/></marker>
+<marker id="s5c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="560" fill="#0c1322" rx="10"/>
+<text x="28" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">Mooncake Store 全景（控制面紫虚线 · 数据面青实线）</text>
+
+<!-- master -->
+<rect x="330" y="56" width="400" height="180" rx="12" fill="#191330" stroke="#a78bfa" stroke-width="1.5"/>
+<text x="530" y="84" fill="#a78bfa" font-size="13.5" text-anchor="middle" font-weight="bold">mooncake-master（MasterService · 控制面）</text>
+<rect x="350" y="98" width="175" height="120" rx="8" fill="#150f26" stroke="#4a3a7a"/>
+<text x="437" y="122" fill="#c9bfe8" font-size="11" text-anchor="middle" font-weight="bold">元数据 1024 分片</text>
+<text x="437" y="142" fill="#8a7aa0" font-size="10" text-anchor="middle" class="svgm">key → ObjectMetadata</text>
+<text x="437" y="160" fill="#8a7aa0" font-size="10" text-anchor="middle" class="svgm">replicas[] / lease / pin</text>
+<text x="437" y="178" fill="#8a7aa0" font-size="10" text-anchor="middle" class="svgm">processing_keys</text>
+<text x="437" y="200" fill="#7a6aa0" font-size="9.5" text-anchor="middle">master_service.h:1650</text>
+<rect x="535" y="98" width="175" height="120" rx="8" fill="#150f26" stroke="#4a3a7a"/>
+<text x="622" y="122" fill="#c9bfe8" font-size="11" text-anchor="middle" font-weight="bold">SegmentManager</text>
+<text x="622" y="142" fill="#8a7aa0" font-size="10" text-anchor="middle">全局内存段视图</text>
+<text x="622" y="162" fill="#8a7aa0" font-size="10" text-anchor="middle" class="svgm">AllocationStrategy 分配</text>
+<text x="622" y="180" fill="#8a7aa0" font-size="10" text-anchor="middle">淘汰线程 · 快照线程</text>
+<text x="622" y="200" fill="#7a6aa0" font-size="9.5" text-anchor="middle">:50051 RPC · :9003 指标</text>
+
+<!-- etcd -->
+<rect x="800" y="86" width="230" height="120" rx="10" fill="#151322" stroke="#c084fc" stroke-dasharray="6 4"/>
+<text x="915" y="112" fill="#c084fc" font-size="12" text-anchor="middle" font-weight="bold">etcd（控制面基石）</text>
+<text x="915" y="136" fill="#8a7aa0" font-size="10.5" text-anchor="middle">① 客户端/段注册视图</text>
+<text x="915" y="156" fill="#8a7aa0" font-size="10.5" text-anchor="middle">② HA leader view（lease）</text>
+<text x="915" y="176" fill="#8a7aa0" font-size="10.5" text-anchor="middle">③ OpLog 复制通道</text>
+<text x="915" y="196" fill="#6b5a80" font-size="9.5" text-anchor="middle">Go 动态库封装（etcd_helper.cpp）</text>
+
+<!-- clients -->
+<rect x="40" y="300" width="300" height="160" rx="12" fill="#0f2438" stroke="#38bdf8"/>
+<text x="190" y="326" fill="#7fc8e8" font-size="12.5" text-anchor="middle" font-weight="bold">节点 A · RealClient</text>
+<rect x="60" y="340" width="120" height="52" rx="7" fill="#0c1826" stroke="#2a4a66"/>
+<text x="120" y="362" fill="#8fb8d8" font-size="10.5" text-anchor="middle" class="svgm">BufferAllocator</text>
+<text x="120" y="380" fill="#5b7a99" font-size="9.5" text-anchor="middle">本地 segment</text>
+<rect x="196" y="340" width="120" height="52" rx="7" fill="#0c1826" stroke="#2a4a66"/>
+<text x="256" y="362" fill="#8fb8d8" font-size="10.5" text-anchor="middle" class="svgm">TransferEngine</text>
+<text x="256" y="380" fill="#5b7a99" font-size="9.5" text-anchor="middle">数据面执行者</text>
+<text x="190" y="422" fill="#6b7d99" font-size="10.5" text-anchor="middle">+ LocalHotCache / SSD offload / 心跳</text>
+<text x="190" y="444" fill="#5b6c88" font-size="9.5" text-anchor="middle">client_service.cpp · real_client.cpp</text>
+
+<rect x="720" y="300" width="300" height="160" rx="12" fill="#132a22" stroke="#34d399"/>
+<text x="870" y="326" fill="#7fd8a8" font-size="12.5" text-anchor="middle" font-weight="bold">节点 B · RealClient</text>
+<rect x="740" y="340" width="120" height="52" rx="7" fill="#0c1f18" stroke="#2a5a44"/>
+<text x="800" y="362" fill="#8fd8b8" font-size="10.5" text-anchor="middle" class="svgm">BufferAllocator</text>
+<text x="800" y="380" fill="#5b9a7a" font-size="9.5" text-anchor="middle">本地 segment</text>
+<rect x="876" y="340" width="120" height="52" rx="7" fill="#0c1f18" stroke="#2a5a44"/>
+<text x="936" y="362" fill="#8fd8b8" font-size="10.5" text-anchor="middle" class="svgm">TransferEngine</text>
+<text x="936" y="380" fill="#5b9a7a" font-size="9.5" text-anchor="middle">数据面执行者</text>
+<text x="870" y="422" fill="#6b7d99" font-size="10.5" text-anchor="middle">KVCache 真实存放处（DRAM segment）</text>
+
+<!-- storage layer -->
+<rect x="400" y="330" width="260" height="100" rx="12" fill="#241418" stroke="#fb7185"/>
+<text x="530" y="356" fill="#f0b8c0" font-size="12" text-anchor="middle" font-weight="bold">SSD 层（可选）</text>
+<text x="530" y="378" fill="#a06a75" font-size="10.5" text-anchor="middle">LOCAL_DISK / DISK 副本</text>
+<text x="530" y="398" fill="#a06a75" font-size="10.5" text-anchor="middle">Bucket 存储 · 3FS USRBIO</text>
+<text x="530" y="418" fill="#8a5a65" font-size="9.5" text-anchor="middle">storage_backend.cpp · file_storage.cpp</text>
+
+<!-- flows -->
+<path d="M 340 146 L 246 296" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#s5c)"/>
+<text x="238" y="222" fill="#94a3b8" font-size="10.5">PutStart/PutEnd/GetReplicaList</text>
+<text x="238" y="238" fill="#6b7d99" font-size="9.5">(coro_rpc)</text>
+<path d="M 730 146 L 894 296" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#s5c)"/>
+<text x="742" y="222" fill="#94a3b8" font-size="10.5">副本描述符</text>
+<path d="M 530 240 L 530 326" fill="none" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#s5c)"/>
+<text x="542" y="288" fill="#94a3b8" font-size="10.5">offload 指令/心跳</text>
+<path d="M 344 420 L 716 420" fill="none" stroke="#22d3ee" stroke-width="2.4" marker-end="url(#s5b)"/>
+<text x="530" y="410" fill="#22d3ee" font-size="11.5" text-anchor="middle" font-weight="bold">RDMA 直传（数据面 · Master 零参与）</text>
+<path d="M 740 176 C 660 210 620 240 570 326" fill="none" stroke="#c084fc" stroke-width="1.3" stroke-dasharray="4 4" marker-end="url(#s5c)"/>
+<path d="M 500 26 C 500 40 500 46 500 52" fill="none" stroke="#a78bfa" stroke-width="1.2" stroke-dasharray="4 4"/>
+<text x="28" y="530" fill="#5b6c88" font-size="11">关键不变量：任何一条青色数据线都不经过 master —— 这就是 Store 能水平扩展的根本原因</text>
+</svg>
+<div class="figcap"><b>图 5-1</b><span>Mooncake Store 全景：Master 只发"地址簿"，数据沿青色路径点对点直传</span></div>
+</div>
+
+<h2><span class="n">5.2</span>对象模型：ObjectMetadata 与 Replica</h2>
+<p>Master 里最核心的两个数据结构：<code>ObjectMetadata</code>（key 级元数据）与 <code>Replica</code>（副本级状态）。每个 key 对应一个 ObjectMetadata（含副本数组、租约、软/硬 pin 标记）；每个副本有自己的类型与状态机。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1060 470" role="img" aria-label="对象模型与副本状态机">
+<defs>
+<marker id="s5d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a78bfa"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="470" fill="#0c1322" rx="10"/>
+<text x="28" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">ObjectMetadata / Replica 结构与副本状态机</text>
+
+<rect x="40" y="60" width="400" height="220" rx="10" fill="#150f26" stroke="#4a3a7a"/>
+<text x="60" y="88" fill="#c9bfe8" font-size="12.5" font-weight="bold" class="svgm">ObjectMetadata（master_service.h）</text>
+<text x="60" y="114" fill="#93a5c0" font-size="11" class="svgm">client_id        // 写入者</text>
+<text x="60" y="136" fill="#93a5c0" font-size="11" class="svgm">size             // 对象字节数</text>
+<text x="60" y="158" fill="#93a5c0" font-size="11" class="svgm">lease_timeout    // 读租约（硬保护）</text>
+<text x="60" y="180" fill="#93a5c0" font-size="11" class="svgm">soft_pin_timeout // 软 pin 到期（30min 档）</text>
+<text x="60" y="202" fill="#93a5c0" font-size="11" class="svgm">hard_pinned      // 永不淘汰</text>
+<text x="60" y="224" fill="#93a5c0" font-size="11" class="svgm">replicas_ : vector&lt;Replica&gt;</text>
+<text x="60" y="252" fill="#7a6aa0" font-size="10">RAII：析构自动释放副本空间（dec_key_count）</text>
+
+<rect x="500" y="60" width="520" height="220" rx="10" fill="#101827" stroke="#31435f"/>
+<text x="520" y="88" fill="#c9d9ee" font-size="12.5" font-weight="bold" class="svgm">Replica（include/replica.h）</text>
+<text x="520" y="112" fill="#93a5c0" font-size="11">三种类型（ReplicaType）：</text>
+<text x="520" y="136" fill="#7fd8e8" font-size="11" class="svgm">MEMORY      → AllocatedBuffer（内存段地址）</text>
+<text x="520" y="158" fill="#f0b8c0" font-size="11" class="svgm">DISK        → file_path（共享盘/3FS 路径）</text>
+<text x="520" y="180" fill="#a8f0c8" font-size="11" class="svgm">LOCAL_DISK  → client_id + endpoint（某节点本地 SSD）</text>
+<text x="520" y="206" fill="#93a5c0" font-size="11">Replica::Descriptor（RPC 传给客户端的可序列化描述）：</text>
+<text x="520" y="228" fill="#6b7d99" font-size="10.5" class="svgm">buffer_address_ + transport_endpoint_ ← TE 直接可用</text>
+<text x="520" y="252" fill="#7a6aa0" font-size="10">状态机 UNDEFINED→INITIALIZED→PROCESSING→COMPLETE→REMOVED/FAILED</text>
+
+<!-- state machine -->
+<rect x="60" y="330" width="130" height="46" rx="23" fill="#131a28" stroke="#94a3b8"/>
+<text x="125" y="358" fill="#c9d9ee" font-size="11.5" text-anchor="middle" class="svgm">INITIALIZED</text>
+<rect x="250" y="330" width="130" height="46" rx="23" fill="#1a2a1a" stroke="#fbbf24"/>
+<text x="315" y="358" fill="#ffe2a0" font-size="11.5" text-anchor="middle" class="svgm">PROCESSING</text>
+<rect x="440" y="330" width="130" height="46" rx="23" fill="#0f2a2a" stroke="#34d399"/>
+<text x="505" y="358" fill="#a8f0c8" font-size="11.5" text-anchor="middle" class="svgm">COMPLETE</text>
+<rect x="630" y="330" width="140" height="46" rx="23" fill="#241418" stroke="#fb7185"/>
+<text x="700" y="358" fill="#f0b8c0" font-size="11.5" text-anchor="middle" class="svgm">REMOVED/FAILED</text>
+<line x1="190" y1="353" x2="246" y2="353" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#s5d)"/>
+<line x1="380" y1="353" x2="436" y2="353" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#s5d)"/>
+<line x1="570" y1="353" x2="626" y2="353" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#s5d)"/>
+<text x="196" y="344" fill="#6b7d99" font-size="9.5">PutStart 分配空间</text>
+<text x="386" y="344" fill="#6b7d99" font-size="9.5">数据就位 PutEnd</text>
+<text x="576" y="344" fill="#6b7d99" font-size="9.5">Remove/淘汰</text>
+<text x="830" y="356" fill="#6b7d99" font-size="10.5">← 只有 COMPLETE 的副本才会被</text>
+<text x="830" y="374" fill="#6b7d99" font-size="10.5">GetReplicaList 返回；写失败走</text>
+<text x="830" y="392" fill="#6b7d99" font-size="10.5">PutRevoke 直接回收</text>
+<text x="60" y="440" fill="#5b6c88" font-size="10.5">GetReplicaList 返回副本的同时授予读租约（GrantReadLease，master_service.cpp:2905 附近）—— "读时隐式续租"防止读到的对象在读期间被淘汰</text>
+</svg>
+<div class="figcap"><b>图 5-2</b><span>对象模型：ObjectMetadata 聚合多副本，副本类型决定读路径，状态机保证写入原子可见</span></div>
+</div>
+
+<h2><span class="n">5.3</span>核心 RPC 接口一览</h2>
+<p>WrappedMasterService 经 coro_rpc 对外暴露约 50 个方法，最常用的不到 15 个：</p>
+<table>
+<tr><th>接口</th><th>语义</th><th>备注</th></tr>
+<tr><td><code>MountSegment</code></td><td>客户端注册一段本地内存进全局池</td><td>幂等；为段创建 BufferAllocator</td></tr>
+<tr><td><code>PutStart / PutEnd / PutRevoke</code></td><td>三段式写：预分配 → 数据就位 → 提交 / 回滚</td><td>PutStart 返回全部副本描述符</td></tr>
+<tr><td><code>GetReplicaList</code></td><td>读路径：返回 COMPLETE 副本 + 隐式读租约</td><td>客户端按"本机内存 &gt; 远端内存 &gt; 本地 SSD &gt; 盘"择优</td></tr>
+<tr><td><code>UpsertStart/End/Revoke</code></td><td>存在即原地更新（同尺寸复用 buffer）</td><td>否则删旧建新</td></tr>
+<tr><td><code>CopyStart/End · MoveStart/End</code></td><td>副本复制 / 迁移原语</td><td>支撑再均衡与 Drain 腾空</td></tr>
+<tr><td><code>Remove / RemoveByRegex / BatchRemove</code></td><td>删除（force 可越过租约）</td><td>REMOVE 同步写入 OpLog（强持久）</td></tr>
+<tr><td><code>EvictDiskReplica</code></td><td>客户端淘汰本地 SSD 副本后回报</td><td>master 删对应 DISK/LOCAL_DISK 元数据</td></tr>
+<tr><td><code>Ping</code></td><td>客户端心跳</td><td>无心跳超时 → 清理其加工中的残留副本</td></tr>
+<tr><td><code>CreateCopyTask/CreateMoveTask/FetchTasks</code></td><td>异步任务系统</td><td>客户端拉取任务并执行</td></tr>
+</table>
+
+<div class="co"><b>为什么是三段式写：</b>两段式（先分配后确认）让 Master 在数据落地前就能锁定空间与副本位置，避免"写一半发现没空间"的尴尬；<code>processing_keys</code> 让并发写同一 key 时后到者直接失败；PutRevoke 保证失败不留孤儿空间。这是存储系统经典的两阶段提交在内存池上的轻量实现。</div>
+
+<div class="co tip"><b>与 Redis 的本质区别：</b>Redis 数据流经过服务器，容量与带宽受单机限制；Mooncake Store 的 Master 只是"地址簿 + 裁判"，数据流在客户端之间以 RDMA 直达，容量 = 所有 segment 之和，带宽 = 所有网卡之和。</div>
+
+<div class="pager">
+  <a href="04-rdma-deep-dive.html"><span class="lab">◀ PREV</span>04 · RDMA 深度</a>
+  <a class="nx" href="06-store-master.html"><span class="lab">NEXT ▶</span>06 · Master 深度剖析</a>
+</div>
+<div class="foot">05 · Mooncake Store 总体架构 · Mooncake 源码深度学习手册</div>
+</main>
+</body>
+</html>

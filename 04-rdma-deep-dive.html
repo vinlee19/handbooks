@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>04 · Transport 家族与 RDMA 深度 · Mooncake 源码学习</title>
+<style>
+:root{
+  --bg:#0a0e16; --panel:#0f1524; --panel2:#131b2e; --line:#22304a; --line2:#2c3d5c;
+  --tx:#dbe6f5; --tx2:#93a5c0; --tx3:#6b7d99;
+  --te:#38bdf8; --code-bg:#0b1220;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--te);text-decoration:none} a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:16px;height:54px}
+.logo{font-weight:700;font-size:16px;color:var(--tx);white-space:nowrap;flex-shrink:0}
+.logo .m{color:var(--te)}
+.topnav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
+.topnav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.topnav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.topnav a.on{color:var(--ac,#22d3ee);background:color-mix(in srgb,var(--ac,#22d3ee) 12%,transparent)}
+.hero{padding:44px 0 30px;border-bottom:1px solid var(--line);
+  background:radial-gradient(1100px 300px at 18% 0%,color-mix(in srgb,var(--ac,#22d3ee) 10%,transparent),transparent)}
+.kicker{color:var(--ac,#22d3ee);font-size:13px;font-weight:600;letter-spacing:2px}
+h1{font-size:32px;line-height:1.3;margin:10px 0 8px}
+.sub{color:var(--tx2);font-size:15px;max-width:860px}
+h2{font-size:22px;margin:46px 0 14px;display:flex;align-items:center;gap:10px}
+h2 .n{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border-radius:8px;
+ background:color-mix(in srgb,var(--ac,#22d3ee) 14%,transparent);color:var(--ac,#22d3ee);font-size:14px;font-weight:700}
+h3{font-size:17px;margin:28px 0 10px;color:var(--tx)}
+p{margin:10px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+.grid{display:grid;gap:14px}.g2{grid-template-columns:1fr 1fr}
+@media(max-width:860px){.g2{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.card h4{margin:0 0 6px;font-size:15px}
+.card p{margin:4px 0;font-size:13.5px;color:var(--tx2)}
+.fig{margin:22px 0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px}
+.fig svg{display:block;width:100%;height:auto}
+.figcap{display:flex;gap:8px;align-items:baseline;padding:10px 4px 6px;color:var(--tx2);font-size:13px;border-top:1px dashed var(--line);margin-top:12px}
+.figcap b{color:var(--ac,#22d3ee);font-size:12.5px;white-space:nowrap}
+.co{border:1px solid var(--line);border-left:3px solid var(--ac,#22d3ee);background:var(--panel);border-radius:10px;padding:12px 16px;margin:16px 0;font-size:14px;color:var(--tx2)}
+.co b{color:var(--tx)}
+.co.warn{border-left-color:#fbbf24}.co.tip{border-left-color:#34d399}
+.code{margin:16px 0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--code-bg)}
+.code .hd{display:flex;align-items:center;gap:8px;padding:8px 14px;background:#0e1626;border-bottom:1px solid var(--line);color:var(--tx3);font-size:12px;font-family:ui-monospace,Menlo,Consolas,monospace}
+.code .hd .dot{width:9px;height:9px;border-radius:50%}
+.code pre{margin:0;padding:14px 16px;overflow-x:auto;font:12.8px/1.6 ui-monospace,"SF Mono",Menlo,Consolas,monospace;color:#c9d6ea}
+.k{color:#c792ea}.f{color:#82aaff}.s{color:#c3e88d}.c{color:#5f7288;font-style:italic}.t{color:#ffcb6b}.num{color:#f78c6c}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font:12px ui-monospace,Menlo,monospace;color:#8fd3ff}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px}
+th{background:#101a2c;color:#aebfd8;text-align:left;padding:9px 12px;border:1px solid var(--line);font-weight:600}
+td{padding:8px 12px;border:1px solid var(--line);color:#c3d0e4;vertical-align:top}
+ul,ol{color:#c7d3e6;padding-left:22px} li{margin:5px 0}
+hr{border:none;border-top:1px solid var(--line);margin:36px 0}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:44px 0 30px}
+.pager a{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 18px;color:var(--tx2);font-size:13.5px}
+.pager a:hover{border-color:var(--ac,#22d3ee);text-decoration:none;color:var(--tx)}
+.pager a.nx{text-align:right}
+.pager .lab{display:block;font-size:11px;color:var(--tx3);letter-spacing:1px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 40px}
+svg text{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.svgm{font-family:ui-monospace,Menlo,Consolas,monospace!important}
+</style>
+</head>
+<body style="--ac:#22d3ee">
+<header class="top"><div class="wrap">
+  <a class="logo" href="index.html" style="color:var(--tx)"><span class="m">🌙</span> Mooncake 源码学习</a>
+  <nav class="topnav">
+    <a href="index.html">目录</a><a href="01-overview.html">01 全景</a><a href="02-physical-architecture.html">02 物理架构</a><a href="03-transfer-engine.html">03 传输引擎</a><a class="on" href="04-rdma-deep-dive.html">04 RDMA</a><a href="05-store-architecture.html">05 Store</a><a href="06-store-master.html">06 Master</a><a href="07-store-client.html">07 Client</a><a href="08-storage-ha.html">08 存储与HA</a><a href="09-ecosystem.html">09 生态</a><a href="10-dataflow.html">10 数据流</a>
+  </nav>
+</div></header>
+
+<section class="hero"><div class="wrap">
+  <div class="kicker">CHAPTER 04 · TRANSPORT FAMILY & RDMA</div>
+  <h1>Transport 家族与 RDMA 深度剖析</h1>
+  <p class="sub">本章是 TE 的发动机舱：先纵览 19 种 transport 的家族图谱，然后以最核心的 RdmaTransport 为标本，拆解对象层级、内存注册（含 GPU dmabuf）、QP 建链状态机、三级流控与一次传输的完整生命周期——这是 Mooncake 87 GB/s 带宽数字背后的全部秘密。</p>
+</div></section>
+
+<main class="wrap">
+
+<h2><span class="n">4.1</span>19 种 Transport 家族图谱</h2>
+<p>所有 transport 继承自抽象基类 <code>Transport</code>（<code>include/transport/transport.h</code>），只需实现 <code>submitTransfer / getTransferStatus / install</code> 与内存注册四件套。家族按硬件生态分为六组：</p>
+
+<div class="fig">
+<svg viewBox="0 0 1060 620" role="img" aria-label="Transport 家族树">
+<rect x="0" y="0" width="1060" height="620" fill="#0c1322" rx="10"/>
+<defs>
+<marker id="r4a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5f7ba6"/></marker>
+</defs>
+<text x="28" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">Transport 家族（src/transport/ 下 19 个子目录）</text>
+
+<rect x="30" y="52" width="200" height="44" rx="9" fill="#0f2438" stroke="#22d3ee" stroke-width="1.4"/>
+<text x="130" y="74" fill="#22d3ee" font-size="12.5" text-anchor="middle" font-weight="bold" class="svgm">Transport (抽象)</text>
+<text x="130" y="89" fill="#5b7a99" font-size="9.5" text-anchor="middle">submitTransfer / getTransferStatus</text>
+
+<!-- NVIDIA -->
+<rect x="30" y="140" width="320" height="180" rx="10" fill="#101c30" stroke="#3a6a9a"/>
+<text x="50" y="164" fill="#7fc8e8" font-size="12" font-weight="bold">NVIDIA 生态</text>
+<text x="50" y="188" fill="#93a5c0" font-size="11" class="svgm">rdma_transport</text><text x="200" y="188" fill="#6b7d99" font-size="10">ibverbs · GPUDirect · dmabuf</text>
+<text x="50" y="210" fill="#93a5c0" font-size="11" class="svgm">tcp_transport</text><text x="200" y="210" fill="#6b7d99" font-size="10">兜底 · CUDA staging 复用</text>
+<text x="50" y="232" fill="#93a5c0" font-size="11" class="svgm">nvmeof_transport</text><text x="200" y="232" fill="#6b7d99" font-size="10">GPUDirect Storage 直读盘</text>
+<text x="50" y="254" fill="#93a5c0" font-size="11" class="svgm">intranode_nvlink</text><text x="200" y="254" fill="#6b7d99" font-size="10">节点内 NVLink P2P</text>
+<text x="50" y="276" fill="#93a5c0" font-size="11" class="svgm">nvlink_transport</text><text x="200" y="276" fill="#6b7d99" font-size="10">跨节点 MNNVL/NVSwitch</text>
+<text x="50" y="298" fill="#93a5c0" font-size="11" class="svgm">nccl / flagcx</text><text x="200" y="298" fill="#6b7d99" font-size="10">集合通信库复用</text>
+
+<!-- AMD/国产 -->
+<rect x="370" y="140" width="320" height="180" rx="10" fill="#101c30" stroke="#3a6a9a"/>
+<text x="390" y="164" fill="#7fc8e8" font-size="12" font-weight="bold">AMD 与国产加速卡</text>
+<text x="390" y="188" fill="#93a5c0" font-size="11" class="svgm">hip_transport</text><text x="540" y="188" fill="#6b7d99" font-size="10">ROCm XGMI / IPC（event pool）</text>
+<text x="390" y="210" fill="#93a5c0" font-size="11" class="svgm">maca_transport</text><text x="540" y="210" fill="#6b7d99" font-size="10">摩尔线程 MACA</text>
+<text x="390" y="232" fill="#93a5c0" font-size="11" class="svgm">musa_transport</text><text x="540" y="232" fill="#6b7d99" font-size="10">摩尔线程 MUSA IPC</text>
+<text x="390" y="254" fill="#93a5c0" font-size="11" class="svgm">cxl_transport</text><text x="540" y="254" fill="#6b7d99" font-size="10">CXL 共享内存池</text>
+<text x="390" y="276" fill="#93a5c0" font-size="11" class="svgm">sunrise_link</text><text x="540" y="276" fill="#6b7d99" font-size="10">旭日/昇腾 alternative 互联</text>
+<text x="390" y="298" fill="#93a5c0" font-size="11" class="svgm">device/ 公共层</text><text x="540" y="298" fill="#6b7d99" font-size="10">GPU vendor 抽象头</text>
+
+<!-- 华为 -->
+<rect x="710" y="140" width="320" height="180" rx="10" fill="#101c30" stroke="#3a6a9a"/>
+<text x="730" y="164" fill="#7fc8e8" font-size="12" font-weight="bold">华为昇腾 / 鲲鹏</text>
+<text x="730" y="188" fill="#93a5c0" font-size="11" class="svgm">ascend_transport</text><text x="880" y="188" fill="#6b7d99" font-size="10">HCCL / 直写 NPU / 异构 RDMA</text>
+<text x="730" y="210" fill="#93a5c0" font-size="11" class="svgm">kunpeng_transport</text><text x="880" y="210" fill="#6b7d99" font-size="10">鲲鹏 UB(URMA/OBMM)</text>
+<text x="730" y="232" fill="#93a5c0" font-size="11" class="svgm">barex_transport</text><text x="880" y="232" fill="#6b7d99" font-size="10">ACCL BAREX eIC 网卡</text>
+<text x="730" y="254" fill="#93a5c0" font-size="11" class="svgm">UBShmem</text><text x="880" y="254" fill="#6b7d99" font-size="10">昇腾共享内存</text>
+<text x="730" y="276" fill="#93a5c0" font-size="11" class="svgm">cxi_transport</text><text x="880" y="276" fill="#6b7d99" font-size="10">HPE Slingshot CXI</text>
+<text x="730" y="298" fill="#93a5c0" font-size="11" class="svgm">efa_transport</text><text x="880" y="298" fill="#6b7d99" font-size="10">AWS EFA</text>
+
+<!-- 下排 -->
+<rect x="30" y="348" width="500" height="110" rx="10" fill="#0f2a2a" stroke="#22d3ee"/>
+<text x="50" y="374" fill="#7fd8e8" font-size="12" font-weight="bold">RDMA 新语义：rdma_twosided</text>
+<text x="50" y="398" fill="#93a5c0" font-size="11">two-sided SEND/RECV 语义 + sender credit 流控 +</text>
+<text x="50" y="418" fill="#93a5c0" font-size="11">独立控制面（ctrl_plane.cpp）—— 用于小消息/元数据类高速通道</text>
+<text x="50" y="440" fill="#6b7d99" font-size="10" class="svgm">与 rdma_transport(one-sided WRITE/READ) 互补</text>
+
+<rect x="550" y="348" width="480" height="110" rx="10" fill="#131a28" stroke="#31435f"/>
+<text x="570" y="374" fill="#93a5c0" font-size="12" font-weight="bold">rpc_communicator（非 Transport）</text>
+<text x="570" y="398" fill="#6b7d99" font-size="11">通用 RPC 组件，供握手/控制类复用</text>
+<text x="570" y="424" fill="#93a5c0" font-size="11">另外：tent/ 平行栈自带 shm / gds / io_uring / bufio /</text>
+<text x="570" y="444" fill="#6b7d99" font-size="10.5">tpu / mpcomm 等后端（MC_USE_TENT 切换）</text>
+
+<line x1="130" y1="96" x2="130" y2="136" stroke="#5f7ba6" stroke-width="1.4" marker-end="url(#r4a)"/>
+<line x1="130" y1="120" x2="530" y2="136" stroke="#5f7ba6" stroke-width="0" />
+<line x1="200" y1="96" x2="530" y2="136" stroke="#5f7ba6" stroke-width="1.2" marker-end="url(#r4a)" opacity=".7"/>
+<line x1="230" y1="96" x2="870" y2="136" stroke="#5f7ba6" stroke-width="1.2" marker-end="url(#r4a)" opacity=".7"/>
+
+<rect x="30" y="490" width="1000" height="100" rx="10" fill="#101827" stroke="#22304a"/>
+<text x="50" y="516" fill="#93a5c0" font-size="11.5" font-weight="bold">选路规则（multi_transport.cpp selectTransport）</text>
+<text x="50" y="540" fill="#6b7d99" font-size="11">· 传输时读对端 SegmentDesc.protocol —— 协议由"对端是什么硬件"决定，天然支持异构两端（如 A 侧昇腾异构 → B 侧 rdma）</text>
+<text x="50" y="560" fill="#6b7d99" font-size="11">· 多协议版本 mp_selectTransport 支持逗号分隔回退列表（rdma,tcp）· 同机传输 isTcpOnly() 时上层可退化 memcpy</text>
+<text x="50" y="580" fill="#5b6c88" font-size="10.5">第 09 章的 mooncake-ep（IBGDA）与 mooncake-pg 也构建在同一 RDMA 设施上</text>
+</svg>
+<div class="figcap"><b>图 4-1</b><span>19 种 Transport 家族：NVIDIA 生态 / AMD·国产 / 华为系 / 新语义与组件，外加 TENT 平行栈</span></div>
+</div>
+
+<h2><span class="n">4.2</span>RdmaTransport 对象层级</h2>
+<p>RdmaTransport 是使用最广的 transport，它的内部是清晰的四层对象：<strong>Context（每张网卡一个）→ EndPoint（每条对端链路一对 QP）→ WorkerPool（后台收发线程）→ EndpointStore（连接缓存与驱逐）</strong>。源码位于 <code>src/transport/rdma_transport/</code>（约 3200 行）。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1060 470" role="img" aria-label="RDMA 对象层级">
+<defs>
+<marker id="r4b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="470" fill="#0c1322" rx="10"/>
+<text x="28" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">RdmaTransport 内部对象关系</text>
+
+<rect x="330" y="52" width="400" height="52" rx="9" fill="#0f2a2a" stroke="#22d3ee" stroke-width="1.5"/>
+<text x="530" y="74" fill="#7fd8e8" font-size="13" text-anchor="middle" font-weight="bold" class="svgm">RdmaTransport</text>
+<text x="530" y="93" fill="#6b9aaa" font-size="10.5" text-anchor="middle">registerLocalMemory() 为每张网卡各注册一次 MR</text>
+
+<rect x="40" y="150" width="290" height="130" rx="9" fill="#101c30" stroke="#3a6a9a"/>
+<text x="60" y="174" fill="#7fc8e8" font-size="12" font-weight="bold" class="svgm">RdmaContext ×N（每 HCA 一个）</text>
+<text x="60" y="196" fill="#93a5c0" font-size="10.5" class="svgm">pd / cq_list / comp_channel / gid</text>
+<text x="60" y="216" fill="#93a5c0" font-size="10.5" class="svgm">memory_region_map_ (按地址排序)</text>
+<text x="60" y="236" fill="#93a5c0" font-size="10.5" class="svgm">endpoint_store_ (缓存+驱逐)</text>
+<text x="60" y="256" fill="#93a5c0" font-size="10.5" class="svgm">worker_pool_ (收发线程)</text>
+<text x="60" y="272" fill="#5b7a99" font-size="9.5">rdma_context.h:106 · socketId() 按 PCI 找 NUMA</text>
+
+<rect x="400" y="150" width="290" height="130" rx="9" fill="#101c30" stroke="#3a6a9a"/>
+<text x="420" y="174" fill="#7fc8e8" font-size="12" font-weight="bold" class="svgm">RdmaEndPoint（peer_nic_path 一对）</text>
+<text x="420" y="196" fill="#93a5c0" font-size="10.5" class="svgm">num_qp_per_ep = 2 个 QP</text>
+<text x="420" y="216" fill="#93a5c0" font-size="10.5" class="svgm">wr_depth_list_[qp] ← 流控核心</text>
+<text x="420" y="236" fill="#93a5c0" font-size="10.5" class="svgm">submitPostSend() 切分/信用检查</text>
+<text x="420" y="256" fill="#93a5c0" font-size="10.5" class="svgm">状态机: INITIALIZING→CONNECTED</text>
+<text x="420" y="272" fill="#5b7a99" font-size="9.5">rdma_endpoint.h:44</text>
+
+<rect x="760" y="150" width="260" height="130" rx="9" fill="#131a28" stroke="#31435f"/>
+<text x="780" y="174" fill="#93a5c0" font-size="12" font-weight="bold" class="svgm">WorkerPool</text>
+<text x="780" y="196" fill="#6b7d99" font-size="10.5" class="svgm">8 个分片队列 (kShardCount)</text>
+<text x="780" y="216" fill="#6b7d99" font-size="10.5" class="svgm">按 peer_nic_path 哈希 + TicketLock</text>
+<text x="780" y="236" fill="#6b7d99" font-size="10.5">transferWorker: post_send + 建链</text>
+<text x="780" y="256" fill="#6b7d99" font-size="10.5" class="svgm">monitorWorker: epoll + pollCq</text>
+
+<rect x="400" y="330" width="290" height="100" rx="9" fill="#151322" stroke="#c084fc"/>
+<text x="420" y="354" fill="#c9bfe8" font-size="12" font-weight="bold" class="svgm">EndpointStore</text>
+<text x="420" y="376" fill="#8a7aa0" font-size="10.5">按归一化 peer_nic_path 缓存连接</text>
+<text x="420" y="396" fill="#8a7aa0" font-size="10.5" class="svgm">驱逐策略 FIFO / SIEVE</text>
+<text x="420" y="416" fill="#8a7aa0" font-size="10.5">两阶段销毁: beginDestroy→finishDestroy</text>
+
+<rect x="40" y="330" width="290" height="100" rx="9" fill="#0f2438" stroke="#38bdf8"/>
+<text x="60" y="354" fill="#7fc8e8" font-size="12" font-weight="bold" class="svgm">MemoryRegion (MR)</text>
+<text x="60" y="376" fill="#6b7d99" font-size="10.5" class="svgm">CPU: ibv_reg_mr</text>
+<text x="60" y="396" fill="#6b7d99" font-size="10.5" class="svgm">GPU: cuMemGetHandleForAddressRange</text>
+<text x="60" y="416" fill="#6b7d99" font-size="10.5" class="svgm">       → ibv_reg_dmabuf_mr (无 peermem 时)</text>
+
+<line x1="530" y1="104" x2="230" y2="146" stroke="#22d3ee" stroke-width="1.4" marker-end="url(#r4b)"/>
+<line x1="530" y1="104" x2="545" y2="146" stroke="#22d3ee" stroke-width="1.4" marker-end="url(#r4b)"/>
+<line x1="330" y1="215" x2="396" y2="215" stroke="#22d3ee" stroke-width="1.4" marker-end="url(#r4b)"/>
+<text x="342" y="206" fill="#5b7a99" font-size="9.5">1..N</text>
+<line x1="690" y1="215" x2="756" y2="215" stroke="#22d3ee" stroke-width="1.4" marker-end="url(#r4b)"/>
+<line x1="545" y1="280" x2="545" y2="326" stroke="#22d3ee" stroke-width="1.4" marker-end="url(#r4b)"/>
+<line x1="400" y1="300" x2="230" y2="326" stroke="#22d3ee" stroke-width="1.2" marker-end="url(#r4b)" opacity=".8"/>
+</svg>
+<div class="figcap"><b>图 4-2</b><span>RdmaTransport 对象层级：Context→EndPoint→QP，配套 WorkerPool / EndpointStore / MR 注册表</span></div>
+</div>
+
+<h2><span class="n">4.3</span>内存注册与 lkey/rkey</h2>
+<p>RDMA 的一切前提是"内存先注册"。客户端调用 <code>registerLocalMemory(addr, len, location)</code> 后，RdmaTransport 会对<strong>每张网卡各注册一次</strong>，得到 per-HCA 的 lkey（本地读）与 rkey（远端写），并随 SegmentDesc 发布到元数据中心——这就是对端能"直接写我内存"的授权凭据。</p>
+<p>GPU 内存注册是隐藏的难点：PyTorch allocator 交给 TE 的可能是大块显存内部的偏移地址。无 nvidia-peermem 时，TE 走 <strong>dmabuf 路径</strong>：<code>cuMemGetAddressRange</code> 找到所属大块 → <code>cuMemGetHandleForAddressRange</code> 拿 dmabuf fd → <code>ibv_reg_dmabuf_mr</code> 注册，并把范围写入按起始地址排序的 <code>memory_region_map_</code>；lkey/rkey 查询用 <code>findMemoryRegionContaining</code>（upper_bound 查找覆盖区间）。</p>
+
+<div class="co tip"><b>零拷贝的完整含义：</b>① 应用缓冲区 → RDMA 网卡：不经过内核（MR 直映射）；② 节点 → 节点：不经过任何中间缓冲；③ GPU 显存参与传输时经 GPUDirect，不经过 CPU DRAM 拷贝。三者叠加才是"端到端零拷贝"。</div>
+
+<h2><span class="n">4.4</span>QP 建链状态机</h2>
+<p>每个 <code>RdmaEndPoint</code>（本机网卡 ↔ 对端网卡路径 <code>server@nic</code>）维护 2 个 QP。建链由"首次传输"惰性触发：worker 线程发现 endpoint 未就绪 → 走 TCP 握手交换 gid/qp_num → 双侧推进状态机。断链后 endpoint 经两阶段销毁（先 ERR 态 flush 所有 WR，再等 wr_depth 归零销毁），避免 use-after-free，随后自动重建。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1060 300" role="img" aria-label="QP 状态机">
+<defs>
+<marker id="r4c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/></marker>
+<marker id="r4d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fb7185"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="300" fill="#0c1322" rx="10"/>
+<text x="28" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">RdmaEndPoint 状态机（rdma_endpoint.h）</text>
+
+<rect x="40" y="90" width="160" height="56" rx="10" fill="#131a28" stroke="#94a3b8"/>
+<text x="120" y="114" fill="#c9d9ee" font-size="12" text-anchor="middle" font-weight="bold" class="svgm">INITIALIZING</text>
+<text x="120" y="133" fill="#6b7d99" font-size="10" text-anchor="middle">创建 QP(2 个, max_wr=256)</text>
+<rect x="270" y="90" width="160" height="56" rx="10" fill="#1a2a1a" stroke="#fbbf24"/>
+<text x="350" y="114" fill="#ffe2a0" font-size="12" text-anchor="middle" font-weight="bold" class="svgm">CONNECTING</text>
+<text x="350" y="133" fill="#a08a50" font-size="10" text-anchor="middle">TCP 握手交换 gid/lid/qp_num</text>
+<rect x="500" y="90" width="160" height="56" rx="10" fill="#0f2a2a" stroke="#34d399"/>
+<text x="580" y="114" fill="#a8f0c8" font-size="12" text-anchor="middle" font-weight="bold" class="svgm">CONNECTED</text>
+<text x="580" y="133" fill="#5b9a7a" font-size="10" text-anchor="middle">RTR+RTS · 可 post_send</text>
+<rect x="730" y="90" width="140" height="56" rx="10" fill="#241418" stroke="#fb7185"/>
+<text x="800" y="114" fill="#f0b8c0" font-size="12" text-anchor="middle" font-weight="bold" class="svgm">DESTROYING</text>
+<text x="800" y="133" fill="#a06a75" font-size="10" text-anchor="middle">ERR flush · 等 wr_depth=0</text>
+<rect x="900" y="90" width="120" height="56" rx="10" fill="#131a28" stroke="#5b6c88"/>
+<text x="960" y="114" fill="#8fa5c8" font-size="12" text-anchor="middle" font-weight="bold" class="svgm">DESTROYED</text>
+<text x="960" y="133" fill="#5b6c88" font-size="10" text-anchor="middle">资源回收</text>
+
+<line x1="200" y1="118" x2="266" y2="118" stroke="#22d3ee" stroke-width="1.6" marker-end="url(#r4c)"/>
+<line x1="430" y1="118" x2="496" y2="118" stroke="#22d3ee" stroke-width="1.6" marker-end="url(#r4c)"/>
+<line x1="660" y1="118" x2="726" y2="118" stroke="#fb7185" stroke-width="1.4" marker-end="url(#r4d)"/>
+<line x1="870" y1="118" x2="896" y2="118" stroke="#fb7185" stroke-width="1.4" marker-end="url(#r4d)"/>
+<path d="M 960 148 L 960 220 L 350 220 L 350 150" fill="none" stroke="#22d3ee" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#r4c)"/>
+<text x="600" y="212" fill="#6b9aaa" font-size="10.5">断链/驱逐后自动重建（reestablish）：endpoint 按 peer_nic_path 在 EndpointStore 中缓存复用</text>
+<text x="28" y="272" fill="#5b6c88" font-size="10.5">韧性机制（新版加强）：rdma_gid_probe.h 探测可用 GID · connect_pause_tracker 连接退避 · reprobe 周期性重探拓扑 · endpoint 级 reestablish 测试覆盖</text>
+</svg>
+<div class="figcap"><b>图 4-3</b><span>QP 建链与销毁状态机：惰性建链 + 两阶段安全销毁 + 自动重建</span></div>
+</div>
+
+<h2><span class="n">4.5</span>三级流控：64KB 切片与滑动窗口</h2>
+<p>RDMA HCA 的队列深度有限（QP max_wr、CQ max_cqe），要打满 400G 带宽必须把大传输切成小片流水线化。TE 的做法是<strong>三级窗口</strong>协同：</p>
+<ol>
+<li><strong>切片</strong>：每个 TransferRequest 按 <code>kBlockSize = slice_size = 64KB</code>（<code>config.h:64</code>）切片，尾片与 <code>fragment_limit=16KB</code> 合并，减少小片开销；</li>
+<li><strong>提交水印</strong>：<code>submitTransferTask</code> 累计未发送切片数，达到 <code>max_wr(256) × num_qp_per_ep(2) = 512</code>（<code>rdma_transport.cpp:822</code> 附近）才批量 <code>submitPostSend</code> 交给 worker；</li>
+<li><strong>QP 信用水位</strong>：EndPoint 按 <code>qp_avail = max_wr_depth − wr_depth_list_[qp]</code>（<code>rdma_endpoint.cpp:986</code>）检查每个 QP 剩余信用，切片均匀分摊到 2 个 QP；<strong>放不下的切片保留在 worker 队列</strong>，等 pollCq 回收信用后再重发——这就是"窗口滑动"；</li>
+<li><strong>CQ 水位</strong>：同时检查 <code>cq_remaining = max_cqe − outstanding</code>，防止完成队列溢出。</li>
+</ol>
+
+<div class="fig">
+<svg viewBox="0 0 1060 430" role="img" aria-label="三级流控">
+<defs>
+<marker id="r4e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="430" fill="#0c1322" rx="10"/>
+<text x="28" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">一次 10MB WRITE 的流控全景（10MB → 160 个 64KB slice）</text>
+
+<rect x="40" y="56" width="220" height="90" rx="9" fill="#0f2438" stroke="#38bdf8"/>
+<text x="150" y="82" fill="#7fc8e8" font-size="12" text-anchor="middle" font-weight="bold">用户请求 10MB</text>
+<text x="150" y="104" fill="#6b7d99" font-size="10.5" text-anchor="middle" class="svgm">submitTransfer(batch, req)</text>
+<text x="150" y="126" fill="#6b7d99" font-size="10" text-anchor="middle">切片：⌈10MB / 64KB⌉ = 160 片</text>
+
+<rect x="330" y="56" width="220" height="90" rx="9" fill="#101c30" stroke="#3a6a9a"/>
+<text x="440" y="82" fill="#7fc8e8" font-size="12" text-anchor="middle" font-weight="bold" class="svgm">批量提交水位 512</text>
+<text x="440" y="104" fill="#6b7d99" font-size="10.5" text-anchor="middle" class="svgm">nr_slices ≥ max_wr×qp = 256×2</text>
+<text x="440" y="126" fill="#6b7d99" font-size="10" text-anchor="middle">凑满一批 → submitPostSend</text>
+
+<rect x="620" y="56" width="190" height="90" rx="9" fill="#131a28" stroke="#31435f"/>
+<text x="715" y="82" fill="#93a5c0" font-size="12" text-anchor="middle" font-weight="bold" class="svgm">Worker 8 分片队列</text>
+<text x="715" y="104" fill="#6b7d99" font-size="10.5" text-anchor="middle" class="svgm">hash(peer_nic_path) % 8</text>
+<text x="715" y="126" fill="#6b7d99" font-size="10" text-anchor="middle">TicketLock 降低争用</text>
+
+<rect x="860" y="56" width="170" height="90" rx="9" fill="#0f2a2a" stroke="#34d399"/>
+<text x="945" y="82" fill="#a8f0c8" font-size="12" text-anchor="middle" font-weight="bold" class="svgm">QP₀ / QP₁</text>
+<text x="945" y="104" fill="#5b9a7a" font-size="10.5" text-anchor="middle" class="svgm">每 QP 窗口 256 WR</text>
+<text x="945" y="126" fill="#5b9a7a" font-size="10" text-anchor="middle">切片轮流填入</text>
+
+<!-- window strip -->
+<rect x="40" y="190" width="990" height="120" rx="9" fill="#101827" stroke="#22304a"/>
+<text x="60" y="216" fill="#93a5c0" font-size="11.5" font-weight="bold">QP₀ 滑动窗口示意（max_wr = 256）</text>
+<g>
+<rect x="60" y="232" width="180" height="26" rx="4" fill="#0f2a2a" stroke="#34d399"/><text x="150" y="250" fill="#a8f0c8" font-size="10.5" text-anchor="middle">已完成（信用已回收）</text>
+<rect x="244" y="232" width="330" height="26" rx="4" fill="#1a3a4a" stroke="#22d3ee"/><text x="409" y="250" fill="#7fd8e8" font-size="10.5" text-anchor="middle">在途 In-Flight（≤256 个 WR · 窗口）</text>
+<rect x="578" y="232" width="220" height="26" rx="4" fill="#131a28" stroke="#94a3b8" stroke-dasharray="4 3"/><text x="688" y="250" fill="#93a5c0" font-size="10.5" text-anchor="middle">worker 队列中等待信用</text>
+<rect x="802" y="232" width="200" height="26" rx="4" fill="#0c1420" stroke="#22304a"/><text x="902" y="250" fill="#5b6c88" font-size="10.5" text-anchor="middle">尚未提交的切片</text>
+</g>
+<text x="60" y="290" fill="#6b7d99" font-size="10.5" class="svgm">pollCq 每完成一批 CQE → wr_depth 扣减 → 窗口右滑 → worker 立即补发新切片 —— 带宽由此被持续打满</text>
+
+<rect x="40" y="330" width="470" height="70" rx="9" fill="#241418" stroke="#fb7185"/>
+<text x="60" y="354" fill="#f0b8c0" font-size="11.5" font-weight="bold">失败重试</text>
+<text x="60" y="376" fill="#a06a75" font-size="10.5">slice 失败 retry_cnt++（上限 9）→ redispatch 回队 · 100ms 内同目标连败直接失败</text>
+<rect x="530" y="330" width="470" height="70" rx="9" fill="#1a2a1a" stroke="#fbbf24"/>
+<text x="550" y="354" fill="#ffe2a0" font-size="11.5" font-weight="bold">RNIC 健康度</text>
+<text x="550" y="376" fill="#a08a50" font-size="10.5">累计错误 &gt;32 且无成功 → set_active(false) 停用该网卡 · selectDevice 自动避开</text>
+
+<line x1="260" y1="101" x2="326" y2="101" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#r4e)"/>
+<line x1="550" y1="101" x2="616" y2="101" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#r4e)"/>
+<line x1="810" y1="101" x2="856" y2="101" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#r4e)"/>
+</svg>
+<div class="figcap"><b>图 4-4</b><span>三级流控：切片 → 批量提交水位 → QP 滑动窗口 + CQ 水位，配合重试与网卡熔断</span></div>
+</div>
+
+<h2><span class="n">4.6</span>一次 RDMA WRITE 的完整生命周期</h2>
+<div class="code"><div class="hd"><span class="dot" style="background:#fb7185"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#34d399"></span>调用链速览 · 从用户 API 到 CQE</div>
+<pre><span class="c">// ① 用户侧（多线程安全）</span>
+<span class="t">BatchID</span> batch = engine.<span class="f">allocateBatchID</span>(<span class="num">1</span>);
+engine.<span class="f">submitTransfer</span>(batch, {req});            <span class="c">// req: WRITE 本地buf → hostB@offset</span>
+<span class="k">while</span> (engine.<span class="f">getTransferStatus</span>(batch, <span class="num">0</span>, status) != <span class="t">COMPLETED</span>) {}
+
+<span class="c">// ② MultiTransport::submitTransfer — 按 SegmentID 查对端 protocol → 选 RdmaTransport</span>
+<span class="c">// ③ RdmaTransport::submitTransferTask — 64KB 切片 → 绑定 lkey → 挑本地 HCA(selectDevice)</span>
+<span class="c">// ④ RdmaContext::submitPostSend → WorkerPool 8 分片队列</span>
+<span class="c">// ⑤ transferWorker 线程: endpoint 未建链 → sendHandshake 建链 → RdmaEndPoint::submitPostSend</span>
+<span class="c">//     → ibv_post_send(QP, wr)   <span class="k">// 真正的 RDMA verbs 调用，数据被网卡 DMA 发出</span></span>
+<span class="c">// ⑥ monitorWorker 线程: epoll 就绪 → performPollCq: ibv_poll_cq → slice->markSuccess()</span>
+<span class="c">//     → 原子累加 task.transferred_bytes / success_slice_count → 扣减 wr_depth → 窗口滑动</span>
+<span class="c">// ⑦ getTransferStatus: success+failed == slice_count ⇒ COMPLETED（event-driven 模式用 cv 唤醒）</span></pre></div>
+
+<div class="co"><b>为什么轮询而不是回调：</b>RDMA 完成事件本身就是异步的；TE 用"batch 内原子计数 + 轮询/条件变量双模式"（<code>USE_EVENT_DRIVEN_COMPLETION</code>）兼顾了低开销与低延迟。上层 Store 的 <code>TransferSubmitter</code> 把轮询封装成 <code>TransferFuture</code>，对业务暴露同步语义。</div>
+
+<h2><span class="n">4.7</span>拓扑发现与选路</h2>
+<p><code>Topology::discover()</code>（<code>src/topology.cpp</code>）构造一张"位置 → 网卡"的优先矩阵：</p>
+<ul>
+<li><strong>CPU 位置</strong>：与 HCA 同 NUMA 的进入 <code>preferred_hca</code>，key 为 <code>cpu:N</code>；</li>
+<li><strong>GPU 位置</strong>：先取同 NUMA 的 HCA 子集，再按 <strong>PCI 拓扑距离</strong>（比较 /sys/bus/pci realpath 的公共前缀深度）选出离 GPU 最近的一组，key 为 <code>cuda:N</code>；</li>
+<li><strong>通配</strong>：<code>*</code> 记录所有可用 HCA 兜底；</li>
+<li><strong>运行时选卡</strong>：<code>selectDevice()</code> 默认随机取 preferred（<code>MC_PATH_ROUNDROBIN</code> 开轮询），传输失败重试时顺序遍历并可带"对端网卡提示"做目的亲和。</li>
+</ul>
+<p>这张矩阵最终写入本地 SegmentDesc 对外发布——两端各持有一份自己的矩阵，<strong>发起端选自己的出口网卡，对端 QP 由握手时的 peer_nic_path 指定入口网卡</strong>，两个选择组合成一条最优物理路径。</p>
+
+<div class="co warn"><b>调试钩子：</b><code>transfer_engine_topology_dump</code>（wheel 内 CLI）可导出节点完整拓扑矩阵；<code>MC_CUSTOM_TOPO_JSON</code> 可完全手工指定矩阵绕过自动探测——云上虚拟化环境 PCI 信息不全时的救命稻草。</div>
+
+<div class="pager">
+  <a href="03-transfer-engine.html"><span class="lab">◀ PREV</span>03 · Transfer Engine 架构</a>
+  <a class="nx" href="05-store-architecture.html"><span class="lab">NEXT ▶</span>05 · Mooncake Store 总体架构</a>
+</div>
+<div class="foot">04 · Transport 家族与 RDMA 深度 · Mooncake 源码深度学习手册</div>
+</main>
+</body>
+</html>

@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>10 · 端到端数据流 · Mooncake 源码学习</title>
+<style>
+:root{
+  --bg:#0a0e16; --panel:#0f1524; --panel2:#131b2e; --line:#22304a; --line2:#2c3d5c;
+  --tx:#dbe6f5; --tx2:#93a5c0; --tx3:#6b7d99;
+  --te:#38bdf8; --code-bg:#0b1220;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--te);text-decoration:none} a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:16px;height:54px}
+.logo{font-weight:700;font-size:16px;color:var(--tx);white-space:nowrap;flex-shrink:0}
+.logo .m{color:var(--te)}
+.topnav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
+.topnav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.topnav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.topnav a.on{color:var(--ac,#e879f9);background:color-mix(in srgb,var(--ac,#e879f9) 12%,transparent)}
+.hero{padding:44px 0 30px;border-bottom:1px solid var(--line);
+  background:radial-gradient(1100px 300px at 18% 0%,color-mix(in srgb,var(--ac,#e879f9) 10%,transparent),transparent)}
+.kicker{color:var(--ac,#e879f9);font-size:13px;font-weight:600;letter-spacing:2px}
+h1{font-size:32px;line-height:1.3;margin:10px 0 8px}
+.sub{color:var(--tx2);font-size:15px;max-width:860px}
+h2{font-size:22px;margin:46px 0 14px;display:flex;align-items:center;gap:10px}
+h2 .n{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border-radius:8px;
+ background:color-mix(in srgb,var(--ac,#e879f9) 14%,transparent);color:var(--ac,#e879f9);font-size:14px;font-weight:700}
+h3{font-size:17px;margin:28px 0 10px;color:var(--tx)}
+p{margin:10px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+.fig{margin:22px 0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px}
+.fig svg{display:block;width:100%;height:auto}
+.figcap{display:flex;gap:8px;align-items:baseline;padding:10px 4px 6px;color:var(--tx2);font-size:13px;border-top:1px dashed var(--line);margin-top:12px}
+.figcap b{color:var(--ac,#e879f9);font-size:12.5px;white-space:nowrap}
+.co{border:1px solid var(--line);border-left:3px solid var(--ac,#e879f9);background:var(--panel);border-radius:10px;padding:12px 16px;margin:16px 0;font-size:14px;color:var(--tx2)}
+.co b{color:var(--tx)}
+.co.warn{border-left-color:#fbbf24}.co.tip{border-left-color:#34d399}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font:12px ui-monospace,Menlo,monospace;color:#8fd3ff}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px}
+th{background:#101a2c;color:#aebfd8;text-align:left;padding:9px 12px;border:1px solid var(--line);font-weight:600}
+td{padding:8px 12px;border:1px solid var(--line);color:#c3d0e4;vertical-align:top}
+ul,ol{color:#c7d3e6;padding-left:22px} li{margin:5px 0}
+hr{border:none;border-top:1px solid var(--line);margin:36px 0}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:44px 0 30px}
+.pager a{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 18px;color:var(--tx2);font-size:13.5px}
+.pager a:hover{border-color:var(--ac,#e879f9);text-decoration:none;color:var(--tx)}
+.pager a.nx{text-align:right}
+.pager .lab{display:block;font-size:11px;color:var(--tx3);letter-spacing:1px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 40px}
+svg text{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.svgm{font-family:ui-monospace,Menlo,Consolas,monospace!important}
+</style>
+</head>
+<body style="--ac:#e879f9">
+<header class="top"><div class="wrap">
+  <a class="logo" href="index.html" style="color:var(--tx)"><span class="m">🌙</span> Mooncake 源码学习</a>
+  <nav class="topnav">
+    <a href="index.html">目录</a><a href="01-overview.html">01 全景</a><a href="02-physical-architecture.html">02 物理架构</a><a href="03-transfer-engine.html">03 传输引擎</a><a href="04-rdma-deep-dive.html">04 RDMA</a><a href="05-store-architecture.html">05 Store</a><a href="06-store-master.html">06 Master</a><a href="07-store-client.html">07 Client</a><a href="08-storage-ha.html">08 存储与HA</a><a href="09-ecosystem.html">09 生态</a><a class="on" href="10-dataflow.html">10 数据流</a>
+  </nav>
+</div></header>
+
+<section class="hero"><div class="wrap">
+  <div class="kicker">CHAPTER 10 · END-TO-END DATA FLOW</div>
+  <h1>端到端数据流：把所有零件装配成一台机器</h1>
+  <p class="sub">最后一章把前九章的所有组件装配起来：一次用户请求在 XpYd 架构中的完整旅程、一次 Put 与一次 Get 跨八个泳道的时序、以及三类故障场景下数据流如何自愈。读完本章，整个仓库在你脑中应该是一台"会呼吸的机器"。</p>
+</div></section>
+
+<main class="wrap">
+
+<h2><span class="n">10.1</span>XpYd 一次请求的完整旅程</h2>
+<div class="fig">
+<svg viewBox="0 0 1060 520" role="img" aria-label="XpYd 端到端全链路">
+<defs>
+<marker id="d10a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#e879f9"/></marker>
+<marker id="d10b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/></marker>
+<marker id="d10c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="520" fill="#0c1322" rx="10"/>
+<text x="28" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">XpYd 请求全链路（未命中场景 · 命中分支见虚线）</text>
+
+<rect x="40" y="70" width="150" height="64" rx="10" fill="#241c0e" stroke="#fbbf24"/>
+<text x="115" y="98" fill="#ffe2a0" font-size="11.5" text-anchor="middle" font-weight="bold">① 用户请求</text>
+<text x="115" y="118" fill="#a08a50" font-size="9.5" text-anchor="middle">prompt + 参数</text>
+
+<rect x="250" y="70" width="170" height="64" rx="10" fill="#241c0e" stroke="#fbbf24"/>
+<text x="335" y="98" fill="#ffe2a0" font-size="11.5" text-anchor="middle" font-weight="bold">② 路由代理</text>
+<text x="335" y="118" fill="#a08a50" font-size="9.5" text-anchor="middle" class="svgm">缓存感知 · early-rejection</text>
+
+<rect x="480" y="60" width="260" height="180" rx="10" fill="#0f2438" stroke="#38bdf8"/>
+<text x="610" y="86" fill="#7fc8e8" font-size="12" text-anchor="middle" font-weight="bold">③ Prefill 实例</text>
+<text x="610" y="108" fill="#93a5c0" font-size="10.5" text-anchor="middle" class="svgm">Query(前缀 block keys)</text>
+<text x="610" y="130" fill="#93a5c0" font-size="10.5" text-anchor="middle">未命中部分 → GPU 计算 KVCache</text>
+<rect x="500" y="148" width="105" height="66" rx="7" fill="#0c1826" stroke="#2a4a66"/>
+<text x="552" y="172" fill="#8fb8d8" font-size="9.5" text-anchor="middle" class="svgm">Client::Put</text>
+<text x="552" y="190" fill="#5b7a99" font-size="8.5" text-anchor="middle" class="svgm">PutStart→RDMA→PutEnd</text>
+<rect x="615" y="148" width="105" height="66" rx="7" fill="#0c1826" stroke="#2a4a66"/>
+<text x="667" y="172" fill="#8fb8d8" font-size="9.5" text-anchor="middle" class="svgm">MooncakeConnector</text>
+<text x="667" y="190" fill="#5b7a99" font-size="8.5" text-anchor="middle" class="svgm">层间流式发送</text>
+
+<rect x="800" y="60" width="230" height="180" rx="10" fill="#132a22" stroke="#34d399"/>
+<text x="915" y="86" fill="#7fd8a8" font-size="12" text-anchor="middle" font-weight="bold">④ Decode 实例</text>
+<text x="915" y="108" fill="#7fa893" font-size="10.5" text-anchor="middle" class="svgm">KV 就位 → 逐 token 生成</text>
+<rect x="820" y="126" width="90" height="96" rx="7" fill="#0c1f18" stroke="#2a5a44"/>
+<text x="865" y="150" fill="#8fd8b8" font-size="9.5" text-anchor="middle" class="svgm">KV 显存池</text>
+<text x="865" y="168" fill="#5b9a7a" font-size="8.5" text-anchor="middle" class="svgm">get / RDMA 写入</text>
+<text x="865" y="188" fill="#5b9a7a" font-size="8.5" text-anchor="middle" class="svgm">+ LocalHotCache</text>
+<text x="865" y="206" fill="#5b9a7a" font-size="8.5" text-anchor="middle" class="svgm">+ SSD 下沉</text>
+<rect x="920" y="126" width="90" height="96" rx="7" fill="#0c1f18" stroke="#2a5a44"/>
+<text x="965" y="150" fill="#8fd8b8" font-size="9.5" text-anchor="middle" class="svgm">流式输出</text>
+<text x="965" y="170" fill="#5b9a7a" font-size="8.5" text-anchor="middle">TPOT 稳定</text>
+<text x="965" y="188" fill="#5b9a7a" font-size="8.5" text-anchor="middle">不受 prefill 抖动</text>
+
+<rect x="480" y="300" width="550" height="120" rx="10" fill="#191330" stroke="#a78bfa"/>
+<text x="755" y="326" fill="#c9bfe8" font-size="11.5" text-anchor="middle" font-weight="bold">⑤ KVCache 池：下一个相同前缀的请求在这里命中</text>
+<text x="755" y="350" fill="#8a7aa0" font-size="10.5" text-anchor="middle" class="svgm">Query → 本机 hot cache / 集群 segment / LOCAL_DISK / DISK</text>
+<text x="755" y="372" fill="#8a7aa0" font-size="10.5" text-anchor="middle" class="svgm">命中 → 直接送 Decode（跳过 prefill）· 未命中 → 重复 ③</text>
+<text x="755" y="398" fill="#6b5a80" font-size="9.5" text-anchor="middle" class="svgm">读租约保护 + 软 pin 高价值前缀 + 两遍淘汰维持水位</text>
+
+<path d="M 190 102 L 246 102" fill="none" stroke="#e879f9" stroke-width="1.8" marker-end="url(#d10a)"/>
+<path d="M 420 102 L 476 102" fill="none" stroke="#e879f9" stroke-width="1.8" marker-end="url(#d10a)"/>
+<path d="M 605 244 C 640 300 700 320 740 348" fill="none" stroke="#22d3ee" stroke-width="2" marker-end="url(#d10b)"/>
+<text x="628" y="290" fill="#22d3ee" font-size="10" >写入</text>
+<path d="M 800 160 C 770 160 760 160 744 160" fill="none" stroke="#22d3ee" stroke-width="2.2" marker-end="url(#d10b)"/>
+<text x="770" y="150" fill="#22d3ee" font-size="10">KVCache</text>
+<path d="M 770 300 C 780 260 790 220 800 200" fill="none" stroke="#e879f9" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#d10a)"/>
+<text x="806" y="248" fill="#e879f9" font-size="9.5">命中免 prefill</text>
+<path d="M 700 348 C 480 380 380 250 350 138" fill="none" stroke="#e879f9" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#d10a)"/>
+<text x="420" y="330" fill="#e879f9" font-size="9.5">路由缓存亲和</text>
+<path d="M 960 244 C 980 300 700 440 200 470" fill="none" stroke="#94a3b8" stroke-width="1.6" marker-end="url(#d10c)"/>
+<text x="430" y="455" fill="#94a3b8" font-size="10.5">⑥ 流式响应回到用户（prefill 延迟决定 TTFT · decode 决定 TPOT）</text>
+</svg>
+<div class="figcap"><b>图 10-1</b><span>XpYd 全链路：路由 → prefill → KV 入池/直传 → decode → 流式返回；前缀命中直接从池到 decode</span></div>
+</div>
+
+<h2><span class="n">10.2</span>Put / Get 全泳道时序</h2>
+<div class="fig">
+<svg viewBox="0 0 1060 560" role="img" aria-label="Put 泳道">
+<defs>
+<marker id="d10d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/></marker>
+<marker id="d10e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a78bfa"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="560" fill="#0c1322" rx="10"/>
+<text x="28" y="32" fill="#8fa5c8" font-size="13" font-weight="bold">一次 Put（8 泳道）</text>
+
+<g font-size="11" font-weight="bold">
+<rect x="30" y="46" width="120" height="32" rx="7" fill="#0f2438" stroke="#38bdf8"/><text x="90" y="67" fill="#7fc8e8" text-anchor="middle" class="svgm">应用/Python</text>
+<rect x="160" y="46" width="120" height="32" rx="7" fill="#132a22" stroke="#34d399"/><text x="220" y="67" fill="#a8f0c8" text-anchor="middle" class="svgm">RealClient</text>
+<rect x="290" y="46" width="120" height="32" rx="7" fill="#101827" stroke="#5b7a99"/><text x="350" y="67" fill="#93a5c0" text-anchor="middle" class="svgm">Client</text>
+<rect x="420" y="46" width="120" height="32" rx="7" fill="#131a28" stroke="#94a3b8"/><text x="480" y="67" fill="#c9d9ee" text-anchor="middle" class="svgm">MasterClient</text>
+<rect x="550" y="46" width="120" height="32" rx="7" fill="#191330" stroke="#a78bfa"/><text x="610" y="67" fill="#c9bfe8" text-anchor="middle" class="svgm">Master</text>
+<rect x="680" y="46" width="120" height="32" rx="7" fill="#101827" stroke="#5b7a99"/><text x="740" y="67" fill="#93a5c0" text-anchor="middle" class="svgm">TransferSub.</text>
+<rect x="810" y="46" width="110" height="32" rx="7" fill="#0f2a2a" stroke="#22d3ee"/><text x="865" y="67" fill="#7fd8e8" text-anchor="middle" class="svgm">TE/RDMA</text>
+<rect x="930" y="46" width="100" height="32" rx="7" fill="#132a22" stroke="#34d399"/><text x="980" y="67" fill="#a8f0c8" text-anchor="middle" class="svgm">对端节点</text>
+</g>
+<g stroke="#22303f" stroke-dasharray="2 5">
+<line x1="90" y1="78" x2="90" y2="520"/><line x1="220" y1="78" x2="220" y2="520"/><line x1="350" y1="78" x2="350" y2="520"/><line x1="480" y1="78" x2="480" y2="520"/><line x1="610" y1="78" x2="610" y2="520"/><line x1="740" y1="78" x2="740" y2="520"/><line x1="865" y1="78" x2="865" y2="520"/><line x1="980" y1="78" x2="980" y2="520"/>
+</g>
+<g font-size="10.5">
+<line x1="90" y1="100" x2="216" y2="100" stroke="#22d3ee" marker-end="url(#d10d)"/><text x="150" y="94" fill="#7fd8e8" text-anchor="middle" class="svgm">put(key, bytes, cfg)</text>
+<line x1="220" y1="124" x2="346" y2="124" stroke="#22d3ee" marker-end="url(#d10d)"/><text x="283" y="118" fill="#7fd8e8" text-anchor="middle" class="svgm">Client::Put：allocate+切 2MB 片</text>
+<line x1="350" y1="148" x2="476" y2="148" stroke="#a78bfa" marker-end="url(#d10e)"/><text x="413" y="142" fill="#c9bfe8" text-anchor="middle" class="svgm">PutStart RPC</text>
+<line x1="480" y1="160" x2="606" y2="160" stroke="#a78bfa" marker-end="url(#d10e)"/>
+<rect x="560" y="170" width="220" height="30" rx="6" fill="#150f26" stroke="#4a3a7a"/><text x="670" y="190" fill="#8a7aa0" text-anchor="middle" class="svgm">分片锁 → 分配副本 → Descriptor[]</text>
+<line x1="606" y1="210" x2="354" y2="210" stroke="#a78bfa" stroke-dasharray="5 4" marker-end="url(#d10e)"/><text x="470" y="204" fill="#8a7aa0" text-anchor="middle" class="svgm">返回副本位置(地址+端点)</text>
+<line x1="350" y1="236" x2="736" y2="236" stroke="#22d3ee" marker-end="url(#d10d)"/><text x="543" y="230" fill="#7fd8e8" text-anchor="middle" class="svgm">TransferWrite(每个 MEMORY 副本)</text>
+<rect x="690" y="246" width="180" height="30" rx="6" fill="#0c1420" stroke="#22304a"/><text x="780" y="266" fill="#5b6c88" text-anchor="middle" class="svgm">本机? memcpy : openSegment+RDMA</text>
+<line x1="740" y1="286" x2="861" y2="286" stroke="#22d3ee" marker-end="url(#d10d)"/><text x="800" y="280" fill="#7fd8e8" text-anchor="middle" class="svgm">批量 64KB slice WRITE</text>
+<line x1="865" y1="308" x2="976" y2="308" stroke="#22d3ee" stroke-width="2.2" marker-end="url(#d10d)"/><text x="920" y="300" fill="#22d3ee" text-anchor="middle" font-weight="bold" class="svgm">DMA 直写 segment</text>
+<line x1="980" y1="330" x2="869" y2="330" stroke="#22d3ee" stroke-dasharray="4 4" marker-end="url(#d10d)"/><text x="920" y="322" fill="#5b7a99" text-anchor="middle" class="svgm">CQE 完成 → 状态聚合</text>
+<line x1="350" y1="356" x2="476" y2="356" stroke="#a78bfa" marker-end="url(#d10e)"/><text x="413" y="350" fill="#c9bfe8" text-anchor="middle" class="svgm">PutEnd(key)</text>
+<rect x="560" y="366" width="220" height="30" rx="6" fill="#0f2a2a" stroke="#34d399"/><text x="670" y="386" fill="#a8f0c8" text-anchor="middle" class="svgm">mark_complete + 初始租约 + OpLog</text>
+<line x1="606" y1="406" x2="354" y2="406" stroke="#a78bfa" stroke-dasharray="5 4" marker-end="url(#d10e)"/>
+<line x1="346" y1="430" x2="224" y2="430" stroke="#22d3ee" stroke-dasharray="4 4" marker-end="url(#d10d)"/><text x="285" y="424" fill="#5b9a7a" text-anchor="middle" class="svgm">put 返回（可见）</text>
+<rect x="150" y="448" width="400" height="40" rx="7" fill="#241418" stroke="#fb7185" opacity=".9"/>
+<text x="350" y="464" fill="#f0b8c0" text-anchor="middle" font-size="9.5">任一副本失败 → PutRevoke：Master 删元数据，空间 RAII 释放</text>
+<text x="350" y="480" fill="#a06a75" text-anchor="middle" font-size="9.5" class="svgm">DISK 副本并行写本地盘，异步 PutEnd(DISK)</text>
+</g>
+</svg>
+<div class="figcap"><b>图 10-2</b><span>Put 全泳道：三次 RPC（PutStart/PutEnd + 可选 DISK 异步）+ 一次 RDMA 数据面</span></div>
+</div>
+
+<div class="fig">
+<svg viewBox="0 0 1060 480" role="img" aria-label="Get 泳道">
+<defs>
+<marker id="d10f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#34d399"/></marker>
+<marker id="d10g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#a78bfa"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="480" fill="#0c1322" rx="10"/>
+<text x="28" y="32" fill="#8fa5c8" font-size="13" font-weight="bold">一次 Get（远端 MEMORY 副本场景）</text>
+
+<g font-size="11" font-weight="bold">
+<rect x="30" y="46" width="120" height="32" rx="7" fill="#0f2438" stroke="#38bdf8"/><text x="90" y="67" fill="#7fc8e8" text-anchor="middle" class="svgm">应用/Python</text>
+<rect x="160" y="46" width="120" height="32" rx="7" fill="#132a22" stroke="#34d399"/><text x="220" y="67" fill="#a8f0c8" text-anchor="middle" class="svgm">RealClient</text>
+<rect x="290" y="46" width="120" height="32" rx="7" fill="#101827" stroke="#5b7a99"/><text x="350" y="67" fill="#93a5c0" text-anchor="middle" class="svgm">Client</text>
+<rect x="420" y="46" width="120" height="32" rx="7" fill="#191330" stroke="#a78bfa"/><text x="480" y="67" fill="#c9bfe8" text-anchor="middle" class="svgm">Master</text>
+<rect x="550" y="46" width="120" height="32" rx="7" fill="#0f2a2a" stroke="#22d3ee"/><text x="610" y="67" fill="#7fd8e8" text-anchor="middle" class="svgm">TE/RDMA</text>
+<rect x="680" y="46" width="130" height="32" rx="7" fill="#132a22" stroke="#34d399"/><text x="745" y="67" fill="#a8f0c8" text-anchor="middle" class="svgm">副本节点</text>
+<rect x="840" y="46" width="190" height="32" rx="7" fill="#191330" stroke="#a78bfa"/><text x="935" y="67" fill="#c9bfe8" text-anchor="middle" class="svgm">LocalHotCache(读侧)</text>
+</g>
+<g stroke="#22303f" stroke-dasharray="2 5">
+<line x1="90" y1="78" x2="90" y2="440"/><line x1="220" y1="78" x2="220" y2="440"/><line x1="350" y1="78" x2="350" y2="440"/><line x1="480" y1="78" x2="480" y2="440"/><line x1="610" y1="78" x2="610" y2="440"/><line x1="745" y1="78" x2="745" y2="440"/><line x1="935" y1="78" x2="935" y2="440"/>
+</g>
+<g font-size="10.5">
+<line x1="90" y1="100" x2="216" y2="100" stroke="#34d399" marker-end="url(#d10f)"/><text x="150" y="94" fill="#a8f0c8" text-anchor="middle" class="svgm">get_buffer(key)</text>
+<line x1="350" y1="124" x2="476" y2="124" stroke="#a78bfa" marker-end="url(#d10g)"/><text x="413" y="118" fill="#c9bfe8" text-anchor="middle" class="svgm">GetReplicaList</text>
+<rect x="510" y="134" width="290" height="30" rx="6" fill="#150f26" stroke="#4a3a7a"/><text x="655" y="154" fill="#8a7aa0" text-anchor="middle" class="svgm">过滤 COMPLETE + GrantReadLease(隐式续租)</text>
+<line x1="476" y1="176" x2="354" y2="176" stroke="#a78bfa" stroke-dasharray="5 4" marker-end="url(#d10g)"/><text x="415" y="170" fill="#8a7aa0" text-anchor="middle" class="svgm">Descriptor[](本机优先排序)</text>
+<rect x="300" y="196" width="250" height="30" rx="6" fill="#101827" stroke="#31435f"/><text x="425" y="216" fill="#93a5c0" text-anchor="middle" class="svgm">SelectBestReplica → 远端 MEMORY</text>
+<line x1="350" y1="240" x2="606" y2="240" stroke="#34d399" marker-end="url(#d10f)"/><text x="478" y="234" fill="#a8f0c8" text-anchor="middle" class="svgm">TransferRead: openSegment + RDMA READ</text>
+<line x1="610" y1="262" x2="741" y2="262" stroke="#34d399" stroke-width="2" marker-end="url(#d10f)"/><text x="676" y="254" fill="#a8f0c8" text-anchor="middle" font-weight="bold" class="svgm">RDMA READ（对端 segment → 本机 buffer）</text>
+<line x1="745" y1="284" x2="614" y2="284" stroke="#34d399" stroke-dasharray="4 4" marker-end="url(#d10f)"/><text x="678" y="276" fill="#5b9a7a" text-anchor="middle" class="svgm">数据到达（零拷贝）</text>
+<rect x="860" y="250" width="170" height="60" rx="7" fill="#1a2a1a" stroke="#fbbf24"/>
+<text x="945" y="274" fill="#ffe2a0" text-anchor="middle" font-size="9.5" class="svgm">CMS 频率++ → 超阈值</text>
+<text x="945" y="292" fill="#a08a50" text-anchor="middle" font-size="9.5" class="svgm">异步提升进热缓存</text>
+<line x1="606" y1="290" x2="856" y2="290" stroke="#fbbf24" stroke-dasharray="4 4" marker-end="url(#d10g)" opacity=".8"/>
+<rect x="300" y="330" width="250" height="30" rx="6" fill="#241418" stroke="#fb7185" opacity=".9"/>
+<text x="425" y="350" fill="#f0b8c0" text-anchor="middle" font-size="9.5" class="svgm">IsLeaseExpired() 复核（防脏读）</text>
+<line x1="346" y1="380" x2="224" y2="380" stroke="#34d399" stroke-dasharray="4 4" marker-end="url(#d10f)"/><text x="285" y="374" fill="#5b9a7a" text-anchor="middle" class="svgm">BufferHandle（RAII）</text>
+<line x1="216" y1="404" x2="94" y2="404" stroke="#34d399" marker-end="url(#d10f)"/><text x="152" y="398" fill="#a8f0c8" text-anchor="middle" class="svgm">数据就绪 · 返回</text>
+<text x="28" y="452" fill="#5b6c88" font-size="10" class="svgm">下一同前缀请求：RealClient 先查 LocalHotCache 命中 → 直接返回，不发生任何 RPC 与 RDMA</text>
+</g>
+</svg>
+<div class="figcap"><b>图 10-3</b><span>Get 全泳道：一次元数据 RPC + 一次 RDMA READ + 热缓存异步准入</span></div>
+</div>
+
+<h2><span class="n">10.3</span>三类故障场景的自愈路径</h2>
+<div class="fig">
+<svg viewBox="0 0 1060 330" role="img" aria-label="故障自愈">
+<rect x="0" y="0" width="1060" height="330" fill="#0c1322" rx="10"/>
+<defs>
+<marker id="d10h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fb7185"/></marker>
+</defs>
+<text x="28" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">故障注入 → 系统反应（源码中都有对应处理逻辑）</text>
+
+<rect x="40" y="60" width="300" height="230" rx="10" fill="#241418" stroke="#fb7185"/>
+<text x="190" y="88" fill="#f0b8c0" font-size="12" text-anchor="middle" font-weight="bold" class="svgm">场景 A · 传输链路抖动</text>
+<text x="60" y="116" fill="#93a5c0" font-size="10.5">slice 失败 retry(≤9) → redispatch 回队</text>
+<text x="60" y="138" fill="#93a5c0" font-size="10.5">QP 异常 → endpoint reestablish 重建</text>
+<text x="60" y="160" fill="#93a5c0" font-size="10.5">RNIC 累计错误 → set_active(false) 熔断</text>
+<text x="60" y="182" fill="#93a5c0" font-size="10.5">selectDevice 自动换 preferred HCA</text>
+<text x="60" y="208" fill="#a06a75" font-size="10" class="svgm">极端：MC_FORCE_TCP 回落 / 换协议重试</text>
+<text x="60" y="248" fill="#8a5a65" font-size="9.5">数据面自愈，业务无感（延迟抖动除外）</text>
+
+<rect x="380" y="60" width="300" height="230" rx="10" fill="#241c0e" stroke="#fbbf24"/>
+<text x="530" y="88" fill="#ffe2a0" font-size="12" text-anchor="middle" font-weight="bold" class="svgm">场景 B · Master 宕机</text>
+<text x="400" y="116" fill="#93a5c0" font-size="10.5">etcd lease 过期 → leader view 消失</text>
+<text x="400" y="138" fill="#93a5c0" font-size="10.5">standby PROMOTING → 导出内存快照重建</text>
+<text x="400" y="160" fill="#93a5c0" font-size="10.5">客户端 LeaderMonitor 自动重连新主</text>
+<text x="400" y="182" fill="#93a5c0" font-size="10.5">在途 RDMA 传输完全不受影响</text>
+<text x="400" y="208" fill="#a08a50" font-size="10" class="svgm">元数据空白窗口 = 故障检测 + 提升耗时</text>
+<text x="400" y="248" fill="#8a7145" font-size="9.5">控制面秒级切换 · 数据面零损失</text>
+
+<rect x="720" y="60" width="300" height="230" rx="10" fill="#101827" stroke="#31435f"/>
+<text x="870" y="88" fill="#93a5c0" font-size="12" text-anchor="middle" font-weight="bold" class="svgm">场景 C · 缓存节点宕机</text>
+<text x="740" y="116" fill="#6b7d99" font-size="10.5">该节点副本不可达 → Get 择优选其他副本</text>
+<text x="740" y="138" fill="#6b7d99" font-size="10.5">Ping 超时 → Master 清理其加工中残留</text>
+<text x="740" y="160" fill="#6b7d99" font-size="10.5">副本数跌破 replica_num → CopyTask 补齐</text>
+<text x="740" y="182" fill="#6b7d99" font-size="10.5">Segment 摘除 → 淘汰线程重算水位</text>
+<text x="740" y="208" fill="#5b6c88" font-size="10" class="svgm">副本机制本质：数据面自带冗余，无需 HA 组件</text>
+<text x="740" y="248" fill="#4a5a72" font-size="9.5">只要任一副本存活，数据不丢</text>
+</svg>
+<div class="figcap"><b>图 10-4</b><span>三类故障的自愈：链路层重建（TE）、控制面接管（HA）、数据面冗余（副本）</span></div>
+</div>
+
+<h2><span class="n">10.4</span>关键调节旋钮速查</h2>
+<table>
+<tr><th>旋钮</th><th>位置 / 默认</th><th>调什么</th></tr>
+<tr><td><code>slice_size</code>（MC_SLICE_SIZE）</td><td>config.cpp · 64KB</td><td>RDMA 切片粒度：大对象调大可降开销，小消息调大反而浪费</td></tr>
+<tr><td><code>max_wr</code> / <code>num_qp_per_ep</code></td><td>config.h · 256 / 2</td><td>滑动窗口深度：直接决定单链路在途字节数与带宽</td></tr>
+<tr><td><code>MC_MS_FILTERS</code></td><td>环境变量</td><td>网卡白名单，多 HCA 场景避免选错物理口</td></tr>
+<tr><td><code>MC_USE_TENT</code></td><td>环境变量</td><td>切换新一代引擎 tent/（同一 API）</td></tr>
+<tr><td><code>eviction_high_watermark_ratio</code></td><td>master 参数 · 0.95</td><td>触发两遍淘汰的内存水位</td></tr>
+<tr><td><code>--memory_allocator=offset|cachelib</code></td><td>master 参数 · offset</td><td>Master 段内分配器选择</td></tr>
+<tr><td><code>MC_STORE_USE_HUGEPAGE</code></td><td>环境变量</td><td>客户端大页分配，降低 TLB miss</td></tr>
+</table>
+
+<div class="co tip"><b>结语：</b>Mooncake 的源码量大但"套路"高度一致——Transfer Engine 把异构硬件抽象成统一动词 submitTransfer，Store 把缓存治理抽象成对象协议（三段式写 + 租约 + 副本 + 淘汰），两者以"控制面/数据面分离"为纲组合成 KVCache 池。掌握 04 章的 RDMA 生命周期与 06 章的对象协议，其余代码都是这两条主线的变奏。祝你 debug 愉快。</div>
+
+<div class="pager">
+  <a href="09-ecosystem.html"><span class="lab">◀ PREV</span>09 · 生态集成</a>
+  <a class="nx" href="index.html"><span class="lab">NEXT ▶</span>返回目录</a>
+</div>
+<div class="foot">10 · 端到端数据流 · Mooncake 源码深度学习手册 · 完</div>
+</main>
+</body>
+</html>

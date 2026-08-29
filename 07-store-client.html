@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>07 · Client 深度剖析 · Mooncake 源码学习</title>
+<style>
+:root{
+  --bg:#0a0e16; --panel:#0f1524; --panel2:#131b2e; --line:#22304a; --line2:#2c3d5c;
+  --tx:#dbe6f5; --tx2:#93a5c0; --tx3:#6b7d99;
+  --te:#38bdf8; --code-bg:#0b1220;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--te);text-decoration:none} a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:16px;height:54px}
+.logo{font-weight:700;font-size:16px;color:var(--tx);white-space:nowrap;flex-shrink:0}
+.logo .m{color:var(--te)}
+.topnav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
+.topnav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.topnav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.topnav a.on{color:var(--ac,#34d399);background:color-mix(in srgb,var(--ac,#34d399) 12%,transparent)}
+.hero{padding:44px 0 30px;border-bottom:1px solid var(--line);
+  background:radial-gradient(1100px 300px at 18% 0%,color-mix(in srgb,var(--ac,#34d399) 10%,transparent),transparent)}
+.kicker{color:var(--ac,#34d399);font-size:13px;font-weight:600;letter-spacing:2px}
+h1{font-size:32px;line-height:1.3;margin:10px 0 8px}
+.sub{color:var(--tx2);font-size:15px;max-width:860px}
+h2{font-size:22px;margin:46px 0 14px;display:flex;align-items:center;gap:10px}
+h2 .n{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border-radius:8px;
+ background:color-mix(in srgb,var(--ac,#34d399) 14%,transparent);color:var(--ac,#34d399);font-size:14px;font-weight:700}
+h3{font-size:17px;margin:28px 0 10px;color:var(--tx)}
+p{margin:10px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+.fig{margin:22px 0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px}
+.fig svg{display:block;width:100%;height:auto}
+.figcap{display:flex;gap:8px;align-items:baseline;padding:10px 4px 6px;color:var(--tx2);font-size:13px;border-top:1px dashed var(--line);margin-top:12px}
+.figcap b{color:var(--ac,#34d399);font-size:12.5px;white-space:nowrap}
+.co{border:1px solid var(--line);border-left:3px solid var(--ac,#34d399);background:var(--panel);border-radius:10px;padding:12px 16px;margin:16px 0;font-size:14px;color:var(--tx2)}
+.co b{color:var(--tx)}
+.co.warn{border-left-color:#fbbf24}.co.tip{border-left-color:#34d399}
+.code{margin:16px 0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--code-bg)}
+.code .hd{display:flex;align-items:center;gap:8px;padding:8px 14px;background:#0e1626;border-bottom:1px solid var(--line);color:var(--tx3);font-size:12px;font-family:ui-monospace,Menlo,Consolas,monospace}
+.code .hd .dot{width:9px;height:9px;border-radius:50%}
+.code pre{margin:0;padding:14px 16px;overflow-x:auto;font:12.8px/1.6 ui-monospace,"SF Mono",Menlo,Consolas,monospace;color:#c9d6ea}
+.k{color:#c792ea}.f{color:#82aaff}.s{color:#c3e88d}.c{color:#5f7288;font-style:italic}.t{color:#ffcb6b}.num{color:#f78c6c}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font:12px ui-monospace,Menlo,monospace;color:#8fd3ff}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px}
+th{background:#101a2c;color:#aebfd8;text-align:left;padding:9px 12px;border:1px solid var(--line);font-weight:600}
+td{padding:8px 12px;border:1px solid var(--line);color:#c3d0e4;vertical-align:top}
+ul,ol{color:#c7d3e6;padding-left:22px} li{margin:5px 0}
+hr{border:none;border-top:1px solid var(--line);margin:36px 0}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:44px 0 30px}
+.pager a{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 18px;color:var(--tx2);font-size:13.5px}
+.pager a:hover{border-color:var(--ac,#34d399);text-decoration:none;color:var(--tx)}
+.pager a.nx{text-align:right}
+.pager .lab{display:block;font-size:11px;color:var(--tx3);letter-spacing:1px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 40px}
+svg text{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.svgm{font-family:ui-monospace,Menlo,Consolas,monospace!important}
+</style>
+</head>
+<body style="--ac:#34d399">
+<header class="top"><div class="wrap">
+  <a class="logo" href="index.html" style="color:var(--tx)"><span class="m">🌙</span> Mooncake 源码学习</a>
+  <nav class="topnav">
+    <a href="index.html">目录</a><a href="01-overview.html">01 全景</a><a href="02-physical-architecture.html">02 物理架构</a><a href="03-transfer-engine.html">03 传输引擎</a><a href="04-rdma-deep-dive.html">04 RDMA</a><a href="05-store-architecture.html">05 Store</a><a href="06-store-master.html">06 Master</a><a class="on" href="07-store-client.html">07 Client</a><a href="08-storage-ha.html">08 存储与HA</a><a href="09-ecosystem.html">09 生态</a><a href="10-dataflow.html">10 数据流</a>
+  </nav>
+</div></header>
+
+<section class="hero"><div class="wrap">
+  <div class="kicker">CHAPTER 07 · CLIENT SIDE</div>
+  <h1>Client 深度剖析：内存池、零拷贝与读写全链路</h1>
+  <p class="sub">客户端是数据面唯一的执行者：它管理本地内存 segment、对接 Transfer Engine 搬运数据、维护本机热缓存与 SSD offload。本章拆解 RealClient / DummyClient 双客户端设计、内存分配器家族，以及一次 Put 与一次 Get 的完整跨文件调用链。</p>
+</div></section>
+
+<main class="wrap">
+
+<h2><span class="n">7.1</span>客户端三层结构与双客户端设计</h2>
+<p>对外门面是 <code>RealClient</code>（<code>src/real_client.cpp</code>，5400+ 行），内部干活的是 <code>Client</code>（<code>include/client_service.h:72</code>），持有四个关键成员：<code>master_client_</code>（RPC）、<code>transfer_submitter_</code>（数据搬运）、<code>storage_backend_</code>（SSD）、<code>hot_cache_</code>（本机热缓存）。<code>DummyClient</code> 是与 RealClient 配对的"影子客户端"：它自己不管理数据，只通过共享内存把推理进程的 buffer 映射进 RealClient 所在进程——用于"推理进程与存储代理进程分离"的部署（见 7.3）。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1060 470" role="img" aria-label="Client 类关系">
+<defs>
+<marker id="c7a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#34d399"/></marker>
+<marker id="c7b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5f7ba6"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="470" fill="#0c1322" rx="10"/>
+<text x="28" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">客户端类关系（继承 + 组合）</text>
+
+<rect x="40" y="56" width="460" height="60" rx="9" fill="#131a28" stroke="#31435f"/>
+<text x="60" y="82" fill="#93a5c0" font-size="12" font-weight="bold" class="svgm">PyClient（include/pyclient.h · 抽象门面）</text>
+<text x="60" y="103" fill="#6b7d99" font-size="10.5">put / get / batch_* / mount_segment / is_exist / remove …</text>
+
+<rect x="40" y="150" width="220" height="120" rx="9" fill="#132a22" stroke="#34d399" stroke-width="1.4"/>
+<text x="150" y="176" fill="#a8f0c8" font-size="12" text-anchor="middle" font-weight="bold" class="svgm">RealClient</text>
+<text x="150" y="198" fill="#6b7d99" font-size="10" text-anchor="middle">数据管理者 · real_client.cpp</text>
+<text x="150" y="218" fill="#6b7d99" font-size="10" text-anchor="middle" class="svgm">shm_contexts_ : Dummy→Real 地址映射</text>
+<text x="150" y="238" fill="#6b7d99" font-size="10" text-anchor="middle" class="svgm">+ _dummy_helper / _internal RPC 入口</text>
+
+<rect x="280" y="150" width="220" height="120" rx="9" fill="#131a28" stroke="#94a3b8"/>
+<text x="390" y="176" fill="#c9d9ee" font-size="12" text-anchor="middle" font-weight="bold" class="svgm">DummyClient</text>
+<text x="390" y="198" fill="#6b7d99" font-size="10" text-anchor="middle">影子客户端 · dummy_client.cpp</text>
+<text x="390" y="218" fill="#6b7d99" font-size="10" text-anchor="middle">只做共享内存映射 + 转发请求</text>
+<text x="390" y="238" fill="#6b7d99" font-size="10" text-anchor="middle">跑在推理引擎进程里</text>
+
+<rect x="40" y="300" width="980" height="140" rx="10" fill="#101827" stroke="#31435f"/>
+<text x="60" y="326" fill="#93a5c0" font-size="12" font-weight="bold" class="svgm">Client（include/client_service.h:72 · 内部引擎）</text>
+<rect x="60" y="340" width="220" height="80" rx="7" fill="#0f2438" stroke="#2a4a66"/>
+<text x="170" y="364" fill="#7fc8e8" font-size="11" text-anchor="middle" class="svgm">master_client_</text>
+<text x="170" y="384" fill="#5b7a99" font-size="9.5" text-anchor="middle">coro_rpc → Master :50051</text>
+<rect x="300" y="340" width="220" height="80" rx="7" fill="#0f2a2a" stroke="#2a5a44"/>
+<text x="410" y="364" fill="#a8f0c8" font-size="11" text-anchor="middle" class="svgm">transfer_submitter_</text>
+<text x="410" y="384" fill="#5b9a7a" font-size="9.5" text-anchor="middle">封装 TE · TransferFuture</text>
+<rect x="540" y="340" width="220" height="80" rx="7" fill="#241418" stroke="#7a3a44"/>
+<text x="650" y="364" fill="#f0b8c0" font-size="11" text-anchor="middle" class="svgm">storage_backend_</text>
+<text x="650" y="384" fill="#a06a75" font-size="9.5" text-anchor="middle">SSD offload / Bucket</text>
+<rect x="780" y="340" width="220" height="80" rx="7" fill="#191330" stroke="#4a3a7a"/>
+<text x="890" y="364" fill="#c9bfe8" font-size="11" text-anchor="middle" class="svgm">hot_cache_</text>
+<text x="890" y="384" fill="#8a7aa0" font-size="9.5" text-anchor="middle">LocalHotCache LRU (16MB block)</text>
+
+<line x1="150" y1="116" x2="150" y2="146" stroke="#5f7ba6" stroke-width="1.5" marker-end="url(#c7b)"/>
+<line x1="390" y1="116" x2="390" y2="146" stroke="#5f7ba6" stroke-width="1.5" marker-end="url(#c7b)"/>
+<line x1="260" y1="210" x2="276" y2="210" stroke="#34d399" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#c7a)"/>
+<text x="268" y="200" fill="#5b9a7a" font-size="9.5">IPC 配对</text>
+<line x1="150" y1="270" x2="150" y2="296" stroke="#5f7ba6" stroke-width="1.5" marker-end="url(#c7b)"/>
+<text x="28" y="460" fill="#5b6c88" font-size="10.5">语言绑定共用一套 C ABI：store_c.cpp（mooncake_store_* 系列函数）→ Go(cgo) / Rust(bindgen) / Python(pybind11: store_py.cpp)</text>
+</svg>
+<div class="figcap"><b>图 7-1</b><span>客户端三层：PyClient 门面 → Real/Dummy 双客户端 → Client 内部引擎四件套</span></div>
+</div>
+
+<h2><span class="n">7.2</span>内存分配器家族</h2>
+<p>客户端所有 KV 数据都要落在"已注册 RDMA 的 segment"里。分配器的职责是在大块 mmap 内存上做快速子分配，且分配结果天然携带 RDMA 地址：</p>
+<table>
+<tr><th>分配器</th><th>位置</th><th>用途</th></tr>
+<tr><td><code>ClientBufferAllocator</code></td><td>client_buffer.cpp</td><td>客户端主分配器：hugepage mmap 大池 + 内嵌两级 bin 的 <code>OffsetAllocator</code>；<code>BufferHandle</code> RAII 归还；支持"视图模式"包装外部指针</td></tr>
+<tr><td><code>OffsetBufferAllocator</code> / <code>CachelibBufferAllocator</code></td><td>allocator.h · cachelib_memory_allocator/</td><td>Master 段内分配器（二选一，<code>--memory_allocator</code>），默认 offset</td></tr>
+<tr><td><code>ShmHelper</code></td><td>shm_helper.cpp</td><td><code>memfd_create+mmap</code> 创建跨进程共享段，fd 经 Unix socket 传递（见 7.3）</td></tr>
+<tr><td><code>MmapArena</code></td><td>mmap_arena.cpp</td><td>面向 SGLang HiCache 的无锁（CAS）bump 分配 arena</td></tr>
+</table>
+
+<h2><span class="n">7.3</span>DummyClient：跨进程零拷贝</h2>
+<p>推理引擎（vLLM/SGLang）进程与存储代理进程分离部署时，KVCache 在推理进程的显存/内存里，而 RDMA 注册与传输逻辑在代理进程。DummyClient 的解法是把 RealClient 的 segment <strong>以 memfd 共享内存的方式映射进推理进程</strong>：RealClient <code>memfd_create</code> 建段 → Unix socket <code>SCM_RIGHTS</code> 把 fd 发给 DummyClient → 双方 mmap 同一物理内存 → 推理引擎写入的地址经 <code>map_dummy_buffer_to_real</code> 换算成 RealClient 侧地址，直接用于 Put。整条链路没有任何一次 memcpy。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1060 330" role="img" aria-label="DummyClient 共享内存">
+<defs>
+<marker id="c7c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#34d399"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="330" fill="#0c1322" rx="10"/>
+<text x="28" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">跨进程零拷贝：memfd + SCM_RIGHTS</text>
+
+<rect x="40" y="60" width="440" height="220" rx="10" fill="#0f2438" stroke="#38bdf8"/>
+<text x="260" y="86" fill="#7fc8e8" font-size="12" text-anchor="middle" font-weight="bold">推理引擎进程（vLLM / SGLang）</text>
+<rect x="70" y="104" width="170" height="70" rx="8" fill="#0c1826" stroke="#2a4a66"/>
+<text x="155" y="132" fill="#8fb8d8" font-size="11" text-anchor="middle" class="svgm">DummyClient</text>
+<text x="155" y="152" fill="#5b7a99" font-size="9.5" text-anchor="middle">mmap(fd) 同一段内存</text>
+<rect x="270" y="104" width="180" height="70" rx="8" fill="#0c1826" stroke="#2a4a66"/>
+<text x="360" y="132" fill="#8fb8d8" font-size="11" text-anchor="middle">KVCache 张量</text>
+<text x="360" y="152" fill="#5b7a99" font-size="9.5" text-anchor="middle">引擎直接写入共享段</text>
+<text x="70" y="212" fill="#6b7d99" font-size="10.5">① 向 RealClient 请求 buffer 地址</text>
+<text x="70" y="234" fill="#6b7d99" font-size="10.5">② 收到"本进程可见"的映射地址</text>
+<text x="70" y="256" fill="#6b7d99" font-size="10.5">③ 引擎写完后调 put_from(地址) 传引用</text>
+
+<rect x="580" y="60" width="440" height="220" rx="10" fill="#132a22" stroke="#34d399"/>
+<text x="800" y="86" fill="#a8f0c8" font-size="12" text-anchor="middle" font-weight="bold">存储代理进程（real_client_main :50052）</text>
+<rect x="610" y="104" width="170" height="70" rx="8" fill="#0c1f18" stroke="#2a5a44"/>
+<text x="695" y="132" fill="#8fd8b8" font-size="11" text-anchor="middle" class="svgm">RealClient</text>
+<text x="695" y="152" fill="#5b9a7a" font-size="9.5" text-anchor="middle" class="svgm">memfd_create + 注册 RDMA MR</text>
+<rect x="810" y="104" width="180" height="70" rx="8" fill="#0c1f18" stroke="#2a5a44"/>
+<text x="900" y="132" fill="#8fd8b8" font-size="11" text-anchor="middle" class="svgm">TransferEngine</text>
+<text x="900" y="152" fill="#5b9a7a" font-size="9.5" text-anchor="middle">同一物理内存 RDMA 收发</text>
+<text x="610" y="212" fill="#6b7d99" font-size="10.5">④ map_dummy_buffer_to_real 地址换算</text>
+<text x="610" y="234" fill="#6b7d99" font-size="10.5">⑤ PutStart → RDMA 直写远端 / GetReplicaList → RDMA 读入共享段</text>
+<text x="610" y="256" fill="#6b7d99" font-size="10.5">⑥ 引擎从共享段直接读结果 —— 全程零拷贝</text>
+
+<path d="M 484 150 C 510 120 550 120 576 150" fill="none" stroke="#34d399" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#c7c)"/>
+<text x="530" y="106" fill="#a8f0c8" font-size="10" text-anchor="middle" class="svgm">fd via SCM_RIGHTS</text>
+<text x="28" y="312" fill="#5b6c88" font-size="10.5">源码锚点：shm_helper.cpp（ShmHelper 单例）· real_client.cpp:345 map_dummy_buffer_to_real · real_client_main.cpp（本地 RPC :50052）</text>
+</svg>
+<div class="figcap"><b>图 7-2</b><span>DummyClient 通道：fd 传递建立共享内存，推理进程与存储进程读写同一物理页</span></div>
+</div>
+
+<h2><span class="n">7.4</span>一次 Put 的完整调用链</h2>
+<div class="code"><div class="hd"><span class="dot" style="background:#fb7185"></span><span class="dot" style="background:#fbbf24"></span><span class="dot" style="background:#34d399"></span>Put 全链路 · 从 Python 到 RDMA</div>
+<pre><span class="c"># Python 侧（mooncake.store / pybind）</span>
+store.<span class="f">put</span>(key, tensor_bytes, config)             <span class="c"># → RealClient::put</span>
+
+<span class="c">// ① real_client.cpp put_internal：本地 buffer 分配 + 数据拷入 + 切片</span>
+<span class="k">auto</span> handle = buffer_allocator_-><span class="f">allocate</span>(size); <span class="c">// ClientBufferAllocator</span>
+<span class="f">memcpy</span>(handle.ptr, data, size);
+<span class="f">split_into_slices</span>(handle, slices);                <span class="c">// 按 kMaxSliceSize(≈2MB) 切</span>
+
+<span class="c">// ② client_service.cpp Client::Put：三段式写</span>
+master_client_.<span class="f">PutStart</span>(key, slice_lengths, cfg)  <span class="c">// → Master 分配副本，返回 Descriptor[]</span>
+<span class="k">for</span> (desc : descriptors) {
+  <span class="k">if</span> (desc.<span class="f">is_disk</span>())  storage_backend_.<span class="f">StoreObject</span>(...);   <span class="c">// SSD 副本：写盘后异步 PutEnd(DISK)</span>
+  <span class="k">if</span> (desc.<span class="f">is_mem</span>())   transfer_submitter_.<span class="f">submit</span>(...);     <span class="c">// → TE 批量 RDMA WRITE 到对端 segment</span>
+}
+master_client_.<span class="f">PutEnd</span>(key);                       <span class="c">// 全部成功 → 提交；任一失败 → PutRevoke 回滚</span></pre></div>
+<p><code>TransferSubmitter</code>（<code>include/transfer_task.h</code>）按副本位置自动选择四种策略之一：<code>LOCAL_MEMCPY</code>（副本在本机 segment，直接 memcpy）、<code>TRANSFER_ENGINE</code>（远端，openSegment 后提交 RDMA 请求）、<code>FILE_READ</code>（DISK 副本走文件接口）、<code>EMPTY</code>。传输结果封装为 <code>TransferFuture</code>，内部轮询 TE 的 batch 状态。</p>
+
+<h2><span class="n">7.5</span>一次 Get 的读路径决策</h2>
+<div class="fig">
+<svg viewBox="0 0 1060 470" role="img" aria-label="Get 读路径">
+<defs>
+<marker id="c7d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#34d399"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="470" fill="#0c1322" rx="10"/>
+<text x="28" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">get_buffer_internal 读路径决策（real_client.cpp:2367 附近）</text>
+
+<rect x="60" y="60" width="220" height="52" rx="9" fill="#132a22" stroke="#34d399"/>
+<text x="170" y="86" fill="#a8f0c8" font-size="12" text-anchor="middle" font-weight="bold" class="svgm">Query(key)</text>
+<text x="170" y="103" fill="#5b9a7a" font-size="9.5" text-anchor="middle">GetReplicaList + 隐式读租约</text>
+
+<rect x="60" y="150" width="220" height="66" rx="9" fill="#101827" stroke="#31435f"/>
+<text x="170" y="176" fill="#93a5c0" font-size="11.5" text-anchor="middle" font-weight="bold" class="svgm">SelectBestReplica</text>
+<text x="170" y="198" fill="#6b7d99" font-size="9.5" text-anchor="middle" class="svgm">本机MEMORY &gt; 远端MEMORY &gt; LOCAL_DISK &gt; DISK</text>
+
+<path d="M 170 112 L 170 146" fill="none" stroke="#34d399" stroke-width="1.6" marker-end="url(#c7d)"/>
+
+<rect x="360" y="60" width="250" height="70" rx="9" fill="#191330" stroke="#a78bfa"/>
+<text x="485" y="86" fill="#c9bfe8" font-size="11.5" text-anchor="middle" font-weight="bold" class="svgm">本机 LocalHotCache 命中？</text>
+<text x="485" y="108" fill="#8a7aa0" font-size="9.5" text-anchor="middle">16MB block LRU（可 memfd 共享）</text>
+<rect x="680" y="66" width="150" height="56" rx="9" fill="#0f2a2a" stroke="#34d399"/>
+<text x="755" y="90" fill="#a8f0c8" font-size="11" text-anchor="middle" font-weight="bold">是 → 直接返回</text>
+<text x="755" y="108" fill="#5b9a7a" font-size="9.5" text-anchor="middle">RedirectToHotCache</text>
+<path d="M 280 95 L 356 95" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#c7d)"/>
+<path d="M 610 95 L 676 95" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#c7d)"/>
+
+<rect x="360" y="170" width="250" height="80" rx="9" fill="#0f2438" stroke="#38bdf8"/>
+<text x="485" y="196" fill="#7fc8e8" font-size="11.5" text-anchor="middle" font-weight="bold" class="svgm">MEMORY 副本</text>
+<text x="485" y="218" fill="#5b7a99" font-size="9.5" text-anchor="middle" class="svgm">本机? → memcpy；远端? → RDMA READ</text>
+<text x="485" y="236" fill="#5b7a99" font-size="9.5" text-anchor="middle" class="svgm">TransferSubmitter: submitRangeRead</text>
+
+<rect x="680" y="170" width="220" height="80" rx="9" fill="#241418" stroke="#fb7185"/>
+<text x="790" y="196" fill="#f0b8c0" font-size="11.5" text-anchor="middle" font-weight="bold" class="svgm">LOCAL_DISK / DISK</text>
+<text x="790" y="218" fill="#a06a75" font-size="9.5" text-anchor="middle">LOCAL_DISK: RPC 对端节点读其 SSD</text>
+<text x="790" y="236" fill="#a06a75" font-size="9.5" text-anchor="middle" class="svgm">DISK: file_interface / 3FS USRBIO 读盘</text>
+<path d="M 284 190 L 356 190" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#c7d)"/>
+<path d="M 284 206 C 320 230 340 220 356 210" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#c7d)"/>
+<path d="M 610 200 L 676 200" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#c7d)"/>
+
+<rect x="360" y="290" width="250" height="80" rx="9" fill="#1a2a1a" stroke="#fbbf24"/>
+<text x="485" y="316" fill="#ffe2a0" font-size="11.5" text-anchor="middle" font-weight="bold" class="svgm">读后准入</text>
+<text x="485" y="338" fill="#a08a50" font-size="9.5" text-anchor="middle" class="svgm">CountMinSketch 频率统计(4096×4 + decay)</text>
+<text x="485" y="356" fill="#a08a50" font-size="9.5" text-anchor="middle">频率超阈值 → 异步提升进 LocalHotCache</text>
+<path d="M 485 254 L 485 286" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#c7d)"/>
+
+<rect x="680" y="290" width="220" height="80" rx="9" fill="#132a22" stroke="#34d399"/>
+<text x="790" y="316" fill="#a8f0c8" font-size="11.5" text-anchor="middle" font-weight="bold" class="svgm">返回 BufferHandle</text>
+<text x="790" y="338" fill="#5b9a7a" font-size="9.5" text-anchor="middle" class="svgm">IsLeaseExpired() 复核（防脏读）</text>
+<text x="790" y="356" fill="#5b9a7a" font-size="9.5" text-anchor="middle">RAII 析构归还 buffer</text>
+<path d="M 610 330 L 676 330" fill="none" stroke="#34d399" stroke-width="1.5" marker-end="url(#c7d)"/>
+<text x="60" y="430" fill="#5b6c88" font-size="10.5">batch_get_into 系列接口可把数据直接读入用户预注册的 buffer（register_buffer → TE 零拷贝），省去 ClientBufferAllocator 中转</text>
+</svg>
+<div class="figcap"><b>图 7-3</b><span>Get 读路径：副本择优 → 热缓存短路 → 传输 → CMS 准入 → 租约复核</span></div>
+</div>
+
+<div class="co tip"><b>LocalHotCache 为什么需要 CountMinSketch：</b>热缓存容量有限，若按"读过就缓存"会把缓存打满成噪声。CMS（带时间衰减的 4096×4 计数器）以 O(1) 空间估计 key 频率，只有多次被读的 key 才值得占用热缓存——这是"频率 + 新近度"的近似 LRU 实现。</div>
+
+<div class="pager">
+  <a href="06-store-master.html"><span class="lab">◀ PREV</span>06 · Master 深度剖析</a>
+  <a class="nx" href="08-storage-ha.html"><span class="lab">NEXT ▶</span>08 · 存储后端与高可用</a>
+</div>
+<div class="foot">07 · Client 深度剖析 · Mooncake 源码深度学习手册</div>
+</main>
+</body>
+</html>

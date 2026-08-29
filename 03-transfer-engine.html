@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>03 · Transfer Engine 架构 · Mooncake 源码学习</title>
+<style>
+:root{
+  --bg:#0a0e16; --panel:#0f1524; --panel2:#131b2e; --line:#22304a; --line2:#2c3d5c;
+  --tx:#dbe6f5; --tx2:#93a5c0; --tx3:#6b7d99;
+  --te:#38bdf8; --code-bg:#0b1220;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--te);text-decoration:none} a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:16px;height:54px}
+.logo{font-weight:700;font-size:16px;color:var(--tx);white-space:nowrap;flex-shrink:0}
+.logo .m{color:var(--te)}
+.topnav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
+.topnav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.topnav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.topnav a.on{color:var(--ac,#38bdf8);background:color-mix(in srgb,var(--ac,#38bdf8) 12%,transparent)}
+.hero{padding:44px 0 30px;border-bottom:1px solid var(--line);
+  background:radial-gradient(1100px 300px at 18% 0%,color-mix(in srgb,var(--ac,#38bdf8) 10%,transparent),transparent)}
+.kicker{color:var(--ac,#38bdf8);font-size:13px;font-weight:600;letter-spacing:2px}
+h1{font-size:32px;line-height:1.3;margin:10px 0 8px}
+.sub{color:var(--tx2);font-size:15px;max-width:860px}
+h2{font-size:22px;margin:46px 0 14px;display:flex;align-items:center;gap:10px}
+h2 .n{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border-radius:8px;
+ background:color-mix(in srgb,var(--ac,#38bdf8) 14%,transparent);color:var(--ac,#38bdf8);font-size:14px;font-weight:700}
+h3{font-size:17px;margin:28px 0 10px;color:var(--tx)}
+p{margin:10px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+.grid{display:grid;gap:14px}.g2{grid-template-columns:1fr 1fr}
+@media(max-width:860px){.g2{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+.card h4{margin:0 0 6px;font-size:15px}
+.card p{margin:4px 0;font-size:13.5px;color:var(--tx2)}
+.fig{margin:22px 0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px}
+.fig svg{display:block;width:100%;height:auto}
+.figcap{display:flex;gap:8px;align-items:baseline;padding:10px 4px 6px;color:var(--tx2);font-size:13px;border-top:1px dashed var(--line);margin-top:12px}
+.figcap b{color:var(--ac,#38bdf8);font-size:12.5px;white-space:nowrap}
+.co{border:1px solid var(--line);border-left:3px solid var(--ac,#38bdf8);background:var(--panel);border-radius:10px;padding:12px 16px;margin:16px 0;font-size:14px;color:var(--tx2)}
+.co b{color:var(--tx)}
+.co.warn{border-left-color:#fbbf24}.co.tip{border-left-color:#34d399}
+.code{margin:16px 0;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--code-bg)}
+.code .hd{display:flex;align-items:center;gap:8px;padding:8px 14px;background:#0e1626;border-bottom:1px solid var(--line);color:var(--tx3);font-size:12px;font-family:ui-monospace,Menlo,Consolas,monospace}
+.code .hd .dot{width:9px;height:9px;border-radius:50%}
+.code pre{margin:0;padding:14px 16px;overflow-x:auto;font:12.8px/1.6 ui-monospace,"SF Mono",Menlo,Consolas,monospace;color:#c9d6ea}
+.k{color:#c792ea}.f{color:#82aaff}.s{color:#c3e88d}.c{color:#5f7288;font-style:italic}.t{color:#ffcb6b}.num{color:#f78c6c}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font:12px ui-monospace,Menlo,monospace;color:#8fd3ff}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px}
+th{background:#101a2c;color:#aebfd8;text-align:left;padding:9px 12px;border:1px solid var(--line);font-weight:600}
+td{padding:8px 12px;border:1px solid var(--line);color:#c3d0e4;vertical-align:top}
+ul,ol{color:#c7d3e6;padding-left:22px} li{margin:5px 0}
+hr{border:none;border-top:1px solid var(--line);margin:36px 0}
+.pager{display:flex;justify-content:space-between;gap:12px;margin:44px 0 30px}
+.pager a{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 18px;color:var(--tx2);font-size:13.5px}
+.pager a:hover{border-color:var(--ac,#38bdf8);text-decoration:none;color:var(--tx)}
+.pager a.nx{text-align:right}
+.pager .lab{display:block;font-size:11px;color:var(--tx3);letter-spacing:1px}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 40px}
+svg text{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.svgm{font-family:ui-monospace,Menlo,Consolas,monospace!important}
+</style>
+</head>
+<body style="--ac:#38bdf8">
+<header class="top"><div class="wrap">
+  <a class="logo" href="index.html" style="color:var(--tx)"><span class="m">🌙</span> Mooncake 源码学习</a>
+  <nav class="topnav">
+    <a href="index.html">目录</a><a href="01-overview.html">01 全景</a><a href="02-physical-architecture.html">02 物理架构</a><a class="on" href="03-transfer-engine.html">03 传输引擎</a><a href="04-rdma-deep-dive.html">04 RDMA</a><a href="05-store-architecture.html">05 Store</a><a href="06-store-master.html">06 Master</a><a href="07-store-client.html">07 Client</a><a href="08-storage-ha.html">08 存储与HA</a><a href="09-ecosystem.html">09 生态</a><a href="10-dataflow.html">10 数据流</a>
+  </nav>
+</div></header>
+
+<section class="hero"><div class="wrap">
+  <div class="kicker">CHAPTER 03 · TRANSFER ENGINE</div>
+  <h1>Transfer Engine 架构：统一数据传输层</h1>
+  <p class="sub">Transfer Engine（TE）是 Mooncake 的"网卡之上的操作系统"：对上暴露一个 <code>submitTransfer(TransferRequest)</code> 的统一接口，对下适配 19 种硬件传输后端，中间完成拓扑发现、选路、建链、流控与故障切换。本章拆解它的三层类结构、初始化流程、元数据服务与握手协议。</p>
+</div></section>
+
+<main class="wrap">
+
+<h2><span class="n">3.1</span>三层类结构：外观 → 实现 → 调度</h2>
+<p>TE 采用经典的外观模式，源码分三层：<code>TransferEngine</code>（<code>include/transfer_engine.h</code>）是用户唯一接触的类，几乎所有方法都是转发；真正的实现在 <code>TransferEngineImpl</code>（<code>include/transfer_engine_impl.h</code>）；底下的执行调度由 <code>MultiTransport</code>（transport 注册表）与 <code>TransferMetadata</code>（元数据/握手）分担。外观类同时持有 V1 与 TENT 两个后端指针，通过环境变量 <code>MC_USE_TENT</code> / <code>MC_USE_TEV1</code> 切换（<code>src/transfer_engine.cpp:394</code> 附近），为新一代引擎的灰度替换留了通道。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1060 520" role="img" aria-label="TE 三层类结构">
+<defs>
+<marker id="t3a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5f7ba6"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="520" fill="#0c1322" rx="10"/>
+<text x="28" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">Transfer Engine 类结构（V1 主路径）</text>
+
+<!-- Facade -->
+<rect x="40" y="56" width="980" height="86" rx="10" fill="#0f2438" stroke="#38bdf8" stroke-width="1.6"/>
+<text x="60" y="82" fill="#38bdf8" font-size="13.5" font-weight="bold">TransferEngine  （外观 · include/transfer_engine.h）</text>
+<text x="60" y="106" fill="#c9d9ee" font-size="12">init() · openSegment() · registerLocalMemory() · allocateBatchID() · submitTransfer() · getTransferStatus() · sendNotifyByID()</text>
+<rect x="700" y="60" width="150" height="34" rx="8" fill="#0c1826" stroke="#2a4a66"/>
+<text x="775" y="82" fill="#8fb8d8" font-size="11" text-anchor="middle" class="svgm">impl_ (V1)</text>
+<rect x="860" y="60" width="150" height="34" rx="8" fill="#0c1826" stroke="#2a4a66"/>
+<text x="935" y="82" fill="#8fb8d8" font-size="11" text-anchor="middle" class="svgm">impl_tent_ (TENT)</text>
+<text x="700" y="130" fill="#6b7d99" font-size="10.5" class="svgm">use_tent_ = getenv("MC_USE_TENT")</text>
+
+<!-- Impl -->
+<rect x="40" y="176" width="600" height="150" rx="10" fill="#101c30" stroke="#3a6a9a"/>
+<text x="60" y="202" fill="#7fc8e8" font-size="13" font-weight="bold">TransferEngineImpl（src/transfer_engine_impl.cpp）</text>
+<text x="60" y="226" fill="#93a5c0" font-size="11.5" class="svgm">metadata_ : TransferMetadata        // 元数据 + 握手 + 通知</text>
+<text x="60" y="246" fill="#93a5c0" font-size="11.5" class="svgm">multi_transports_ : MultiTransport  // transport 注册表 + batch 管理</text>
+<text x="60" y="266" fill="#93a5c0" font-size="11.5" class="svgm">local_topology_ : Topology          // 本地 NIC/NUMA/GPU 拓扑</text>
+<text x="60" y="286" fill="#93a5c0" font-size="11.5" class="svgm">local_memory_regions_ : MR 去重表   // 注册内存重叠检查</text>
+<text x="60" y="312" fill="#6b7d99" font-size="10.5">submitTransfer/getTransferStatus 内联于头文件，附带 WITH_METRICS 埋点</text>
+
+<!-- Metadata -->
+<rect x="680" y="176" width="340" height="150" rx="10" fill="#151322" stroke="#c084fc"/>
+<text x="700" y="202" fill="#c084fc" font-size="13" font-weight="bold">TransferMetadata</text>
+<text x="700" y="226" fill="#93a5c0" font-size="11.5">storage_plugin_：Etcd / Redis / HTTP 三选一</text>
+<text x="700" y="246" fill="#93a5c0" font-size="11.5">handshake_plugin_：SocketHandShakePlugin(TCP JSON)</text>
+<text x="700" y="266" fill="#93a5c0" font-size="11.5">职责：segment 发布/查询 · QP 握手 · notify 队列 · probe</text>
+<text x="700" y="286" fill="#6b7d99" font-size="11" class="svgm">key 前缀 mooncake/[cluster_id/]{rpc_meta,ram}/</text>
+<text x="700" y="312" fill="#6b7d99" font-size="10.5">P2PHANDSHAKE 模式：无 storage，仅握手直连</text>
+
+<!-- MultiTransport -->
+<rect x="40" y="360" width="600" height="120" rx="10" fill="#0f2a2a" stroke="#22d3ee"/>
+<text x="60" y="386" fill="#22d3ee" font-size="13" font-weight="bold">MultiTransport（src/multi_transport.cpp）</text>
+<text x="60" y="410" fill="#93a5c0" font-size="11.5">installTransport(proto, topo)：按协议字符串 + 编译宏 new 对应 Transport</text>
+<text x="60" y="430" fill="#93a5c0" font-size="11.5">selectTransport()：读对端 SegmentDesc.protocol 决定走哪个 transport —— 异构两端各选各的</text>
+<text x="60" y="450" fill="#93a5c0" font-size="11.5">allocateBatchID()/freeBatchID()：BatchID 就是 BatchDesc* 指针值（热路径省一次查表）</text>
+<text x="60" y="472" fill="#6b7d99" font-size="10.5">transport_map_: rdma/tcp/nvmeof/nvlink/hip/ascend/… 共 19 种（第 04 章展开）</text>
+
+<!-- Topology -->
+<rect x="680" y="360" width="340" height="120" rx="10" fill="#131a28" stroke="#31435f"/>
+<text x="700" y="386" fill="#93a5c0" font-size="13" font-weight="bold">Topology（src/topology.cpp）</text>
+<text x="700" y="410" fill="#6b7d99" font-size="11.5" class="svgm">matrix: {"cpu:0"→{preferred,avail}</text>
+<text x="700" y="428" fill="#6b7d99" font-size="11.5" class="svgm">        "cuda:0"→{…}, "*"→{…}}</text>
+<text x="700" y="452" fill="#6b7d99" font-size="10.5">discover() 探测 HCA/NUMA/GPU PCI 距离</text>
+
+<line x1="340" y1="142" x2="340" y2="172" stroke="#5f7ba6" stroke-width="1.6" marker-end="url(#t3a)"/>
+<line x1="775" y1="94" x2="775" y2="96" stroke="#5f7ba6" stroke-width="0"/>
+<line x1="500" y1="142" x2="500" y2="172" stroke="#5f7ba6" stroke-width="1.6" marker-end="url(#t3a)"/>
+<line x1="640" y1="251" x2="676" y2="251" stroke="#5f7ba6" stroke-width="1.6" marker-end="url(#t3a)"/>
+<line x1="340" y1="326" x2="340" y2="356" stroke="#5f7ba6" stroke-width="1.6" marker-end="url(#t3a)"/>
+<line x1="500" y1="326" x2="500" y2="356" stroke="#5f7ba6" stroke-width="1.6" marker-end="url(#t3a)"/>
+<text x="30" y="506" fill="#5b6c88" font-size="11">读源码建议：从 transfer_engine.cpp 的转发方法进入 → transfer_engine_impl.cpp 的 init() → multi_transport.cpp 的 installTransport()</text>
+</svg>
+<div class="figcap"><b>图 3-1</b><span>TE 三层类结构：外观（V1/TENT 双后端）→ 实现 → {MultiTransport, TransferMetadata, Topology}</span></div>
+</div>
+
+<h2><span class="n">3.2</span>初始化流程：<code>init()</code> 的七步</h2>
+<p><code>TransferEngineImpl::init()</code>（<code>src/transfer_engine_impl.cpp</code>）是理解 TE 的地图。它完成端口规划、元数据接入与 transport 自动安装：</p>
+<ol>
+<li><strong>资源上限</strong>：<code>setFilesLimit()</code> 把 RLIMIT_NOFILE 拉满（RDMA QP/大内存映射都吃 fd）；</li>
+<li><strong>身份解析</strong>：解析 local_server_name（昇腾下格式特殊 <code>ip:port:npu_x</code>）；</li>
+<li><strong>RPC 端口</strong>：三种模式 —— 旧版指定端口 / <code>P2PHANDSHAKE</code>（随机端口 + 无元数据中心）/ 默认随机端口（15000–17000，可 <code>MC_TCP_BIND_ADDRESS</code> 绑定），端口信息注册进元数据中心；</li>
+<li><strong>元数据接入</strong>：按 conn string 的协议头（<code>etcd://</code>、<code>redis://</code>、<code>http://</code>、<code>p2p://</code>）创建 TransferMetadata；</li>
+<li><strong>拓扑发现</strong>：<code>MC_CUSTOM_TOPO_JSON</code> 优先，否则 <code>Topology::discover()</code>；</li>
+<li><strong>自动装 transport</strong>：有可用 HCA → 装 <code>rdma</code>；无 HCA 或 <code>MC_FORCE_TCP</code> → 装 <code>tcp</code>；再按编译宏叠加 GPU 直通类 transport（nvlink/hip/ascend/maca/cxl…）；</li>
+<li><strong>发布自身</strong>：<code>updateLocalSegmentDesc()</code> 把 segment 描述符（含每个 buffer 的 lkey/rkey 数组）写入元数据中心，等待被发现。</li>
+</ol>
+
+<div class="fig">
+<svg viewBox="0 0 1060 560" role="img" aria-label="init 流程">
+<defs>
+<marker id="t3b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#38bdf8"/></marker>
+<marker id="t3c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="560" fill="#0c1322" rx="10"/>
+<text x="28" y="34" fill="#8fa5c8" font-size="13" font-weight="bold">init() 主流程与 transport 自动安装决策</text>
+
+<rect x="60" y="56" width="260" height="46" rx="9" fill="#101c30" stroke="#3a6a9a"/>
+<text x="190" y="78" fill="#c9d9ee" font-size="12" text-anchor="middle" font-weight="bold">① setFilesLimit()</text>
+<text x="190" y="94" fill="#6b7d99" font-size="10" text-anchor="middle" class="svgm">RLIMIT_NOFILE 拉满</text>
+<rect x="60" y="120" width="260" height="46" rx="9" fill="#101c30" stroke="#3a6a9a"/>
+<text x="190" y="142" fill="#c9d9ee" font-size="12" text-anchor="middle" font-weight="bold">② 解析 local_server_name</text>
+<text x="190" y="158" fill="#6b7d99" font-size="10" text-anchor="middle">昇腾格式 ip:port:npu_x</text>
+<rect x="60" y="184" width="260" height="46" rx="9" fill="#101c30" stroke="#3a6a9a"/>
+<text x="190" y="206" fill="#c9d9ee" font-size="12" text-anchor="middle" font-weight="bold">③ 绑定 RPC 端口</text>
+<text x="190" y="222" fill="#6b7d99" font-size="10" text-anchor="middle">随机 15000–17000 / P2P / 旧式</text>
+<rect x="60" y="248" width="260" height="46" rx="9" fill="#151322" stroke="#c084fc"/>
+<text x="190" y="270" fill="#c9d9ee" font-size="12" text-anchor="middle" font-weight="bold">④ 创建 TransferMetadata</text>
+<text x="190" y="286" fill="#6b7d99" font-size="10" text-anchor="middle" class="svgm">etcd:// redis:// http:// p2p://</text>
+<rect x="60" y="312" width="260" height="46" rx="9" fill="#131a28" stroke="#31435f"/>
+<text x="190" y="334" fill="#c9d9ee" font-size="12" text-anchor="middle" font-weight="bold">⑤ Topology::discover()</text>
+<text x="190" y="350" fill="#6b7d99" font-size="10" text-anchor="middle" class="svgm">HCA/NUMA/GPU PCI 距离</text>
+<rect x="60" y="376" width="260" height="46" rx="9" fill="#0f2a2a" stroke="#22d3ee"/>
+<text x="190" y="398" fill="#c9d9ee" font-size="12" text-anchor="middle" font-weight="bold">⑥ installTransport(×N)</text>
+<text x="190" y="414" fill="#6b7d99" font-size="10" text-anchor="middle">按拓扑 + 编译宏自动装配</text>
+<rect x="60" y="440" width="260" height="46" rx="9" fill="#0f2438" stroke="#38bdf8"/>
+<text x="190" y="462" fill="#c9d9ee" font-size="12" text-anchor="middle" font-weight="bold">⑦ updateLocalSegmentDesc</text>
+<text x="190" y="478" fill="#6b7d99" font-size="10" text-anchor="middle">发布描述符 → 元数据中心</text>
+<line x1="190" y1="102" x2="190" y2="116" stroke="#38bdf8" stroke-width="1.6" marker-end="url(#t3b)"/>
+<line x1="190" y1="166" x2="190" y2="180" stroke="#38bdf8" stroke-width="1.6" marker-end="url(#t3b)"/>
+<line x1="190" y1="230" x2="190" y2="244" stroke="#38bdf8" stroke-width="1.6" marker-end="url(#t3b)"/>
+<line x1="190" y1="294" x2="190" y2="308" stroke="#38bdf8" stroke-width="1.6" marker-end="url(#t3b)"/>
+<line x1="190" y1="358" x2="190" y2="372" stroke="#38bdf8" stroke-width="1.6" marker-end="url(#t3b)"/>
+<line x1="190" y1="422" x2="190" y2="436" stroke="#38bdf8" stroke-width="1.6" marker-end="url(#t3b)"/>
+
+<!-- decision -->
+<rect x="470" y="120" width="200" height="60" rx="30" fill="#1a2a1a" stroke="#fbbf24"/>
+<text x="570" y="146" fill="#fbbf24" font-size="12.5" text-anchor="middle" font-weight="bold">拓扑里有可用 HCA？</text>
+<text x="570" y="166" fill="#a08a50" font-size="10" text-anchor="middle" class="svgm">isIbDeviceAvailable()</text>
+<line x1="320" y1="335" x2="466" y2="180" stroke="#94a3b8" stroke-width="1.3" stroke-dasharray="5 4" marker-end="url(#t3c)"/>
+
+<rect x="750" y="60" width="270" height="72" rx="10" fill="#0f2a2a" stroke="#22d3ee"/>
+<text x="885" y="86" fill="#7fd8e8" font-size="12" text-anchor="middle" font-weight="bold">YES → install("rdma")</text>
+<text x="885" y="106" fill="#6b9aaa" font-size="10" text-anchor="middle">BAREX HCA（华为 eIC 网卡）→ 改装 barex</text>
+<text x="885" y="122" fill="#6b9aaa" font-size="10" text-anchor="middle">MC_MS_FILTERS / filter 可裁剪设备</text>
+<rect x="750" y="152" width="270" height="72" rx="10" fill="#131a28" stroke="#94a3b8"/>
+<text x="885" y="178" fill="#c9d9ee" font-size="12" text-anchor="middle" font-weight="bold">NO → install("tcp")</text>
+<text x="885" y="198" fill="#6b7d99" font-size="10" text-anchor="middle">或 MC_FORCE_TCP 强制 TCP 兜底</text>
+<text x="885" y="214" fill="#6b7d99" font-size="10" text-anchor="middle">连接池化 PooledConnection</text>
+<line x1="672" y1="140" x2="746" y2="106" stroke="#94a3b8" stroke-width="1.4" marker-end="url(#t3c)"/>
+<line x1="672" y1="160" x2="746" y2="182" stroke="#94a3b8" stroke-width="1.4" marker-end="url(#t3c)"/>
+
+<rect x="750" y="250" width="270" height="250" rx="10" fill="#101c30" stroke="#3a6a9a"/>
+<text x="770" y="276" fill="#7fc8e8" font-size="12" font-weight="bold">编译宏叠加（GPU 直通系）</text>
+<text x="770" y="300" fill="#93a5c0" font-size="11" class="svgm">USE_INTRA_NVLINK → 节点内 NVLink P2P</text>
+<text x="770" y="322" fill="#93a5c0" font-size="11" class="svgm">USE_MNNVL → 跨节点 NVLink (MNNVL)</text>
+<text x="770" y="344" fill="#93a5c0" font-size="11" class="svgm">USE_CUDA+HIP → 节点内 GPU IPC</text>
+<text x="770" y="366" fill="#93a5c0" font-size="11" class="svgm">ASCEND_HETEROGENEOUS → 异构 RDMA</text>
+<text x="770" y="388" fill="#93a5c0" font-size="11" class="svgm">USE_MACA / USE_MUSA → 国产 GPU</text>
+<text x="770" y="410" fill="#93a5c0" font-size="11" class="svgm">MC_CXL_DEV_PATH → CXL 共享内存</text>
+<text x="770" y="432" fill="#93a5c0" font-size="11" class="svgm">USE_EFA → AWS EFA</text>
+<text x="770" y="466" fill="#6b7d99" font-size="10">一个节点可同时装多个 transport，</text>
+<text x="770" y="484" fill="#6b7d99" font-size="10">传输时按对端协议动态二选一</text>
+<line x1="570" y1="180" x2="570" y2="250" stroke="#94a3b8" stroke-width="1.3" stroke-dasharray="5 4" marker-end="url(#t3c)"/>
+<line x1="672" y1="290" x2="746" y2="290" stroke="#94a3b8" stroke-width="1.3" stroke-dasharray="5 4" marker-end="url(#t3c)"/>
+<line x1="320" y1="399" x2="746" y2="399" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="5 4" marker-end="url(#t3c)" opacity=".55"/>
+</svg>
+<div class="figcap"><b>图 3-2</b><span>init() 七步流程与 transport 自动装配决策树（源码：transfer_engine_impl.cpp init() / multi_transport.cpp installTransport()）</span></div>
+</div>
+
+<h2><span class="n">3.3</span>元数据服务与 TCP 握手协议</h2>
+<p>TE 的一切"发现"都围绕 <strong>SegmentDesc</strong>（节点描述符）展开：每个节点把自己的名字、协议、网卡设备列表、拓扑矩阵、已注册内存（buffer 地址 + 每张网卡的 lkey/rkey）打包成 JSON，写进元数据中心。对端 <code>openSegment("hostA")</code> 时拉取并缓存。数据真正传输前还要一次 <strong>TCP 握手</strong>：发起方通过 SocketHandShakePlugin 与对端交换 <code>gid/lid/qp_num</code>，双方各自把 QP 状态机推进到 RTR/RTS，RDMA 链路才建立。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1060 470" role="img" aria-label="元数据与握手时序">
+<defs>
+<marker id="t3d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#38bdf8"/></marker>
+<marker id="t3e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#c084fc"/></marker>
+<marker id="t3f" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#22d3ee"/></marker>
+</defs>
+<rect x="0" y="0" width="1060" height="470" fill="#0c1322" rx="10"/>
+<text x="28" y="32" fill="#8fa5c8" font-size="13" font-weight="bold">注册 → 发现 → 握手 → 数据 四段时序</text>
+
+<!-- lifelines -->
+<rect x="60" y="50" width="170" height="40" rx="8" fill="#0f2438" stroke="#38bdf8"/>
+<text x="145" y="76" fill="#7fc8e8" font-size="12.5" text-anchor="middle" font-weight="bold">节点 A（发起方）</text>
+<rect x="445" y="50" width="170" height="40" rx="8" fill="#151322" stroke="#c084fc"/>
+<text x="530" y="76" fill="#c084fc" font-size="12.5" text-anchor="middle" font-weight="bold">元数据中心 (etcd)</text>
+<rect x="830" y="50" width="170" height="40" rx="8" fill="#132a22" stroke="#34d399"/>
+<text x="915" y="76" fill="#7fd8a8" font-size="12.5" text-anchor="middle" font-weight="bold">节点 B（响应方）</text>
+<line x1="145" y1="90" x2="145" y2="440" stroke="#2a3a55" stroke-dasharray="3 4"/>
+<line x1="530" y1="90" x2="530" y2="440" stroke="#2a3a55" stroke-dasharray="3 4"/>
+<line x1="915" y1="90" x2="915" y2="440" stroke="#2a3a55" stroke-dasharray="3 4"/>
+
+<!-- phase 1 -->
+<text x="30" y="116" fill="#5f7ba6" font-size="10.5" font-weight="bold">① 注册</text>
+<line x1="915" y1="126" x2="534" y2="126" stroke="#c084fc" stroke-width="1.5" marker-end="url(#t3e)"/>
+<text x="720" y="120" fill="#c084fc" font-size="11" text-anchor="middle" class="svgm">PUT mooncake/…/ram/hostB  (SegmentDesc: devices+buffers+lkey/rkey)</text>
+<!-- phase 2 -->
+<text x="30" y="156" fill="#5f7ba6" font-size="10.5" font-weight="bold">② 发现</text>
+<line x1="145" y1="166" x2="526" y2="166" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#t3d)"/>
+<text x="335" y="160" fill="#7fc8e8" font-size="11" text-anchor="middle" class="svgm">openSegment("hostB") → GET ram/hostB</text>
+<line x1="530" y1="176" x2="149" y2="176" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#t3d)"/>
+<text x="335" y="192" fill="#6b7d99" font-size="10.5" text-anchor="middle">SegmentDesc 本地缓存（metacache）· 协议字段决定 A 侧选 rdma 还是 tcp</text>
+<!-- phase 3 -->
+<text x="30" y="226" fill="#5f7ba6" font-size="10.5" font-weight="bold">③ 握手 (TCP :12001)</text>
+<line x1="145" y1="240" x2="911" y2="240" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#t3e)"/>
+<text x="530" y="234" fill="#94a3b8" font-size="11" text-anchor="middle" class="svgm">HandShakeReq{type=Connection, local_nic_path="A@mlx5_0", gid, lid, qp_num[2]}</text>
+<line x1="915" y1="252" x2="149" y2="252" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#t3e)"/>
+<text x="530" y="268" fill="#6b7d99" font-size="10.5" text-anchor="middle" class="svgm">B 收到 → onSetupRdmaConnections → QP→RTR/RTS；A 同步 RTR/RTS —— 双侧 Endpoint 就绪</text>
+<!-- phase 4 -->
+<text x="30" y="306" fill="#5f7ba6" font-size="10.5" font-weight="bold">④ 数据 + 通知</text>
+<line x1="145" y1="320" x2="911" y2="320" stroke="#22d3ee" stroke-width="2.4" marker-end="url(#t3f)"/>
+<text x="530" y="312" fill="#22d3ee" font-size="11.5" text-anchor="middle" font-weight="bold">RDMA WRITE（64KB slice 流水线 · 零拷贝 · 不经过任何中间节点）</text>
+<line x1="915" y1="340" x2="149" y2="340" stroke="#38bdf8" stroke-width="1.3" stroke-dasharray="2 4" marker-end="url(#t3d)"/>
+<text x="530" y="356" fill="#6b7d99" font-size="10.5" text-anchor="middle" class="svgm">完成后 notify 队列投递 NotifyDesc{name,msg}（对端 getBatchTransferStatus 时取走）</text>
+
+<rect x="60" y="390" width="940" height="60" rx="8" fill="#101827" stroke="#22304a"/>
+<text x="80" y="414" fill="#93a5c0" font-size="11">源码锚点：注册=updateLocalSegmentDesc() · 发现=getSegmentDescByName/ByID() · 握手=sendHandshake()/setupConnectionsByActive()·</text>
+<text x="80" y="434" fill="#93a5c0" font-size="11" class="svgm">setupConnectionsByPassive() · 通知=notifys 队列（transfer_metadata.cpp）</text>
+</svg>
+<div class="figcap"><b>图 3-3</b><span>一次跨节点传输前的完整协调时序：注册 → 发现 → TCP 握手 → RDMA 数据</span></div>
+</div>
+
+<h2><span class="n">3.4</span>核心数据结构：SegmentDesc 与 TransferRequest</h2>
+<p>TE 的公开 API 极小，全部围绕两个结构：<strong>SegmentDesc</strong> 描述"网络上有什么"（静态拓扑与内存布局），<strong>TransferRequest</strong> 描述"搬什么"（动态请求）。理解这两个结构，TE 的其他代码都能自行看懂。</p>
+
+<div class="grid g2">
+<div class="card"><h4>SegmentDesc（transfer_metadata.h）</h4>
+<p><code class="svgm">name</code> 节点名 · <code class="svgm">protocol</code> 协议（决定选哪个 transport）<br>
+<code class="svgm">devices[]</code> 每张网卡的 name/lid/gid<br>
+<code class="svgm">topology</code> 位置→HCA 优先矩阵（cpu:N / cuda:N / *）<br>
+<code class="svgm">buffers[]</code> 已注册内存：addr/length + lkey[]/rkey[]（每 HCA 一个）<br>
+<code class="svgm">nvmeof_buffers[] / cxl_* / rank_info(昇腾)</code></p></div>
+<div class="card"><h4>TransferRequest（transport/transport.h）</h4>
+<p><code class="svgm">opcode</code> READ / WRITE<br>
+<code class="svgm">source</code> 本地地址（必须已注册）<br>
+<code class="svgm">target_id</code> 对端 SegmentID · <code class="svgm">target_offset</code> 对端偏移<br>
+<code class="svgm">length</code> 字节数 · <code class="svgm">advise_retry_cnt</code><br>
+结果经 <code class="svgm">getTransferStatus(batch_id, task_id)</code> 轮询：<br>WAITING→PENDING→COMPLETED/FAILED/TIMEOUT</p></div>
+</div>
+
+<div class="co"><b>BatchID 的取巧设计：</b><code>allocateBatchID(n)</code> 直接 <code>new BatchDesc</code> 并把<strong>指针值当作 ID 返回</strong>（<code>multi_transport.cpp</code>）。热路径上省掉一次 ID→对象查表；代价是调用方必须保证 batch 在传输完成前不释放（<code>freeBatchID</code> 会拒绝释放未完成的 batch）。</div>
+
+<div class="co warn"><b>V1 与 TENT 并存：</b>仓库同时孵化着新一代引擎 <code>tent/</code>（支持 tcp/rdma/shm/nvlink/mnnvl/gds/io_uring/ascend 等后端，自带独立运行时与 Python 绑定），通过 <code>MC_USE_TENT=1</code> 即可在同一外观 API 下切换。日常读 V1 源码即可，两者接口语义一致。</div>
+
+<div class="pager">
+  <a href="02-physical-architecture.html"><span class="lab">◀ PREV</span>02 · 物理架构</a>
+  <a class="nx" href="04-rdma-deep-dive.html"><span class="lab">NEXT ▶</span>04 · Transport 家族与 RDMA 深度</a>
+</div>
+<div class="foot">03 · Transfer Engine 架构 · Mooncake 源码深度学习手册</div>
+</main>
+</body>
+</html>

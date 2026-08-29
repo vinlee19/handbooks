@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mooncake 源码深度学习手册 · 目录</title>
+<style>
+:root{
+  --bg:#0a0e16; --panel:#0f1524; --panel2:#131b2e; --line:#22304a; --line2:#2c3d5c;
+  --tx:#dbe6f5; --tx2:#93a5c0; --tx3:#6b7d99;
+  --te:#38bdf8; --rdma:#22d3ee; --store:#a78bfa; --master:#fbbf24; --client:#34d399;
+  --ha:#fb7185; --eco:#f472b6; --ctl:#94a3b8;
+  --code-bg:#0b1220;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--te);text-decoration:none} a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:16px;height:54px}
+.logo{font-weight:700;font-size:16px;color:var(--tx);white-space:nowrap;flex-shrink:0;letter-spacing:.3px}
+.logo .m{color:var(--te)}
+.topnav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
+.topnav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.topnav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.topnav a.on{color:var(--ac,#38bdf8);background:rgba(56,189,248,.12)}
+.hero{padding:44px 0 30px;border-bottom:1px solid var(--line);
+  background:radial-gradient(1100px 300px at 18% 0%,rgba(56,189,248,.10),transparent)}
+.kicker{color:var(--te);font-size:13px;font-weight:600;letter-spacing:2px}
+h1{font-size:33px;line-height:1.3;margin:10px 0 8px}
+.sub{color:var(--tx2);font-size:15px;max-width:880px}
+h2{font-size:22px;margin:46px 0 14px;display:flex;align-items:center;gap:10px}
+h2 .n{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border-radius:8px;
+ background:rgba(56,189,248,.13);color:var(--te);font-size:14px;font-weight:700}
+h3{font-size:17px;margin:28px 0 10px;color:var(--tx)}
+p{margin:10px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:22px 0}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.stat .v{font-size:22px;font-weight:700;color:var(--te)}
+.stat .l{font-size:12.5px;color:var(--tx2);margin-top:2px}
+.fig{margin:22px 0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px}
+.fig svg{display:block;width:100%;height:auto}
+.figcap{display:flex;gap:8px;align-items:baseline;padding:10px 4px 6px;color:var(--tx2);font-size:13px;border-top:1px dashed var(--line);margin-top:12px}
+.figcap b{color:var(--te);font-size:12.5px;white-space:nowrap}
+.toc{display:grid;grid-template-columns:repeat(auto-fill,minmax(310px,1fr));gap:12px;margin:20px 0}
+.toc a{display:block;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;color:var(--tx2);font-size:13.5px}
+.toc a:hover{border-color:var(--te);text-decoration:none;color:var(--tx)}
+.toc a .tn{font-weight:700;color:var(--te);margin-right:8px}
+.toc a .tt{font-weight:600;color:var(--tx);font-size:15px}
+.tag{display:inline-block;font-size:11.5px;padding:2px 9px;border-radius:99px;border:1px solid var(--line2);color:var(--tx2);margin:2px 4px 2px 0}
+.co{border:1px solid var(--line);border-left:3px solid var(--te);background:var(--panel);border-radius:10px;padding:12px 16px;margin:16px 0;font-size:14px;color:var(--tx2)}
+.co b{color:var(--tx)}
+.co.tip{border-left-color:#34d399}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font:12px ui-monospace,Menlo,monospace;color:#8fd3ff}
+ul,ol{color:#c7d3e6;padding-left:22px} li{margin:5px 0}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 40px}
+svg text{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.svgm{font-family:ui-monospace,Menlo,Consolas,monospace!important}
+</style>
+</head>
+<body style="--ac:#38bdf8">
+<header class="top"><div class="wrap">
+  <span class="logo"><span class="m">🌙</span> Mooncake 源码学习</span>
+  <nav class="topnav">
+    <a class="on" href="index.html">目录</a><a href="01-overview.html">01 全景</a><a href="02-physical-architecture.html">02 物理架构</a><a href="03-transfer-engine.html">03 传输引擎</a><a href="04-rdma-deep-dive.html">04 RDMA</a><a href="05-store-architecture.html">05 Store</a><a href="06-store-master.html">06 Master</a><a href="07-store-client.html">07 Client</a><a href="08-storage-ha.html">08 存储与HA</a><a href="09-ecosystem.html">09 生态</a><a href="10-dataflow.html">10 数据流</a>
+  </nav>
+</div></header>
+
+<section class="hero"><div class="wrap">
+  <div class="kicker">MOONCAKE SOURCE STUDY · FROM 0 TO 1</div>
+  <h1>Mooncake 源码深度学习手册</h1>
+  <p class="sub">Mooncake 是月之暗面（Moonshot AI）Kimi 大模型服务的底层平台，核心是 <strong>KVCache-centric 分离式架构</strong>：将 LLM 推理的 Prefill 与 Decode 集群分离（PD 分离），并把 GPU 集群中空闲的 CPU / DRAM / SSD 组织成分布式的 KVCache 池。本手册基于对全部源码的逐模块深度分析，用 11 页图文带你从零理解它的原理、架构与底层实现。基线版本：<code>main @ 53e41174</code>（debug-learning 分支）。</p>
+  <div class="stats">
+    <div class="stat"><div class="v">~22 万行</div><div class="l">核心源码（C++/Python/Go/Rust）</div></div>
+    <div class="stat"><div class="v">19 种</div><div class="l">Transfer Engine 传输后端</div></div>
+    <div class="stat"><div class="v">1024</div><div class="l">Store Master 元数据分片</div></div>
+    <div class="stat"><div class="v">FAST'25</div><div class="l">最佳论文 · 吞吐最高 +525%</div></div>
+    <div class="stat"><div class="v">87 GB/s</div><div class="l">4×200GbE RoCE 实测带宽</div></div>
+  </div>
+</div></section>
+
+<main class="wrap">
+
+<h2><span class="n">☰</span>学习路径（从 0 到 1）</h2>
+<p>建议按四个阶段阅读：<strong>哲学 → 物理 → 核心机制 → 端到端串联</strong>。每页都可独立阅读，但按顺序读体验最佳。</p>
+<div class="co tip"><b>阶段一 · 为什么：</b>01 全景哲学 —— 先理解 Mooncake 解决什么问题；<br>
+<b>阶段二 · 在哪里：</b>02 物理架构 —— 集群与节点内的硬件布局，数据到底"躺在哪"；<br>
+<b>阶段三 · 怎么做：</b>03/04 传输引擎与 RDMA、05/06/07 Store 三部曲、08 存储与高可用 —— 两大核心组件的源码级拆解；<br>
+<b>阶段四 · 串起来：</b>09 生态集成 + 10 端到端数据流 —— vLLM/SGLang 如何接入，一次请求如何流经全系统。</div>
+
+<h2><span class="n">🗺</span>仓库模块全景</h2>
+<p>整个仓库由两大核心引擎（Transfer Engine 与 Mooncake Store）、一组围绕它们的通信/并行组件，以及集成绑定层构成。下图是模块地图与依赖方向（箭头指向被依赖方）。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1040 560" role="img" aria-label="Mooncake 仓库模块全景图">
+<defs>
+<marker id="ar0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5f7ba6"/></marker>
+</defs>
+<rect x="0" y="0" width="1040" height="560" fill="#0c1322" rx="10"/>
+<text x="30" y="38" fill="#8fa5c8" font-size="13" font-weight="bold">MOONCAKE REPO MAP · 模块依赖全景</text>
+
+<!-- 推理引擎层 -->
+<rect x="30" y="60" width="420" height="86" rx="10" fill="#121a30" stroke="#31435f"/>
+<text x="48" y="86" fill="#93a5c0" font-size="12">推理引擎 / 上层应用</text>
+<text x="48" y="112" fill="#dbe6f5" font-size="14" font-weight="bold">vLLM · SGLang · TensorRT-LLM · LMDeploy</text>
+<text x="48" y="132" fill="#6b7d99" font-size="11.5" class="svgm">mooncake.connector / HiCache backend / TE 库</text>
+
+<!-- Python 绑定层 -->
+<rect x="30" y="180" width="420" height="80" rx="10" fill="#16202f" stroke="#3a5a75"/>
+<text x="48" y="205" fill="#7fc8e8" font-size="12">Python 绑定与集成层</text>
+<text x="48" y="228" fill="#dbe6f5" font-size="13.5" font-weight="bold">mooncake-integration (pybind11) + python/ + mooncake-wheel</text>
+<text x="48" y="248" fill="#6b7d99" font-size="11.5" class="svgm">mooncake.engine · mooncake.store · connector_v1 · EP buffer</text>
+
+<!-- 核心两大引擎 -->
+<rect x="30" y="300" width="255" height="120" rx="10" fill="#0f2438" stroke="#38bdf8" stroke-width="1.5"/>
+<text x="48" y="326" fill="#38bdf8" font-size="12.5" font-weight="bold">mooncake-transfer-engine</text>
+<text x="48" y="347" fill="#c9d9ee" font-size="12">统一数据传输引擎（V1 + TENT）</text>
+<text x="48" y="366" fill="#8fa5c8" font-size="11.5">RDMA · TCP · NVMe-oF · NVLink · CXL</text>
+<text x="48" y="384" fill="#8fa5c8" font-size="11.5">EFA · HIP · 昇腾/鲲鹏 · MACA/MUSA…（19 种）</text>
+<text x="48" y="404" fill="#6b7d99" font-size="11" class="svgm">~10.7 万行 C++</text>
+
+<rect x="305" y="300" width="255" height="120" rx="10" fill="#191330" stroke="#a78bfa" stroke-width="1.5"/>
+<text x="323" y="326" fill="#a78bfa" font-size="12.5" font-weight="bold">mooncake-store</text>
+<text x="323" y="347" fill="#c9d9ee" font-size="12">分布式 KVCache 池</text>
+<text x="323" y="366" fill="#8fa5c8" font-size="11.5">Master(元数据) + Client(数据面)</text>
+<text x="323" y="384" fill="#8fa5c8" font-size="11.5">副本/租约/淘汰 · HA · SSD offload</text>
+<text x="323" y="404" fill="#6b7d99" font-size="11" class="svgm">~8.5 万行 C++</text>
+
+<!-- 公共组件 -->
+<rect x="30" y="452" width="255" height="76" rx="10" fill="#131a28" stroke="#31435f"/>
+<text x="48" y="478" fill="#93a5c0" font-size="12" font-weight="bold">mooncake-common</text>
+<text x="48" y="499" fill="#8fa5c8" font-size="11.5">Environ 配置 · 日志 · Go etcd/k8s-lease 封装</text>
+<text x="48" y="517" fill="#6b7d99" font-size="11">cmake 工具链 · asio 公共实现</text>
+
+<rect x="305" y="452" width="255" height="76" rx="10" fill="#131a28" stroke="#31435f"/>
+<text x="323" y="478" fill="#93a5c0" font-size="12" font-weight="bold">benchmarks · docs · docker · monitoring</text>
+<text x="323" y="499" fill="#8fa5c8" font-size="11.5">transfer_engine_bench · master_bench · FAST25 trace</text>
+<text x="323" y="517" fill="#6b7d99" font-size="11">Prometheus + Grafana · 部署镜像</text>
+
+<!-- 右列组件群 -->
+<rect x="620" y="60" width="390" height="100" rx="10" fill="#1a1220" stroke="#f472b6"/>
+<text x="638" y="86" fill="#f472b6" font-size="12.5" font-weight="bold">并行 / 通信组件群</text>
+<text x="638" y="108" fill="#c9d9ee" font-size="12" class="svgm">mooncake-ep</text><text x="820" y="108" fill="#8fa5c8" font-size="11.5">容错 DeepEP + IBGDA（MoE）</text>
+<text x="638" y="128" fill="#c9d9ee" font-size="12" class="svgm">mooncake-pg</text><text x="820" y="128" fill="#8fa5c8" font-size="11.5">PyTorch 容错 ProcessGroup</text>
+<text x="638" y="148" fill="#c9d9ee" font-size="12" class="svgm">mooncake-rl</text><text x="820" y="148" fill="#8fa5c8" font-size="11.5">RLHF rollout↔训练 示例</text>
+
+<rect x="620" y="186" width="390" height="74" rx="10" fill="#1a1220" stroke="#f472b6"/>
+<text x="638" y="212" fill="#c9d9ee" font-size="12" class="svgm">mooncake-p2p-store</text><text x="820" y="212" fill="#8fa5c8" font-size="11.5">Go · checkpoint P2P 分发</text>
+<text x="638" y="234" fill="#c9d9ee" font-size="12" class="svgm">mooncake-reshard</text><text x="820" y="234" fill="#8fa5c8" font-size="11.5">Python · 权重重分片规划器</text>
+
+<!-- 控制面 -->
+<rect x="620" y="286" width="390" height="134" rx="10" fill="#151322" stroke="#c084fc" stroke-dasharray="6 4"/>
+<text x="638" y="312" fill="#c084fc" font-size="12.5" font-weight="bold">控制面基础设施（外部依赖）</text>
+<text x="638" y="336" fill="#c9d9ee" font-size="12" class="svgm">etcd / redis / k8s-lease</text>
+<text x="638" y="357" fill="#8fa5c8" font-size="11.5">segment 注册 · HA 选主 · OpLog 复制通道</text>
+<text x="638" y="380" fill="#93a5c0" font-size="12" class="svgm">元数据替代：HTTP metadata server</text>
+<text x="638" y="400" fill="#8fa5c8" font-size="11.5">无 etcd 的轻量部署（P2PHANDSHAKE 可完全离线）</text>
+
+<!-- 依赖箭头 -->
+<line x1="240" y1="146" x2="240" y2="176" stroke="#5f7ba6" stroke-width="1.6" marker-end="url(#ar0)"/>
+<line x1="240" y1="260" x2="160" y2="296" stroke="#5f7ba6" stroke-width="1.6" marker-end="url(#ar0)"/>
+<line x1="240" y1="260" x2="410" y2="296" stroke="#5f7ba6" stroke-width="1.6" marker-end="url(#ar0)"/>
+<line x1="433" y1="420" x2="433" y2="448" stroke="#5f7ba6" stroke-width="1.6" marker-end="url(#ar0)"/>
+<line x1="157" y1="420" x2="157" y2="448" stroke="#5f7ba6" stroke-width="1.6" marker-end="url(#ar0)"/>
+<line x1="285" y1="368" x2="301" y2="368" stroke="#5f7ba6" stroke-width="1.6" marker-end="url(#ar0)"/>
+<text x="286" y="358" fill="#6b7d99" font-size="10.5">数据面</text>
+<line x1="815" y1="164" x2="240" y2="330" stroke="#5f7ba6" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#ar0)" opacity=".7"/>
+<line x1="815" y1="260" x2="300" y2="392" stroke="#5f7ba6" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#ar0)" opacity=".7"/>
+<line x1="700" y1="282" x2="520" y2="330" stroke="#c084fc" stroke-width="1.3" stroke-dasharray="5 4" marker-end="url(#ar0)" opacity=".8"/>
+<text x="540" y="296" fill="#c084fc" font-size="10.5">选主/OpLog</text>
+<text x="30" y="552" fill="#5b6c88" font-size="11">实线 = 编译/调用依赖 · 虚线 = 运行时依赖 · mooncake-ep/pg 直接复用 Transfer Engine 的 RDMA 能力</text>
+</svg>
+<div class="figcap"><b>图 0-1</b><span>Mooncake 仓库模块地图：两大引擎 + 组件群 + Python 绑定层 + 控制面依赖</span></div>
+</div>
+
+<h2><span class="n">📚</span>章节目录</h2>
+<div class="toc">
+  <a href="01-overview.html"><span class="tn">01</span><span class="tt">项目全景与设计哲学</span><br>KVCache-centric 是什么、PD 分离、FAST'25 论文核心思想</a>
+  <a href="02-physical-architecture.html"><span class="tn">02</span><span class="tt">物理架构（必读）</span><br>集群部署总图、节点内 GPU/NIC/NUMA/SSD 拓扑、通道分离</a>
+  <a href="03-transfer-engine.html"><span class="tn">03</span><span class="tt">Transfer Engine 架构</span><br>三层类结构、初始化流程、元数据插件、TCP 握手协议</a>
+  <a href="04-rdma-deep-dive.html"><span class="tn">04</span><span class="tt">Transport 家族与 RDMA 深度</span><br>19 种传输后端、QP 管理、内存注册、三级流控、拓扑选路</a>
+  <a href="05-store-architecture.html"><span class="tn">05</span><span class="tt">Mooncake Store 总体架构</span><br>Master-Client 分离、控制面/数据面、Replica 状态机</a>
+  <a href="06-store-master.html"><span class="tn">06</span><span class="tt">Master 深度剖析</span><br>1024 分片、三段式写、租约与软硬 pin、两遍淘汰、快照</a>
+  <a href="07-store-client.html"><span class="tn">07</span><span class="tt">Client 深度剖析</span><br>RealClient/DummyClient、分配器体系、共享内存零拷贝、Put/Get 全链路</a>
+  <a href="08-storage-ha.html"><span class="tn">08</span><span class="tt">存储后端与高可用</span><br>三层缓存、SSD offload、Bucket 存储、3FS USRBIO、HA 选主/OpLog</a>
+  <a href="09-ecosystem.html"><span class="tn">09</span><span class="tt">生态集成</span><br>vLLM 双路径、SGLang、P2P Store、EP(IBGDA)、PG、RL、Reshard</a>
+  <a href="10-dataflow.html"><span class="tn">10</span><span class="tt">端到端数据流</span><br>XpYd 一次请求全链路、Put/Get 泳道时序、故障场景</a>
+</div>
+
+<h2><span class="n">🔍</span>如何对照源码阅读</h2>
+<p>手册中所有结论均给出 <code>文件 : 函数/类</code> 定位。推荐三个对照动作：</p>
+<ul>
+<li><strong>定位源码</strong>：核心目录是 <code>mooncake-transfer-engine/src</code>（引擎与传输）、<code>mooncake-store/src</code>（Master 与 Client）、<code>mooncake-store/src/ha</code>（高可用）。</li>
+<li><strong>跑起来</strong>：最小集群只需三个进程 —— <code>mooncake-master</code>（元数据服务）、<code>etcd</code>（或 <code>mooncake_http_metadata_server</code> 替代）、以及挂载了 segment 的客户端。docker/ 目录有一键镜像。</li>
+<li><strong>观察行为</strong>：Master 暴露 Prometheus 指标（默认 :9003，monitoring/ 有 Grafana 面板）；环境变量（<code>MC_*</code>，见 <code>mooncake-transfer-engine/src/config.cpp</code> 的 <code>globalConfig()</code>）可调整 slice 大小、QP 深度、日志级别等，是调试的钥匙。</li>
+</ul>
+<div class="co"><b>版本说明：</b>本手册基于 <code>main @ 53e41174</code>。Mooncake 迭代很快（TENT 新一代引擎正在并行演进），若行号有漂移，请以函数/类名为锚点检索。</div>
+
+<div class="foot">Mooncake 源码深度学习手册 · 基于 kvcache-ai/Mooncake main 分支源码分析 · 供学习交流使用</div>
+</main>
+</body>
+</html>
