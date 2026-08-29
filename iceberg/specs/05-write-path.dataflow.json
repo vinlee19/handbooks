@@ -1,0 +1,244 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Iceberg 写路径：从 TaskWriter 到目录指针生效",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      520
+    ],
+    "views": [
+      {
+        "id": "files",
+        "label": "文件生成",
+        "focus": [
+          "writer",
+          "output",
+          "deletes"
+        ],
+        "note": "TaskWriter 按分区聚簇写数据文件，删除走位置/等值/DV 三种形态。"
+      },
+      {
+        "id": "manifests",
+        "label": "清单组装",
+        "focus": [
+          "fastappend",
+          "mergedelta",
+          "mlist"
+        ],
+        "note": "FastAppend 只追加新清单；合并类操作重写受影响的旧清单。"
+      },
+      {
+        "id": "commit",
+        "label": "提交生效",
+        "focus": [
+          "mlist",
+          "meta",
+          "cas"
+        ],
+        "note": "manifest-list + 新 metadata.json，最后目录 CAS 定胜负。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "引擎写入"
+    },
+    {
+      "label": "文件生成"
+    },
+    {
+      "label": "清单组装"
+    },
+    {
+      "label": "提交物"
+    },
+    {
+      "label": "目录生效"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "writer",
+      "type": "backend",
+      "label": "TaskWriter",
+      "sublabel": "clustered / fanout",
+      "stage": 0,
+      "row": 1,
+      "tag": "行 → 文件"
+    },
+    {
+      "id": "output",
+      "type": "database",
+      "label": "DataFile",
+      "sublabel": "Parquet/ORC",
+      "stage": 1,
+      "row": 0,
+      "tag": "+列统计"
+    },
+    {
+      "id": "deletes",
+      "type": "database",
+      "label": "删除文件",
+      "sublabel": "位置·等值·DV",
+      "stage": 1,
+      "row": 2,
+      "tag": "V3 用 DV"
+    },
+    {
+      "id": "fastappend",
+      "type": "backend",
+      "label": "FastAppend",
+      "sublabel": "旧清单不动",
+      "stage": 2,
+      "row": 0,
+      "tag": "无冲突"
+    },
+    {
+      "id": "mergedelta",
+      "type": "backend",
+      "label": "Merge/RowDelta",
+      "sublabel": "重写受影响清单",
+      "stage": 2,
+      "row": 2,
+      "tag": "带校验"
+    },
+    {
+      "id": "mlist",
+      "type": "database",
+      "label": "manifest-list",
+      "sublabel": "snap-*.avro",
+      "stage": 3,
+      "row": 1,
+      "tag": "每尝试一份"
+    },
+    {
+      "id": "meta",
+      "type": "database",
+      "label": "metadata.json",
+      "sublabel": "v<N> 递增",
+      "stage": 4,
+      "row": 0
+    },
+    {
+      "id": "cas",
+      "type": "backend",
+      "label": "目录 CAS",
+      "sublabel": "指针原子交换",
+      "stage": 4,
+      "row": 2,
+      "tag": "终局"
+    }
+  ],
+  "flows": [
+    {
+      "id": "w_data",
+      "from": "writer",
+      "to": "output",
+      "label": "写行",
+      "variant": "emphasis"
+    },
+    {
+      "id": "w_del",
+      "from": "writer",
+      "to": "deletes",
+      "label": "写删除"
+    },
+    {
+      "id": "a_data",
+      "from": "output",
+      "to": "fastappend",
+      "label": "appendFiles",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "m_data",
+      "from": "output",
+      "to": "mergedelta",
+      "label": "overwrite/rowDelta",
+      "labelDy": -22,
+      "labelAt": [
+        700,
+        215
+      ]
+    },
+    {
+      "id": "m_del",
+      "from": "deletes",
+      "to": "mergedelta",
+      "label": "addDeletes",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        620,
+        415
+      ]
+    },
+    {
+      "id": "f_a",
+      "from": "fastappend",
+      "to": "mlist",
+      "label": "新清单 + 引用旧清单"
+    },
+    {
+      "id": "f_m",
+      "from": "mergedelta",
+      "to": "mlist",
+      "label": "过滤重写清单"
+    },
+    {
+      "id": "f_meta",
+      "from": "mlist",
+      "to": "meta",
+      "label": "登记快照",
+      "variant": "emphasis"
+    },
+    {
+      "id": "f_cas",
+      "from": "meta",
+      "to": "cas",
+      "label": "swap 指针",
+      "variant": "emphasis",
+      "route": "vertical-channel",
+      "channelX": 1000,
+      "labelAt": [
+        1000,
+        271
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "写侧纪律",
+      "items": [
+        "文件名含分区/task/UUID，写完先不 commit，失败可整体丢弃",
+        "聚簇写（Clustered）要求输入有序；乱序用 FanoutWriter 每分区一把",
+        "V3 起 position delete 必须写成 deletion vector（Puffin 位图）"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "两种追加策略",
+      "items": [
+        "FastAppend：零重写，代价是清单数量线性增长",
+        "MergeAppend/RowDelta：bin-pack 合并 + 过滤重写，保持清单精简",
+        "删除类操作靠 ManifestFilterManager 摘条目，不动数据文件"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "提交物最小化",
+      "items": [
+        "重试只重写 manifest-list，清单与数据文件全部复用",
+        "metadata.json 递增版本，旧版本进 metadata-log 供时间旅行",
+        "目录 CAS 失败即整体重放（见时序图）"
+      ]
+    }
+  ]
+}

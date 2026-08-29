@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Iceberg 生命周期：ManifestEntry 的状态与文件归宿",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      620
+    ],
+    "views": [
+      {
+        "id": "entry",
+        "label": "条目状态",
+        "focus": [
+          "added",
+          "existing",
+          "deleted"
+        ],
+        "note": "条目状态只是记账：ADDED → EXISTING → DELETED，数据文件本身不动。"
+      },
+      {
+        "id": "rewrite",
+        "label": "清单重写",
+        "focus": [
+          "deleted",
+          "rewritten",
+          "gone"
+        ],
+        "note": "重写清单把 DELETED 条目摘掉，随后数据文件引用计数归零。"
+      },
+      {
+        "id": "rollback",
+        "label": "回滚复活",
+        "focus": [
+          "deleted",
+          "rollback"
+        ],
+        "note": "回滚让旧快照树复活：文件仍是 DELETED 记账，但重新可读。"
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "ManifestEntry 状态机"
+    },
+    {
+      "id": "abortlane",
+      "label": "回滚分支"
+    },
+    {
+      "id": "terminal",
+      "label": "物理归宿"
+    }
+  ],
+  "states": [
+    {
+      "id": "added",
+      "type": "start",
+      "label": "ADDED",
+      "lane": "main",
+      "col": 0,
+      "step": "01"
+    },
+    {
+      "id": "existing",
+      "type": "active",
+      "label": "EXISTING",
+      "lane": "main",
+      "col": 1,
+      "step": "02"
+    },
+    {
+      "id": "deleted",
+      "type": "decision",
+      "label": "DELETED",
+      "lane": "main",
+      "col": 2,
+      "step": "03"
+    },
+    {
+      "id": "rewritten",
+      "type": "active",
+      "label": "清单重写摘除",
+      "lane": "main",
+      "col": 3,
+      "step": "04"
+    },
+    {
+      "id": "gone",
+      "type": "success",
+      "label": "数据文件删除",
+      "lane": "main",
+      "col": 4,
+      "step": "05"
+    },
+    {
+      "id": "rollback",
+      "type": "neutral",
+      "label": "回滚复活",
+      "lane": "abortlane",
+      "col": 1
+    },
+    {
+      "id": "orphan",
+      "type": "failure",
+      "label": "孤儿清理",
+      "lane": "terminal",
+      "col": 2,
+      "yOffset": -15
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t_rb",
+      "from": "deleted",
+      "to": "rollback",
+      "label": "回滚恢复可见性",
+      "variant": "security"
+    },
+    {
+      "id": "t_orphan",
+      "from": "rewritten",
+      "to": "orphan",
+      "label": "引用归零 · 宽限后清理",
+      "variant": "dashed",
+      "labelAt": [
+        700,
+        350
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "状态只是记账",
+      "items": [
+        "新文件首次提交记 ADDED；随后每个快照引用它记 EXISTING",
+        "删除/覆盖把条目标成 DELETED，数据文件原地不动",
+        "序列号在继承规则下不变：重写清单不改变文件的逻辑时间"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "回滚的魔法",
+      "items": [
+        "回滚 = 把分支指回旧快照，旧树的清单原样可用",
+        "被标 DELETED 的文件在新树里重新可读，无需拷贝任何数据",
+        "cherry-pick 只允许 append 类快照换基（SOURCE_SNAPSHOT_ID 防环）"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "物理归宿",
+      "items": [
+        "过期快照（ExpireSnapshots）后不再被引用的清单/数据文件可删",
+        "RemoveOrphanFiles 全量对比文件系统与元数据，默认 3 天宽限",
+        "Rest 指针丢失即元数据丢失：目录层是唯一可信源"
+      ]
+    }
+  ]
+}

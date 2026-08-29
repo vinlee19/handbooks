@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Iceberg 时序图：两个 Writer 的乐观提交与重试",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1560,
+      760
+    ],
+    "column_fit": "spread",
+    "views": [
+      {
+        "id": "prepare",
+        "label": "并行准备",
+        "focus": [
+          "w1",
+          "w2",
+          "ops",
+          "mlist"
+        ],
+        "note": "双方各自写 manifest-list，互不阻塞，纯本地操作。"
+      },
+      {
+        "id": "cas",
+        "label": "CAS 定胜负",
+        "focus": [
+          "ops",
+          "catalog",
+          "wmeta"
+        ],
+        "note": "先提交者成功换指针，后提交者发现 base 失效。"
+      },
+      {
+        "id": "retry",
+        "label": "失败重试",
+        "focus": [
+          "w2",
+          "ops",
+          "catalog"
+        ],
+        "note": "CommitFailed → refresh → 重新 apply，新清单引用旧清单。"
+      }
+    ]
+  },
+  "participants": [
+    {
+      "id": "w1",
+      "type": "external",
+      "label": "Writer A"
+    },
+    {
+      "id": "w2",
+      "type": "external",
+      "label": "Writer B"
+    },
+    {
+      "id": "ops",
+      "type": "backend",
+      "label": "TableOperations"
+    },
+    {
+      "id": "catalog",
+      "type": "backend",
+      "label": "Catalog 指针"
+    },
+    {
+      "id": "mlist",
+      "type": "database",
+      "label": "manifest-list"
+    },
+    {
+      "id": "wmeta",
+      "type": "database",
+      "label": "metadata.json"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 312,
+      "label": "各自准备"
+    },
+    {
+      "from": 332,
+      "to": 432,
+      "label": "A 抢先提交"
+    },
+    {
+      "from": 452,
+      "to": 545,
+      "label": "B 冲突重试"
+    },
+    {
+      "from": 562,
+      "to": 660,
+      "label": "B 再提交成功"
+    }
+  ],
+  "messages": [
+    {
+      "id": "s_a1",
+      "from": "w1",
+      "to": "ops",
+      "y": 185,
+      "label": "apply：生成新清单",
+      "variant": "emphasis"
+    },
+    {
+      "id": "s_a2",
+      "from": "ops",
+      "to": "mlist",
+      "y": 220,
+      "label": "写 snap-A.avro"
+    },
+    {
+      "id": "s_b1",
+      "from": "w2",
+      "to": "ops",
+      "y": 262,
+      "label": "apply：生成新清单",
+      "variant": "emphasis"
+    },
+    {
+      "id": "s_b2",
+      "from": "ops",
+      "to": "mlist",
+      "y": 297,
+      "label": "写 snap-B.avro"
+    },
+    {
+      "id": "s_c1",
+      "from": "w1",
+      "to": "ops",
+      "y": 340,
+      "label": "commit(base v41, new v42)",
+      "variant": "emphasis"
+    },
+    {
+      "id": "s_cas1",
+      "from": "ops",
+      "to": "catalog",
+      "y": 375,
+      "label": "CAS v41→v42 成功"
+    },
+    {
+      "id": "s_w1",
+      "from": "ops",
+      "to": "wmeta",
+      "y": 410,
+      "label": "写 v42.metadata.json"
+    },
+    {
+      "id": "s_c2",
+      "from": "w2",
+      "to": "ops",
+      "y": 474,
+      "label": "commit(base v41, new v43)"
+    },
+    {
+      "id": "s_cas2",
+      "from": "ops",
+      "to": "catalog",
+      "y": 487,
+      "label": "v41 已失效 → 拒绝",
+      "variant": "security"
+    },
+    {
+      "id": "s_fail",
+      "from": "catalog",
+      "to": "ops",
+      "y": 522,
+      "label": "CommitFailedException",
+      "variant": "return"
+    },
+    {
+      "id": "s_retry",
+      "from": "ops",
+      "to": "w2",
+      "y": 557,
+      "label": "refresh → 重新 apply",
+      "variant": "dashed"
+    },
+    {
+      "id": "s_c3",
+      "from": "w2",
+      "to": "ops",
+      "y": 596,
+      "label": "commit(base v42, new v43)"
+    },
+    {
+      "id": "s_cas3",
+      "from": "ops",
+      "to": "catalog",
+      "y": 631,
+      "label": "CAS v42→v43 成功",
+      "variant": "emphasis"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "ops",
+      "from": 180,
+      "to": 636,
+      "type": "backend"
+    },
+    {
+      "participant": "catalog",
+      "from": 370,
+      "to": 636,
+      "type": "backend"
+    },
+    {
+      "participant": "mlist",
+      "from": 215,
+      "to": 302,
+      "type": "database"
+    },
+    {
+      "participant": "wmeta",
+      "from": 405,
+      "to": 415,
+      "type": "database"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "准备阶段无锁",
+      "items": [
+        "写数据文件、写 manifest、写 manifest-list 全部本地进行",
+        "序列号继承规则让清单在重试间原样复用",
+        "互不阻塞：两个 Writer 的准备阶段完全并行"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "指针 CAS 定胜负",
+      "items": [
+        "胜负只在 metadata_location 的原子交换一刻决定",
+        "Hive 比对参数值 / REST 校验 assert-ref-snapshot-id / Hadoop rename",
+        "输家的 manifest-list 成为垃圾，由 cleanUncommitted 删除"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "重试即重放",
+      "items": [
+        "CommitFailed 后 refresh 最新元数据，重新 apply 一遍操作",
+        "新 manifest 引用旧清单，成本只有重写 manifest-list",
+        "指数退避（100ms 起），默认最多 4 次；超时则抛 CommitStateUnknown"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Iceberg 核心原理：读路径的四层裁剪漏斗",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      520
+    ],
+    "views": [
+      {
+        "id": "funnel",
+        "label": "裁剪漏斗",
+        "focus": [
+          "expr",
+          "proj",
+          "manifestev",
+          "metrics",
+          "filescan"
+        ],
+        "note": "谓词逐层下推：分区投影 → 清单摘要 → 列统计，大多数文件在读取前被丢弃。"
+      },
+      {
+        "id": "snapshot",
+        "label": "快照定位",
+        "focus": [
+          "snapshot",
+          "manifestev"
+        ],
+        "note": "branch/tag 决定起点快照，manifest-list 摘要先行过滤。"
+      },
+      {
+        "id": "tasks",
+        "label": "任务下发",
+        "focus": [
+          "filescan",
+          "combined"
+        ],
+        "note": "128MB 切分 + bin-pack 打包成 CombinedScanTask 交给引擎。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "输入"
+    },
+    {
+      "label": "投影"
+    },
+    {
+      "label": "清单级裁剪"
+    },
+    {
+      "label": "文件级裁剪"
+    },
+    {
+      "label": "任务下发"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "expr",
+      "type": "frontend",
+      "label": "行过滤",
+      "sublabel": "Unbound→Bound",
+      "stage": 0,
+      "row": 0,
+      "tag": "谓词"
+    },
+    {
+      "id": "snapshot",
+      "type": "database",
+      "label": "快照",
+      "sublabel": "branch/tag",
+      "stage": 0,
+      "row": 2,
+      "tag": "起点"
+    },
+    {
+      "id": "proj",
+      "type": "backend",
+      "label": "分区谓词投影",
+      "sublabel": "inclusive 投影",
+      "stage": 1,
+      "row": 0,
+      "tag": "Transform"
+    },
+    {
+      "id": "manifestev",
+      "type": "backend",
+      "label": "清单摘要裁剪",
+      "sublabel": "上下界·空值",
+      "stage": 2,
+      "row": 0,
+      "tag": "ManifestEvaluator"
+    },
+    {
+      "id": "metrics",
+      "type": "backend",
+      "label": "列统计裁剪",
+      "sublabel": "InclusiveMetrics",
+      "stage": 3,
+      "row": 0,
+      "tag": "文件级"
+    },
+    {
+      "id": "filescan",
+      "type": "database",
+      "label": "FileScanTask",
+      "sublabel": "data+deletes",
+      "stage": 4,
+      "row": 1,
+      "tag": "+ residual 补滤"
+    },
+    {
+      "id": "combined",
+      "type": "database",
+      "label": "任务组",
+      "sublabel": "bin-pack 打包",
+      "stage": 4,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "id": "f_bind",
+      "from": "expr",
+      "to": "proj",
+      "label": "绑定谓词",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "f_snap",
+      "from": "snapshot",
+      "to": "manifestev",
+      "label": "manifest-list",
+      "fromSide": "right",
+      "toSide": "bottom",
+      "via": [
+        [
+          370,
+          385
+        ],
+        [
+          370,
+          240
+        ],
+        [
+          530,
+          240
+        ]
+      ]
+    },
+    {
+      "id": "f_proj",
+      "from": "proj",
+      "to": "manifestev",
+      "label": "分区谓词",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "f_man",
+      "from": "manifestev",
+      "to": "metrics",
+      "label": "存活清单",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "f_file",
+      "from": "metrics",
+      "to": "filescan",
+      "label": "数据文件"
+    },
+    {
+      "id": "f_pack",
+      "from": "filescan",
+      "to": "combined",
+      "label": "切分打包",
+      "route": "vertical-channel",
+      "channelX": 1000
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "四层裁剪",
+      "items": [
+        "清单级：分区字段的 contains_null/lower/upper 摘要，整个 manifest 被跳过",
+        "文件级：每列 valueCounts/lowerBounds/upperBounds，Inclusive 评估器丢文件",
+        "行组级：Parquet 行组统计与字典再剪一次（ParquetMetricsRowGroupFilter）"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "投影的艺术",
+      "items": [
+        "行谓词经 Transform.project 变成分区谓词：ts>day(x) → 分区日上界",
+        "不可投影的谓词宽松投影成 alwaysTrue，不漏数据",
+        "残余表达式 = 分区元组算不掉的部分，读行时兜底过滤"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "增量读取",
+      "items": [
+        "IncrementalAppendScan 按 snapshotId 集合过滤 ADDED 条目",
+        "changelog 扫描跳过 replace 操作，按 changeOrdinal 排序",
+        "删除文件按序列号过滤：dataSequence > 起始序列号才生效"
+      ]
+    }
+  ]
+}

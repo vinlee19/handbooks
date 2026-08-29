@@ -1,0 +1,385 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Iceberg 物理架构：Catalog 指针 + 元数据树 + 数据文件",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1395,
+      640
+    ],
+    "repository": {
+      "url": "https://github.com/vinlee19/iceberg.git",
+      "revision": "6a51bb3681e21e05e11394024fb13acd3ecddf2e"
+    },
+    "views": [
+      {
+        "id": "control",
+        "label": "提交控制面",
+        "focus": [
+          "engines",
+          "catalog",
+          "ops"
+        ],
+        "note": "引擎经 Catalog 拿到 TableOperations，提交就是在目录上做指针 CAS。"
+      },
+      {
+        "id": "tree",
+        "label": "元数据树",
+        "focus": [
+          "metadata",
+          "manifestlist",
+          "manifest",
+          "datafiles"
+        ],
+        "note": "metadata.json → manifest-list → manifest → 数据文件，四层可独立演进。"
+      },
+      {
+        "id": "io",
+        "label": "存储抽象",
+        "focus": [
+          "fileio",
+          "s3"
+        ],
+        "note": "一切文件读写都走 FileIO 接口，S3/HDFS/GCS 可插拔。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "engines",
+      "type": "external",
+      "label": "计算引擎",
+      "sublabel": "Spark · Flink · Trino",
+      "pos": [
+        40,
+        260
+      ],
+      "size": [
+        160,
+        80
+      ]
+    },
+    {
+      "id": "catalog",
+      "type": "backend",
+      "label": "Catalog",
+      "sublabel": "Hive · REST · Nessie · JDBC",
+      "pos": [
+        280,
+        260
+      ],
+      "size": [
+        170,
+        80
+      ],
+      "sources": [
+        {
+          "path": "core/src/main/java/org/apache/iceberg/BaseMetastoreCatalog.java",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "ops",
+      "type": "backend",
+      "label": "TableOperations",
+      "sublabel": "commit(base,new) CAS",
+      "pos": [
+        520,
+        260
+      ],
+      "size": [
+        180,
+        80
+      ],
+      "sources": [
+        {
+          "path": "core/src/main/java/org/apache/iceberg/BaseMetastoreTableOperations.java",
+          "line": 109
+        }
+      ]
+    },
+    {
+      "id": "metadata",
+      "type": "database",
+      "label": "metadata.json",
+      "sublabel": "v00001-uuid 版本链",
+      "pos": [
+        790,
+        130
+      ],
+      "size": [
+        200,
+        90
+      ],
+      "sources": [
+        {
+          "path": "core/src/main/java/org/apache/iceberg/TableMetadata.java",
+          "line": 244
+        }
+      ]
+    },
+    {
+      "id": "manifestlist",
+      "type": "database",
+      "label": "manifest-list",
+      "sublabel": "snap-<id>.avro",
+      "pos": [
+        1070,
+        130
+      ],
+      "size": [
+        190,
+        90
+      ],
+      "sources": [
+        {
+          "path": "core/src/main/java/org/apache/iceberg/SnapshotProducer.java",
+          "line": 611
+        }
+      ]
+    },
+    {
+      "id": "manifest",
+      "type": "database",
+      "label": "Manifest 文件",
+      "sublabel": "entry 状态 + 序列号",
+      "pos": [
+        790,
+        300
+      ],
+      "size": [
+        200,
+        90
+      ],
+      "sources": [
+        {
+          "path": "core/src/main/java/org/apache/iceberg/ManifestEntry.java",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "datafiles",
+      "type": "database",
+      "label": "DataFile",
+      "sublabel": "Parquet/ORC · 列统计",
+      "pos": [
+        1070,
+        300
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "api/src/main/java/org/apache/iceberg/DataFile.java",
+          "line": 100
+        }
+      ]
+    },
+    {
+      "id": "deletes",
+      "type": "database",
+      "label": "DeleteFile / DV",
+      "sublabel": "位置·等值删除 · Puffin",
+      "pos": [
+        1070,
+        440
+      ],
+      "size": [
+        190,
+        80
+      ],
+      "sources": [
+        {
+          "path": "core/src/main/java/org/apache/iceberg/DeletionVector.java",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "fileio",
+      "type": "backend",
+      "label": "FileIO 抽象",
+      "sublabel": "S3FileIO · HadoopFileIO",
+      "pos": [
+        280,
+        430
+      ],
+      "size": [
+        180,
+        80
+      ],
+      "sources": [
+        {
+          "path": "api/src/main/java/org/apache/iceberg/io/FileIO.java",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "s3",
+      "type": "cloud",
+      "label": "对象存储",
+      "sublabel": "S3 · HDFS · GCS",
+      "pos": [
+        40,
+        500
+      ],
+      "size": [
+        160,
+        70
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "元数据树（表的真实形态）",
+      "wraps": [
+        "metadata",
+        "manifestlist",
+        "manifest",
+        "datafiles",
+        "deletes"
+      ],
+      "pad": 18
+    },
+    {
+      "kind": "region",
+      "label": "提交控制面",
+      "wraps": [
+        "catalog",
+        "ops"
+      ],
+      "pad": 14
+    },
+    {
+      "kind": "region",
+      "label": "存储抽象",
+      "wraps": [
+        "fileio"
+      ],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    {
+      "id": "t_load",
+      "from": "engines",
+      "to": "catalog",
+      "label": "loadTable / commit",
+      "variant": "emphasis",
+      "labelAt": [
+        240,
+        352
+      ]
+    },
+    {
+      "id": "t_cas",
+      "from": "catalog",
+      "to": "ops",
+      "label": "指针交换",
+      "variant": "emphasis"
+    },
+    {
+      "id": "t_meta",
+      "from": "ops",
+      "to": "metadata",
+      "label": "写新版本 JSON",
+      "variant": "emphasis"
+    },
+    {
+      "id": "t_mlist",
+      "from": "metadata",
+      "to": "manifestlist",
+      "label": "当前快照指向"
+    },
+    {
+      "id": "t_ref",
+      "from": "manifestlist",
+      "to": "manifest",
+      "label": "引用清单",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "t_entry",
+      "from": "manifest",
+      "to": "datafiles",
+      "label": "entry 记录文件"
+    },
+    {
+      "id": "t_del",
+      "from": "manifest",
+      "to": "deletes",
+      "label": "删除清单",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "top",
+      "via": [
+        [
+          1020,
+          345
+        ],
+        [
+          1020,
+          420
+        ],
+        [
+          1165,
+          420
+        ]
+      ],
+      "labelAt": [
+        1000,
+        405
+      ]
+    },
+    {
+      "id": "t_io1",
+      "from": "ops",
+      "to": "fileio",
+      "label": "newInput/OutputFile"
+    },
+    {
+      "id": "t_io2",
+      "from": "fileio",
+      "to": "s3",
+      "label": "SDK 访问"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "表 = 目录 + 树",
+      "items": [
+        "catalog 只存一个指针（metadata_location），表的一切在元数据树里",
+        "每次提交产生新的 metadata.json（v+UUID 命名），旧版本进 metadata-log",
+        "切换表状态 = 原子交换指针，不存在原地修改"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "四层树各司其职",
+      "items": [
+        "manifest-list 每快照一份，只含清单摘要（分区上下界）",
+        "manifest 记录 entry 状态（ADDED/EXISTING/DELETED）与序列号",
+        "数据文件带列统计 + split_offsets；删除文件/DV 独立存放"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Format 版本",
+      "items": [
+        "V2 引入序列号与删除文件；V3 引入行血缘（row lineage）与 DV",
+        "V4 支持 Parquet manifest 与可选 location；默认建表仍是 V2",
+        "name mapping 让 schema 演进后老文件仍按列 id 正确读取"
+      ]
+    }
+  ]
+}

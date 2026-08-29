@@ -1,0 +1,364 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Iceberg 核心交互：乐观提交与各目录的原子原语",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      620
+    ],
+    "repository": {
+      "url": "https://github.com/vinlee19/iceberg.git",
+      "revision": "6a51bb3681e21e05e11394024fb13acd3ecddf2e"
+    },
+    "views": [
+      {
+        "id": "retry",
+        "label": "重试回路",
+        "focus": [
+          "producer",
+          "taskops",
+          "retry"
+        ],
+        "note": "apply → CAS → 失败则 refresh 重放，指数退避至多 4 次。"
+      },
+      {
+        "id": "catalogs",
+        "label": "目录原语",
+        "focus": [
+          "hms",
+          "rest",
+          "hadoop"
+        ],
+        "note": "每个目录用自己的原子原语完成指针交换。"
+      },
+      {
+        "id": "unknown",
+        "label": "未知状态",
+        "focus": [
+          "rest",
+          "unknown"
+        ],
+        "note": "超时类失败触发 checkCommitStatus 复核，不盲目重试。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "producer",
+      "type": "backend",
+      "label": "SnapshotProducer",
+      "sublabel": "refresh → apply → 提交",
+      "pos": [
+        40,
+        260
+      ],
+      "size": [
+        180,
+        90
+      ],
+      "sources": [
+        {
+          "path": "core/src/main/java/org/apache/iceberg/SnapshotProducer.java",
+          "line": 478
+        }
+      ]
+    },
+    {
+      "id": "validation",
+      "type": "security",
+      "label": "冲突校验",
+      "sublabel": "validateNoConflicting*",
+      "pos": [
+        310,
+        120
+      ],
+      "size": [
+        180,
+        80
+      ],
+      "sources": [
+        {
+          "path": "core/src/main/java/org/apache/iceberg/MergingSnapshotProducer.java",
+          "line": 363
+        }
+      ]
+    },
+    {
+      "id": "taskops",
+      "type": "backend",
+      "label": "TableOperations",
+      "sublabel": "stale base 即拒绝",
+      "pos": [
+        310,
+        400
+      ],
+      "size": [
+        180,
+        80
+      ],
+      "sources": [
+        {
+          "path": "core/src/main/java/org/apache/iceberg/BaseMetastoreTableOperations.java",
+          "line": 109
+        }
+      ]
+    },
+    {
+      "id": "retry",
+      "type": "messagebus",
+      "label": "Tasks.retry",
+      "sublabel": "指数退避 ×4",
+      "pos": [
+        310,
+        260
+      ],
+      "size": [
+        180,
+        70
+      ],
+      "sources": [
+        {
+          "path": "core/src/main/java/org/apache/iceberg/util/Tasks.java",
+          "line": 430
+        }
+      ]
+    },
+    {
+      "id": "hms",
+      "type": "backend",
+      "label": "Hive Metastore",
+      "sublabel": "参数 CAS + 心跳锁",
+      "pos": [
+        790,
+        120
+      ],
+      "size": [
+        180,
+        70
+      ],
+      "sources": [
+        {
+          "path": "hive-metastore/src/main/java/org/apache/iceberg/hive/HiveTableOperations.java",
+          "line": 241
+        }
+      ]
+    },
+    {
+      "id": "rest",
+      "type": "backend",
+      "label": "REST Catalog",
+      "sublabel": "requirements + updates",
+      "pos": [
+        790,
+        260
+      ],
+      "size": [
+        180,
+        70
+      ],
+      "sources": [
+        {
+          "path": "core/src/main/java/org/apache/iceberg/rest/RESTTableOperations.java",
+          "line": 157
+        }
+      ]
+    },
+    {
+      "id": "hadoop",
+      "type": "backend",
+      "label": "HadoopCatalog",
+      "sublabel": "临时文件 + rename",
+      "pos": [
+        790,
+        400
+      ],
+      "size": [
+        180,
+        70
+      ],
+      "sources": [
+        {
+          "path": "core/src/main/java/org/apache/iceberg/hadoop/HadoopTableOperations.java",
+          "line": 131
+        }
+      ]
+    },
+    {
+      "id": "unknown",
+      "type": "external",
+      "label": "CommitStateUnknown",
+      "sublabel": "checkCommitStatus 复核",
+      "pos": [
+        790,
+        530
+      ],
+      "size": [
+        190,
+        66
+      ],
+      "sources": [
+        {
+          "path": "core/src/main/java/org/apache/iceberg/BaseMetastoreOperations.java",
+          "line": 63
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "目录实现（各自的原子原语）",
+      "wraps": [
+        "hms",
+        "rest",
+        "hadoop",
+        "unknown"
+      ],
+      "pad": 16
+    }
+  ],
+  "connections": [
+    {
+      "id": "k_valid",
+      "from": "producer",
+      "to": "validation",
+      "label": "apply 前校验",
+      "variant": "security",
+      "labelAt": [
+        230,
+        160
+      ]
+    },
+    {
+      "id": "k_commit",
+      "from": "producer",
+      "to": "taskops",
+      "label": "commit(base, new)",
+      "variant": "emphasis",
+      "labelAt": [
+        330,
+        352
+      ]
+    },
+    {
+      "id": "k_fail",
+      "from": "taskops",
+      "to": "retry",
+      "label": "CommitFailed",
+      "variant": "dashed"
+    },
+    {
+      "id": "k_retry",
+      "from": "retry",
+      "to": "producer",
+      "label": "refresh 后重放",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "bottom",
+      "via": [
+        [
+          270,
+          295
+        ],
+        [
+          270,
+          560
+        ],
+        [
+          130,
+          560
+        ]
+      ],
+      "labelAt": [
+        190,
+        585
+      ]
+    },
+    {
+      "id": "k_hms",
+      "from": "taskops",
+      "to": "hms",
+      "label": "参数 CAS",
+      "labelAt": [
+        745,
+        148
+      ]
+    },
+    {
+      "id": "k_rest",
+      "from": "taskops",
+      "to": "rest",
+      "label": "POST 409/5xx",
+      "variant": "emphasis",
+      "labelAt": [
+        742,
+        295
+      ]
+    },
+    {
+      "id": "k_hadoop",
+      "from": "taskops",
+      "to": "hadoop",
+      "label": "rename 原子",
+      "labelAt": [
+        748,
+        442
+      ]
+    },
+    {
+      "id": "k_unknown",
+      "from": "rest",
+      "to": "unknown",
+      "label": "5xx 超时",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "right",
+      "via": [
+        [
+          1020,
+          295
+        ],
+        [
+          1020,
+          563
+        ]
+      ],
+      "labelAt": [
+        1075,
+        430
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "追加永不冲突",
+      "items": [
+        "FastAppend / MergeAppend 没有冲突校验：并发 append 全部成功",
+        "冲突只在显式声明的操作间爆发：Overwrite / RowDelta / DeleteFiles",
+        "校验范围 = 起始快照之后的 APPEND/OVERWRITE 清单 + 冲突检测过滤"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "REST 的 assert 体系",
+      "items": [
+        "客户端发 requirements（AssertRefSnapshotID 等）+ updates",
+        "服务端校验失败返回 409 → 客户端重试；500/502/504 视为状态未知",
+        "多表事务走 /transactions/commit，一个请求带多张表的变更"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "垃圾清理",
+      "items": [
+        "重试前 cleanUncommitted 删除失败尝试的 manifest-list",
+        "CommitStateUnknown 不清理不重试，先复核目录里的真实状态",
+        "孤儿文件交给 RemoveOrphanFiles（默认 3 天宽限）"
+      ]
+    }
+  ]
+}

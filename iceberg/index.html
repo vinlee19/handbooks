@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Apache Iceberg 从 0 到 1：源码深度分析</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --card: #ffffff; --ink: #1a2233; --muted: #5b667a;
+    --line: #e3e7ee; --accent: #1d5fbf; --accent2: #b54708; --code-bg: #eef1f6; --tag-bg: #e7eefb;
+  }
+  html.dark {
+    --bg: #10131b; --card: #181c27; --ink: #e6e9f2; --muted: #98a2b8;
+    --line: #2a3040; --accent: #6fa8ff; --accent2: #f0a35e; --code-bg: #1f2432; --tag-bg: #1e2b47;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.75 "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 48px 28px 96px; }
+  header.hero { border-bottom: 3px solid var(--accent); padding-bottom: 28px; margin-bottom: 40px; }
+  h1 { font-size: 34px; margin: 0 0 10px; letter-spacing: .5px; }
+  .sub { color: var(--muted); font-size: 17px; }
+  h2 { font-size: 24px; margin: 52px 0 16px; padding-left: 14px; border-left: 5px solid var(--accent); }
+  h3 { font-size: 19px; margin: 30px 0 10px; color: var(--accent); }
+  p, li { color: var(--ink); }
+  .muted { color: var(--muted); }
+  code { background: var(--code-bg); padding: 2px 7px; border-radius: 6px;
+         font: 14px/1.6 "SF Mono", Menlo, Consolas, monospace; }
+  table { border-collapse: collapse; width: 100%; margin: 18px 0; font-size: 15px; }
+  th, td { border: 1px solid var(--line); padding: 9px 13px; text-align: left; vertical-align: top; }
+  th { background: var(--tag-bg); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; margin: 22px 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px;
+          box-shadow: 0 1px 4px rgba(15,23,42,.05); }
+  .card h4 { margin: 0 0 10px; font-size: 16.5px; }
+  .card p, .card li { font-size: 14.5px; color: var(--muted); }
+  .card ul { margin: 6px 0 0; padding-left: 18px; }
+  .card li { margin: 5px 0; }
+  a.dia { display: flex; align-items: center; gap: 14px; background: var(--card); border: 1px solid var(--line);
+          border-radius: 14px; padding: 18px 20px; margin: 14px 0; text-decoration: none; color: var(--ink);
+          transition: transform .12s ease, border-color .12s ease; }
+  a.dia:hover { transform: translateY(-2px); border-color: var(--accent); }
+  .num { flex: 0 0 46px; height: 46px; border-radius: 12px; background: var(--tag-bg); color: var(--accent);
+         display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 19px; }
+  a.dia b { font-size: 16.5px; display: block; }
+  a.dia span { color: var(--muted); font-size: 14px; }
+  .kicker { display: inline-block; background: var(--tag-bg); color: var(--accent); border-radius: 999px;
+            padding: 2px 12px; font-size: 13px; margin-right: 6px; }
+  .theme-btn { position: fixed; top: 18px; right: 18px; border: 1px solid var(--line); background: var(--card);
+               color: var(--ink); border-radius: 999px; padding: 7px 16px; cursor: pointer; font-size: 14px; }
+  .footer { margin-top: 70px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13.5px; }
+</style>
+</head>
+<body>
+<button class="theme-btn" onclick="document.documentElement.classList.toggle('dark')">🌓 主题</button>
+<div class="wrap">
+
+<header class="hero">
+  <h1>Apache Iceberg 从 0 到 1：源码深度分析</h1>
+  <div class="sub">apache/iceberg（本地 fork vinlee19/iceberg）· 基线 <code>6a51bb3681</code>（1.11.0-516）· 分析分支 <code>debug/learning</code> · 2026-08</div>
+  <p class="sub" style="margin-top:14px">Iceberg 是<strong>开放的表格式（table format）</strong>：它不是数据库，而是一套关于"如何用不可变文件 + 分层元数据 + 指针交换来管理海量数据表"的协议。Catalog 存一个指针，metadata.json 记全量状态，manifest-list/manifest 做增量记账，数据文件永远不可变。</p>
+  <p style="margin-top:10px">
+    <span class="kicker">Java ~5400 文件</span><span class="kicker">Format V1–V4</span><span class="kicker">默认建表 V2</span><span class="kicker">Apache-2.0</span>
+  </p>
+</header>
+
+<h2>一、图目录（交互式）</h2>
+<a class="dia" href="01-metadata-tree.html"><div class="num">01</div><div><b>物理架构图</b><span>Catalog 指针 + 元数据树 + 数据文件（architecture）</span></div></a>
+<a class="dia" href="02-scan-funnel.html"><div class="num">02</div><div><b>核心原理图</b><span>读路径的四层裁剪漏斗（dataflow）</span></div></a>
+<a class="dia" href="03-commit-protocol.html"><div class="num">03</div><div><b>核心交互图</b><span>乐观提交与各目录的原子原语（architecture）</span></div></a>
+<a class="dia" href="04-optimistic-commit.html"><div class="num">04</div><div><b>时序图</b><span>两个 Writer 的乐观提交与重试（sequence）</span></div></a>
+<a class="dia" href="05-write-path.html"><div class="num">05</div><div><b>写路径数据流</b><span>从 TaskWriter 到目录指针生效（dataflow）</span></div></a>
+<a class="dia" href="06-manifest-entry.html"><div class="num">06</div><div><b>生命周期图</b><span>ManifestEntry 状态与文件归宿（lifecycle）</span></div></a>
+
+<h2>二、元数据树：一张表就是一棵文件树</h2>
+<table>
+  <tr><th>层</th><th>文件</th><th>内容</th><th>数量级</th></tr>
+  <tr><td>指针</td><td>catalog 里的 <code>metadata_location</code></td><td>当前 metadata.json 的位置，原子交换的对象</td><td>1</td></tr>
+  <tr><td>根</td><td><code>v00001-uuid.metadata.json</code></td><td>schemas/partition-specs/snapshots/refs/统计文件 + metadata-log</td><td>每次提交 +1</td></tr>
+  <tr><td>快照清单</td><td><code>snap-&lt;id&gt;-&lt;uuid&gt;.avro</code></td><td>每个快照一份 manifest 列表 + 分区摘要（上下界/空值）</td><td>每快照 1</td></tr>
+  <tr><td>清单</td><td><code>&lt;uuid&gt;-m00N.avro</code></td><td>entry：状态(ADDED/EXISTING/DELETED) + 序列号 + 文件元数据</td><td>数百~数千</td></tr>
+  <tr><td>数据</td><td>Parquet / ORC / Avro</td><td>不可变列存 + 列统计 + split_offsets；删除独立成 DeleteFile/DV</td><td>十万级</td></tr>
+</table>
+<p class="muted">关键设计：<strong>逐层独立演进</strong>。提交重试只重写 manifest-list；清单复用靠序列号继承规则（新文件写 null，读者用 manifest 的序号补齐）；schema/spec 变更靠列 id 与 spec-id 而非名字。</p>
+
+<h2>三、五条核心原理</h2>
+
+<h3>1. 指针交换即事务</h3>
+<p>提交 = 写新 manifest-list + 写新 metadata.json + 目录 CAS。Hive 比对表参数、JDBC 用一条 <code>UPDATE ... WHERE metadata_location = old</code>、Glue 用 VersionId、DynamoDB 用条件写、REST 用 requirements 断言（<code>AssertRefSnapshotID</code>）、Hadoop 干脆用文件系统原子 rename。Catalog 只保证指针原子性，其余正确性由乐观重试与校验保证。</p>
+
+<h3>2. 乐观并发：追加永不冲突</h3>
+<p><code>FastAppend</code>/<code>MergeAppend</code> 没有 validate 覆写——并发 append 全部成功，后到者重放一次即可。<code>OverwriteFiles</code>/<code>RowDelta</code>/<code>DeleteFiles</code> 显式声明校验（<code>validateNoConflictingDataFiles</code> 等），冲突范围 = 起始快照之后的对应操作清单 ∩ 冲突检测过滤。失败抛 <code>CommitFailedException</code>（指数退避重试 ×4）；500/502/504 视为 <code>CommitStateUnknown</code>，先 <code>checkCommitStatus</code> 复核目录真实状态再决定，绝不盲目重试。</p>
+
+<h3>3. 读路径是四层裁剪漏斗</h3>
+<p><code>Table.newScan()</code> → 快照定位（branch/tag）→ <strong>清单级</strong>：分区字段的 contains_null/lower/upper 摘要直接跳过整个 manifest → <strong>文件级</strong>：<code>InclusiveMetricsEvaluator</code> 用每列 valueCounts/上下界丢文件 → <strong>行组级</strong>：Parquet 行组统计与字典再剪 → 读行时用<strong>残余表达式</strong>兜底（分区元组算不掉的部分）。谓词到分区的投影靠 <code>Transform.project</code>（bucket/truncate/year/month/day/hour 各自实现 inclusive/strict 投影）。</p>
+
+<h3>4. 序列号：正确性的时间轴</h3>
+<p>V2 起 manifest 记 entry 的 data/file 两个序列号。新文件写 null，读者按 manifest 序号补齐——这让清单可以写一次、跨快照/跨重试复用。删除文件的生效条件是 <code>dataSequenceNumber</code> 大于数据文件序号，杜绝"旧删除追杀新写入"。增量读取（append/changelog）按快照 id 集合过滤 ADDED 条目并携带 changeOrdinal。</p>
+
+<h3>5. 删除三形态与 V3 演进</h3>
+<p>删除有三种落地：COW（<code>DeleteFiles</code> 重写清单丢文件）、位置删除（V2 文件 → V3 deletion vector/Puffin 位图，写侧强制）、等值删除（MoR，<code>RowDelta</code> + 读取时 <code>DeleteFilter</code> 施加）。V3 还带来行血缘（nextRowId/first_row-id）、Variant 类型、schema 默认值；V4 支持 Parquet manifest。维护动作全家桶：ExpireSnapshots（引用计数 + 增量/可达两种 GC 策略）、RemoveOrphanFiles（默认 3 天宽限的全量对比）、RewriteManifests/RewriteDataFiles（bin-pack/sort/zorder）、RemoveDanglingDeletes。</p>
+
+<h2>四、设计模式（代码证据）</h2>
+<table>
+  <tr><th>模式</th><th>用在哪里</th><th>证据</th></tr>
+  <tr><td>写时复制元数据 + 指针交换</td><td>一切提交</td><td><code>SnapshotProducer.commit</code> + 各目录 <code>doCommit</code></td></tr>
+  <tr><td>不可变对象 + 差量日志</td><td>TableMetadata changes</td><td><code>MetadataUpdate</code> 列表（REST 事务直接复用）</td></tr>
+  <tr><td>模板方法</td><td>快照生产、扫描骨架</td><td><code>SnapshotProducer</code>（abstract doValidate）；<code>SnapshotScan.doPlanFiles</code></td></tr>
+  <tr><td>访问者 + 双评估器</td><td>谓词系统</td><td><code>ExpressionVisitor</code> 族；Inclusive/Strict MetricsEvaluator</td></tr>
+  <tr><td>可继承元数据</td><td>清单复用</td><td><code>InheritableMetadataFactory</code>（null 序列号继承）</td></tr>
+  <tr><td>适配器</td><td>FileIO / 各引擎目录</td><td><code>S3FileIO/HadoopFileIO</code>；<code>FlinkCatalog/SparkCatalog</code></td></tr>
+  <tr><td>断言对象（需求-更新分离）</td><td>REST 提交</td><td><code>UpdateRequirement</code> / <code>TableUpdate</code> + 409 语义</td></tr>
+  <tr><td>删除回调注入</td><td>所有 GC 路径</td><td><code>deleteWith(Consumer)</code>：事务清理/过期/孤儿共用一条删除通道</td></tr>
+</table>
+
+<h2>五、创新点</h2>
+<div class="cards">
+  <div class="card"><h4>1️⃣ 把 ACID 搬到对象存储</h4><p>文件不可变 + 指针原子交换，绕开对象存储不支持就地更新的物理限制，却在 S3 上实现完整快照隔离。</p></div>
+  <div class="card"><h4>2️⃣ 隐藏的分区</h4><p>分区是派生值（transform），查询按值过滤自动裁剪，用户再也不用手写"分区列"；分区演化按 spec-id 并存。</p></div>
+  <div class="card"><h4>3️⃣ 时间旅行即树切换</h4><p>branch/tag 是快照引用；回滚/时间旅行只是把指针指回旧子树，零数据拷贝。</p></div>
+  <div class="card"><h4>4️⃣ 引擎无关的任务模型</h4><p><code>FileScanTask/CombinedScanTask</code> 统一 Spark/Flink 的输入分区，规划集中、执行分布。</p></div>
+  <div class="card"><h4>5️⃣ REST 目录与远程扫描</h4><p>requirements/updates 协议 + 多表事务端点 + 远程 scan planning（<code>read.data-planning-mode=distributed</code>），元数据密集型工作可下推服务端。</p></div>
+  <div class="card"><h4>6️⃣ 可插拔安全删除</h4><p>位置删除从文件形态（V2）进化到位图 DV（V3），写侧强制、读取按引用精确施加，避免全文件重扫。</p></div>
+</div>
+
+<h2>六、三引擎对照（系列串联）</h2>
+<table>
+  <tr><th>维度</th><th>DuckDB（单机内核）</th><th>Iceberg（表格式）</th><th>vane（分布式 fork）</th></tr>
+  <tr><td>本质</td><td>进程内查询执行引擎</td><td>元数据协议 + 文件布局</td><td>把 DuckDB 搬上 Ray 集群</td></tr>
+  <tr><td>并发控制</td><td>进程内乐观 MVCC（undo 链）</td><td>目录指针 CAS + 快照隔离</td><td>FTE attempt 重试 + split 重放</td></tr>
+  <tr><td>持久化</td><td>单文件双 Header + WAL</td><td>多层不可变文件 + metadata-log</td><td>复用 Iceberg 式对象存储布局（S3 httpfs）</td></tr>
+  <tr><td>扩展方式</td><td>签名 .duckdb_extension</td><td>Catalog/FileIO/引擎三面 SPI</td><td>分布式 scan/write 契约（思路同 Iceberg）</td></tr>
+  <tr><td>裁剪</td><td> zonemap + 统计传播（优化器）</td><td>分区摘要 + 列统计 + 残余（读取前）</td><td>继承 DuckDB 优化器 + 分布式 planning</td></tr>
+</table>
+
+<h2>七、建议学习路径</h2>
+<ol>
+  <li><strong>01 元数据树</strong>：手工建表后逐个打开 metadata.json / manifest-list / manifest（Avro）对照看。</li>
+  <li><strong>02 裁剪漏斗</strong>：用 <code>EXPLAIN</code> + 扫描指标观察 manifest 被跳过的数量。</li>
+  <li><strong>03 + 04</strong>：两个进程同时 INSERT，观察 CommitFailed 与重试日志。</li>
+  <li><strong>05</strong>：分别跑 append、MERGE INTO、DELETE，对比生成的删除文件形态。</li>
+  <li><strong>06</strong>：rollback 到旧快照后查询"已删除"的数据，再 expire + remove_orphan_files 看物理文件消失。</li>
+</ol>
+
+<div class="footer">
+  分析产物：<code>analysis/*.html</code>（6 张交互图 + 本页），规格 JSON 在 <code>analysis/specs/</code>。姊妹篇：DuckDB（<code>../duckdb/analysis/index.html</code>）· vane（<code>../vane/analysis/index.html</code>）。生成：ZCode · archify。
+</div>
+
+</div>
+</body>
+</html>
