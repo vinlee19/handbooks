@@ -166,10 +166,12 @@ echo "已同步 ${TOTAL_BOOKS} 本手册 / ${TOTAL_PAGES} 页，根导航页已�
 
 # ---------- 3. 提交并推送 ----------
 git add -A < /dev/null
-if git diff --cached --quiet < /dev/null; then
+if git diff --cached --quiet < /dev/null && [ -z "$(git log @{u}.. --oneline 2>/dev/null)" ]; then
   echo "没有任何变化，无需推送"
 else
-  git commit -m "sync: 手册更新 $(date '+%Y-%m-%d %H:%M')" < /dev/null
+  if ! git diff --cached --quiet < /dev/null; then
+    git commit -m "sync: 手册更新 $(date '+%Y-%m-%d %H:%M')" < /dev/null
+  fi
   if [ "$NO_PUSH" -eq 1 ]; then
     echo "已本地提交（--no-push，未推送）"
   else
