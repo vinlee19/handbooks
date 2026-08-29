@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>07 · TUI 渲染引擎 — Pi 源码深度剖析</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<nav class="topnav"><div class="topnav-inner">
+  <a class="brand" href="./index.html">pi deep-dive</a>
+  <a class="pg" href="./index.html">总览</a>
+  <a class="pg" href="./01-architecture.html">01 物理架构</a>
+  <a class="pg" href="./02-ai.html">02 pi-ai</a>
+  <a class="pg" href="./03-agent.html">03 agent-core</a>
+  <a class="pg" href="./04-coding-agent.html">04 coding-agent</a>
+  <a class="pg" href="./05-session-compaction.html">05 会话与压缩</a>
+  <a class="pg" href="./06-extensions.html">06 扩展系统</a>
+  <a class="pg cur" href="./07-tui.html">07 TUI</a>
+  <a class="pg" href="./08-rpc.html">08 RPC</a>
+  <a class="pg" href="./09-supply-chain.html">09 构建发布</a>
+</div></nav>
+
+<main>
+<div class="hero">
+  <div class="kicker">第 07 篇</div>
+  <h1>TUI 渲染引擎：字符串、差分与 16ms</h1>
+  <div class="sub">16,210 行，零内部依赖的终端 UI 库。它的核心模型朴素到令人意外：组件渲染成 <code>string[]</code>（一行一个 ANSI 字符串），渲染器保存上一帧的数组做逐行全等比较，只重写变化的行。没有 React、没有虚拟 DOM、没有 cell 网格。本篇拆帧循环、差分算法、输入管线与文本渲染管线。</div>
+</div>
+
+<h2><span class="no">1</span>设计立场</h2>
+<p>三个反直觉但自洽的决策：</p>
+<ul class="clean">
+  <li><strong>字符串行数组，而非字符网格</strong>。终端本身就按行消费输出；把网格状态留在终端进程里，pi 只维护"我上一帧写了哪些行"。双缓冲就是两个 <code>string[]</code>，差分就是 <code>===</code>。代价是做选区/命中测试时要自己追踪列坐标（alt-screen 的 <code>AnsiCodeTracker</code> 专门干这个）。</li>
+  <li><strong>crash-fast 而非静默裁剪</strong>。组件渲染出超宽的行，主屏渲染器写 crash log 后直接抛异常——静默截断会让表格边框错位这类问题变成"灵异现象"，抛错则立即暴露写错的组件。</li>
+  <li><strong>主屏与全屏分治</strong>。承认终端 scrollback 不可编程：主屏模式渲染进自然文档流（终端拥有滚动），全屏模式接管 <code>\x1b[?1049h</code> 备用屏、自带布局引擎与应用级选区。两模式共享同一棵组件树。</li>
+</ul>
+
+<h2><span class="no">2</span>帧循环：16ms 节流 + 输入旁路</h2>
+<p>所有组件状态变化都只是调 <code>requestRender()</code>。渲染被合并成两种路径：常规路径走 16ms 节流（≈60fps），<strong>键盘输入路径绕过节流</strong>——注释里写明了原因：Windows 上 setTimeout(0) 也可能耗 16ms，打字延迟不可接受：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/tui/src/tui.ts</span><span class="cb-note">L765-817 · 节流与旁路</span></div>
+<pre><code>requestRender(force = false): void {
+  if (force) {
+    this.resetRenderState();
+    this.requestImmediateRender();
+    return;
+  }
+  if (this.renderRequested) return;          // 已有待渲染帧：合并
+  this.renderRequested = true;
+  process.nextTick(() =&gt; this.scheduleRender());
+}
+
+private requestImmediateRender(): void {
+  this.cancelRenderTimer();
+  this.renderRequested = true;
+  if (this.immediateRenderScheduled) return;
+  this.immediateRenderScheduled = true;
+  process.nextTick(() =&gt; {
+    this.immediateRenderScheduled = false;
+    if (this.stopped || !this.renderRequested) return;
+    // A previously queued scheduleRender() can create a timer before this
+    // callback runs. User input must preempt that throttled frame.
+    this.cancelRenderTimer();                 // 关键：抢在节流帧之前
+    this.renderRequested = false;
+    this.lastRenderAt = performance.now();
+    this.doRender();
+  });
+}
+
+private scheduleRender(): void {
+  if (this.stopped || this.renderTimer || !this.renderRequested) return;
+  const elapsed = performance.now() - this.lastRenderAt;
+  const delay = Math.max(0, TuiBase.MIN_RENDER_INTERVAL_MS - elapsed);   // 16ms
+  this.renderTimer = setTimeout(() =&gt; { ... this.doRender(); ... }, delay);
+}</code></pre>
+</div>
+
+<p>每帧的全部输出被收集进<strong>单个字符串 buffer</strong> 一次 <code>terminal.write()</code>，并用 DECSynchronized Output（<code>\x1b[?2026h/l</code>）包裹——支持该特性的终端会把整帧作为原子操作上屏，杜绝撕裂：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/tui/src/tui-main-screen.ts</span><span class="cb-note">L210-216 · fullRender 的原子帧</span></div>
+<pre><code>const fullRender = (clear: boolean): void =&gt; {
+  this.fullRedrawCount += 1;
+  let buffer = "\x1b[?2026h"; // Begin synchronized output
+  if (clear) {
+    buffer += this.deleteKittyImages(this.previousKittyImageIds);
+    buffer += "\x1b[2J\x1b[H\x1b[3J"; // Clear screen, home, then clear scrollback
+  }
+  for (let i = 0; i &lt; newLines.length; i++) { ... buffer += line; ... }
+  buffer += "\x1b[?2026l"; // End synchronized output
+  this.terminal.write(buffer);      // 一帧 = 一次 write
+};</code></pre>
+</div>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 300" width="980" role="img" aria-label="帧循环">
+  <defs>
+    <marker id="ar-tw1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <rect x="30" y="30" width="170" height="46" rx="6" class="n"></rect>
+  <text x="115" y="50" text-anchor="middle" class="t-s t-b">组件状态变化</text>
+  <text x="115" y="68" text-anchor="middle" class="t-xs">setData / append …</text>
+
+  <rect x="260" y="30" width="170" height="46" rx="6" class="n-tui"></rect>
+  <text x="345" y="50" text-anchor="middle" class="t-s t-b">requestRender()</text>
+  <text x="345" y="68" text-anchor="middle" class="t-xs">renderRequested 去重</text>
+
+  <rect x="260" y="110" width="170" height="46" rx="6" class="n-tui"></rect>
+  <text x="345" y="130" text-anchor="middle" class="t-s t-b">scheduleRender</text>
+  <text x="345" y="148" text-anchor="middle" class="t-xs">距上帧 ≥16ms 才触发</text>
+
+  <rect x="260" y="190" width="170" height="46" rx="6" class="n-tui"></rect>
+  <text x="345" y="210" text-anchor="middle" class="t-s t-b">requestImmediateRender</text>
+  <text x="345" y="228" text-anchor="middle" class="t-xs">键盘输入旁路（取消节流帧）</text>
+
+  <rect x="540" y="110" width="200" height="66" rx="6" class="n-hl"></rect>
+  <text x="640" y="136" text-anchor="middle" class="t-s t-b">doRender()</text>
+  <text x="640" y="156" text-anchor="middle" class="t-xs">组件树 → string[] → 差分</text>
+
+  <rect x="800" y="110" width="160" height="66" rx="6" class="n-user"></rect>
+  <text x="880" y="136" text-anchor="middle" class="t-s t-b">terminal.write</text>
+  <text x="880" y="156" text-anchor="middle" class="t-xs">单 buffer + DECSYNC 2026</text>
+
+  <line x1="200" y1="53" x2="258" y2="53" class="edge" marker-end="url(#ar-tw1)"></line>
+  <line x1="345" y1="76" x2="345" y2="108" class="edge" marker-end="url(#ar-tw1)"></line>
+  <line x1="430" y1="133" x2="538" y2="140" class="edge" marker-end="url(#ar-tw1)"></line>
+  <line x1="430" y1="213" x2="545" y2="170" class="edge" marker-end="url(#ar-tw1)"></line>
+  <line x1="740" y1="143" x2="798" y2="143" class="edge" marker-end="url(#ar-tw1)"></line>
+
+  <text x="30" y="270" class="t-xs">流式输出场景（每秒几十个 delta）被 16ms 节流合并；按键场景绕过等待，代价是可能一分钟内多渲染几帧。</text>
+</svg>
+</div>
+<figcaption>图 7-1 · 帧循环。0.84.x 又把 alt-screen 每帧的字符串重组开销降了 9-18 倍：全宽布局行直接以行引用绘制，不再每帧经过 ANSI/grapheme 拆分重组。</figcaption>
+</figure>
+
+<h2><span class="no">3</span>主屏差分算法</h2>
+<p><code>TuiMainScreen.doRender()</code>（约 370 行）是主屏的心脏。全量渲染的四个触发条件先于差分判断（宽度变化=折行全变、高度变化、内容收缩、Kitty 图片行），其余情况走逐行比较：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/tui/src/tui-main-screen.ts</span><span class="cb-note">L294-312（差分核心，续后把区间重写）</span></div>
+<pre><code>// Find first and last changed lines
+let firstChanged = -1;
+let lastChanged = -1;
+const maxLines = Math.max(newLines.length, this.previousLines.length);
+for (let i = 0; i &lt; maxLines; i++) {
+  const oldLine = i &lt; this.previousLines.length ? this.previousLines[i] : "";
+  const newLine = i &lt; newLines.length ? newLines[i] : "";
+  if (oldLine !== newLine) {              // 整行字符串全等比较
+    if (firstChanged === -1) firstChanged = i;
+    lastChanged = i;
+  }
+}
+
+if (firstChanged === -1) {
+  // Nothing changed - just reposition the cursor
+  this.positionHardwareCursor(cursorPos, newLines.length);
+  return;
+}
+
+// Kitty 图片块会占据多行：把变更区间扩展到覆盖完整图片块
+({ firstChanged, lastChanged } =
+  this.expandChangedRangeForKittyImages(newLines, firstChanged, lastChanged));</code></pre>
+</div>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 400" width="980" role="img" aria-label="差分渲染算法">
+  <defs>
+    <marker id="ar-tw2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <text x="40" y="28" class="zone-label">上一帧 previousLines</text>
+  <text x="560" y="28" class="zone-label">新帧 newLines（组件树重渲染 + overlay 合成）</text>
+
+  <g font-family="SF Mono, monospace" font-size="11">
+    <rect x="40" y="40" width="440" height="26" rx="4" class="n"></rect><text x="52" y="57">line 0  "❯ 帮我看看这段代码"</text>
+    <rect x="40" y="70" width="440" height="26" rx="4" class="n"></rect><text x="52" y="87">line 1  "好的，我先读一下 src/foo.ts"</text>
+    <rect x="40" y="100" width="440" height="26" rx="4" class="n"></rect><text x="52" y="117">line 2  "⏺ read(src/foo.ts)"</text>
+    <rect x="40" y="130" width="440" height="26" rx="4" fill="#eef1f5" stroke="#b9c2cf"></rect><text x="52" y="147">line 3  ""</text>
+    <rect x="40" y="160" width="440" height="26" rx="4" fill="#eef1f5" stroke="#b9c2cf"></rect><text x="52" y="177">line 4  ""</text>
+  </g>
+
+  <g font-family="SF Mono, monospace" font-size="11">
+    <rect x="560" y="40" width="440" height="26" rx="4" class="n"></rect><text x="572" y="57">line 0  "❯ 帮我看看这段代码"</text>
+    <rect x="560" y="70" width="440" height="26" rx="4" class="n"></rect><text x="572" y="87">line 1  "好的，我先读一下 src/foo.ts"</text>
+    <rect x="560" y="100" width="440" height="26" rx="4" class="n"></rect><text x="572" y="117">line 2  "⏺ read(src/foo.ts)"</text>
+    <rect x="560" y="130" width="440" height="26" rx="4" fill="#fef3e2" stroke="#f0b35c"></rect><text x="572" y="147">line 3  "  └ 42 行，入口是 main()"</text>
+    <rect x="560" y="160" width="440" height="26" rx="4" fill="#fef3e2" stroke="#f0b35c"></rect><text x="572" y="177">line 4  "❯ █"</text>
+  </g>
+
+  <line x1="480" y1="143" x2="558" y2="143" class="edge" marker-end="url(#ar-tw2)"></line>
+  <line x1="480" y1="173" x2="558" y2="173" class="edge" marker-end="url(#ar-tw2)"></line>
+  <text x="500" y="134" class="t-xs">!==</text>
+  <text x="500" y="164" class="t-xs">!==</text>
+
+  <text x="40" y="220" class="t-s t-b">差分结果：firstChanged=3, lastChanged=4 → 只写这两行：</text>
+  <rect x="40" y="232" width="900" height="30" rx="4" class="n-disk"></rect>
+  <text x="56" y="251" class="t-xs t-mono">\x1b[4;1H  (光标移到第4行)  +  \x1b[2K (清行)  +  新行内容  +  \r\n  +  第5行同上  +  光标归位(定位编辑器光标)</text>
+
+  <rect x="40" y="286" width="900" height="94" rx="8" fill="#fbfbf9" stroke="#c9cdd4" stroke-dasharray="5 4"></rect>
+  <text x="56" y="310" class="t-s t-b">回退 fullRender(clear) 的四种情况（差分不再可靠）</text>
+  <text x="56" y="332" class="t-xs">① 宽度变化 —— 折行全变，必须整体重排　② 高度变化（Termux 除外：软键盘开关会误报）</text>
+  <text x="56" y="352" class="t-xs">③ 内容收缩低于历史高水位 maxLinesRendered（残留旧行需清除）　④ 变更区间与 Kitty 图片块交叠（图片占多行，需整体重绘）</text>
+  <text x="56" y="372" class="t-xs">此外还有一道保险：渲染行宽超过终端宽度 → 写 crash log 并抛异常，绝不静默截断</text>
+</svg>
+</div>
+<figcaption>图 7-2 · 主屏差分。渲染器还精确维护 hardwareCursorRow（为 IME 候选窗定位）、previousViewportTop 与 maxLinesRendered 高水位——这些状态是差分正确性的前提。</figcaption>
+</figure>
+
+<p>全屏渲染器 <code>TuiAltScreen</code> 的差分更简单：固定 <code>height</code> 行的屏幕缓冲逐行 <code>===</code> 比较，变化行用 <code>\x1b[row;1H\x1b[2K</code> 定点重写。它额外承担鼠标协议（SGR/X10 解析）、滚动条、<strong>应用级文本选区</strong>（字符/词/行三种粒度，双击/三击 500ms 判定，松开经 OSC 52 复制到系统剪贴板）与 OSC 8 超链接点击。tmux/zellij 下自动降级为 button-motion 鼠标——复用器转发全 motion 事件会卡。</p>
+
+<h2><span class="no">4</span>输入管线</h2>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 430" width="980" role="img" aria-label="键盘输入管线">
+  <defs>
+    <marker id="ar-tw3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <rect x="30" y="40" width="150" height="60" rx="6" class="n-user"></rect>
+  <text x="105" y="64" text-anchor="middle" class="t-s t-b">按键</text>
+  <text x="105" y="82" text-anchor="middle" class="t-xs">终端编码为字节流</text>
+
+  <rect x="220" y="40" width="170" height="60" rx="6" class="n-tui"></rect>
+  <text x="305" y="60" text-anchor="middle" class="t-s t-b">StdinBuffer</text>
+  <text x="305" y="78" text-anchor="middle" class="t-xs">重组分片转义序列</text>
+  <text x="305" y="93" text-anchor="middle" class="t-xs">10ms 超时 · bracketed paste</text>
+
+  <rect x="430" y="40" width="180" height="60" rx="6" class="n-tui"></rect>
+  <text x="520" y="60" text-anchor="middle" class="t-s t-b">keys.ts 解析</text>
+  <text x="520" y="78" text-anchor="middle" class="t-xs">Kitty 协议 / legacy 序列</text>
+  <text x="520" y="93" text-anchor="middle" class="t-xs">→ KeyEvent{key, modifiers}</text>
+
+  <rect x="650" y="40" width="150" height="60" rx="6" class="n-tui"></rect>
+  <text x="725" y="64" text-anchor="middle" class="t-s t-b">焦点组件</text>
+  <text x="725" y="82" text-anchor="middle" class="t-xs">handleInput + 全局 keybinding</text>
+
+  <line x1="180" y1="70" x2="218" y2="70" class="edge" marker-end="url(#ar-tw3)"></line>
+  <line x1="390" y1="70" x2="428" y2="70" class="edge" marker-end="url(#ar-tw3)"></line>
+  <line x1="610" y1="70" x2="648" y2="70" class="edge" marker-end="url(#ar-tw3)"></line>
+
+  <!-- 协商 -->
+  <text x="40" y="150" class="zone-label">启动时的能力协商（无超时，靠 DA 响应当哨兵）</text>
+  <rect x="40" y="164" width="260" height="60" rx="6" class="n"></rect>
+  <text x="170" y="186" text-anchor="middle" class="t-xs t-b">发送 \x1b[&gt;7u（请求 Kitty）</text>
+  <text x="170" y="206" text-anchor="middle" class="t-xs">+ \x1b[?u\x1b[c（查询+DA）</text>
+  <rect x="360" y="164" width="250" height="60" rx="6" class="n"></rect>
+  <text x="485" y="186" text-anchor="middle" class="t-xs t-b">收到 Kitty 能力响应？</text>
+  <text x="485" y="206" text-anchor="middle" class="t-xs">是 → 启用 flags 1|2|4（消歧+按下/释放+备用键）</text>
+  <rect x="670" y="164" width="270" height="60" rx="6" class="n-warn"></rect>
+  <text x="805" y="186" text-anchor="middle" class="t-xs t-b">否 → 回退 XTerm modifyOtherKeys</text>
+  <text x="805" y="206" text-anchor="middle" class="t-xs t-mono">\x1b[&gt;4;2m（terminal.ts L329-333）</text>
+
+  <line x1="300" y1="194" x2="358" y2="194" class="edge" marker-end="url(#ar-tw3)"></line>
+  <line x1="610" y1="194" x2="668" y2="194" class="edge" marker-end="url(#ar-tw3)"></line>
+
+  <!-- 特殊处理 -->
+  <text x="40" y="260" class="zone-label">平台特判（keys.ts / terminal.ts，共 2,700 行的"脏活"区）</text>
+  <rect x="40" y="274" width="290" height="66" rx="6" class="n"></rect>
+  <text x="185" y="296" text-anchor="middle" class="t-xs t-b">SSH 高延迟：ESC 单键判定</text>
+  <text x="185" y="316" text-anchor="middle" class="t-xs">PI_TUI_ESC_TIMEOUT 只作用于孤立 ESC，</text>
+  <text x="185" y="332" text-anchor="middle" class="t-xs">避免 Alt+Enter 被拆成 ESC+Enter</text>
+  <rect x="350" y="274" width="290" height="66" rx="6" class="n"></rect>
+  <text x="495" y="296" text-anchor="middle" class="t-xs t-b">Windows：原生 VT 输入</text>
+  <text x="495" y="316" text-anchor="middle" class="t-xs">ENABLE_VIRTUAL_TERMINAL_INPUT，</text>
+  <text x="495" y="332" text-anchor="middle" class="t-xs">否则 libuv 丢弃修饰键、Shift+Tab 变 \t</text>
+  <rect x="660" y="274" width="280" height="66" rx="6" class="n"></rect>
+  <text x="800" y="296" text-anchor="middle" class="t-xs t-b">Apple Terminal / Win 原生 Shift+Enter</text>
+  <text x="800" y="316" text-anchor="middle" class="t-xs">darwin 用原生 helper 查修饰键真实状态</text>
+  <text x="800" y="332" text-anchor="middle" class="t-xs">（darwin-modifiers.node）</text>
+
+  <text x="40" y="380" class="t-xs">key release 事件默认丢弃（多数组件用不到），组件可 wantsKeyRelease 显式开启 —— 把 Kitty 的高级能力做成可选而非默认复杂度。</text>
+  <text x="40" y="404" class="t-xs">键盘事件同样触发 requestImmediateRender()：从按键到上屏不经过 16ms 节流。</text>
+</svg>
+</div>
+<figcaption>图 7-3 · 键盘输入管线。协商策略"无启动超时"很关键：不支持 Kitty 的终端不会让启动干等，DA 响应到了才决定启用与否。</figcaption>
+</figure>
+
+<h2><span class="no">5</span>文本渲染管线</h2>
+<p>模型输出的 Markdown 到达屏幕要过四站。注意职责切分：TUI 包只管"排版与 ANSI"，语法高亮以回调注入——<code>MarkdownTheme.highlightCode?: (code, lang) =&gt; string[]</code>，具体实现在 coding-agent 侧（锁死 highlight.js 10.7.3，把 hljs 的 HTML 输出解析回 scope 再套终端主题）：</p>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 260" width="980" role="img" aria-label="文本渲染管线">
+  <defs>
+    <marker id="ar-tw4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <rect x="25" y="40" width="200" height="70" rx="7" class="n-ca"></rect>
+  <text x="125" y="64" text-anchor="middle" class="t-s t-b">① 流式 Markdown</text>
+  <text x="125" y="84" text-anchor="middle" class="t-xs">marked v18 + 自定义 tokenizer</text>
+  <text x="125" y="100" text-anchor="middle" class="t-xs">LaTeX ($…$/$$…$$) · 未闭合围栏防闪烁</text>
+
+  <rect x="265" y="40" width="200" height="70" rx="7" class="n-ai"></rect>
+  <text x="365" y="64" text-anchor="middle" class="t-s t-b">② 代码高亮回调</text>
+  <text x="365" y="84" text-anchor="middle" class="t-xs">highlight.js 10.7.3（coding-agent）</text>
+  <text x="365" y="100" text-anchor="middle" class="t-xs">HTML span → 解析回 scope → ANSI 主题</text>
+
+  <rect x="505" y="40" width="200" height="70" rx="7" class="n-tui"></rect>
+  <text x="605" y="64" text-anchor="middle" class="t-s t-b">③ LaTeX → Unicode</text>
+  <text x="605" y="84" text-anchor="middle" class="t-xs">latex.ts 1,373 行符号表 + 分数/上下标</text>
+  <text x="605" y="100" text-anchor="middle" class="t-xs">零依赖，纯文本终端近似渲染</text>
+
+  <rect x="745" y="40" width="210" height="70" rx="7" class="n-tui"></rect>
+  <text x="850" y="64" text-anchor="middle" class="t-s t-b">④ 宽度与折行</text>
+  <text x="850" y="84" text-anchor="middle" class="t-xs">Intl.Segmenter + 东亚宽度</text>
+  <text x="850" y="100" text-anchor="middle" class="t-xs">AnsiCodeTracker 搬运 SGR/OSC8 状态</text>
+
+  <line x1="225" y1="75" x2="263" y2="75" class="edge" marker-end="url(#ar-tw4)"></line>
+  <line x1="465" y1="75" x2="503" y2="75" class="edge" marker-end="url(#ar-tw4)"></line>
+  <line x1="705" y1="75" x2="743" y2="75" class="edge" marker-end="url(#ar-tw4)"></line>
+
+  <rect x="145" y="150" width="690" height="60" rx="8" class="n-ok"></rect>
+  <text x="490" y="174" text-anchor="middle" class="t-s t-b">string[] —— 交给差分渲染器</text>
+  <text x="490" y="194" text-anchor="middle" class="t-xs">流式安全细节：trimPartialClosingFences 防代码围栏闪烁；必需 LaTeX 参数换行不再是空参数</text>
+
+  <line x1="850" y1="110" x2="700" y2="150" class="edge" marker-end="url(#ar-tw4)"></line>
+  <line x1="605" y1="110" x2="620" y2="148" class="edge" marker-end="url(#ar-tw4)"></line>
+  <line x1="365" y1="110" x2="400" y2="148" class="edge" marker-end="url(#ar-tw4)"></line>
+</svg>
+</div>
+<figcaption>图 7-4 · 文本管线。AnsiCodeTracker 是隐形功臣：折行/截断/列切片时重建 SGR 状态与超链接状态，保证颜色不泄漏到相邻单元格（0.84.3 修的 Markdown 表格漏色就是它的 bug）。</figcaption>
+</figure>
+
+<h2><span class="no">6</span>组件库一览</h2>
+<p>顶层的 <code>TuiBase</code>（1,256 行）提供组件接口（<code>render(width): string[]</code> + <code>handleInput</code> + <code>invalidate</code>）、焦点管理与 overlay 合成（浮层按列区间合成进基线行，带 SEGMENT_RESET 防 SGR 泄漏）。其上是 40+ 组件，最重的三个：</p>
+
+<table class="tbl">
+<thead><tr><th>组件</th><th>行数</th><th>职责要点</th></tr></thead>
+<tbody>
+<tr><td class="mono">editor.ts</td><td>2,363</td><td>多行编辑器：word wrap、粘贴原子化（<code>[paste #N +X lines]</code> 占位防大文本撑爆渲染）、kill-ring、undo 栈、内建补全弹层、历史</td></tr>
+<tr><td class="mono">markdown.ts</td><td>1,010</td><td>流式 Markdown：自定义 LaTeX tokenizer、严格删除线、表格/代码块/引用，边流式边重排</td></tr>
+<tr><td class="mono">autocomplete.ts</td><td>786</td><td>CombinedAutocompleteProvider：slash 命令 + @文件（用托管的 fd 枚举）+ 扩展注入项，模糊匹配（fuzzy.ts）</td></tr>
+</tbody>
+</table>
+
+<p>终端能力探测（图片协议、真彩、超链接、背景色 OSC 11、配色方案 CSI 996、cell 像素尺寸 CSI 16t）集中在 <code>terminal-image.ts</code> 与 <code>terminal-colors.ts</code>；0.84.4 起全部支持环境变量强制覆盖——探测失败的终端不再只能认命。</p>
+
+<nav class="pagenav">
+  <a href="./06-extensions.html"><span class="dir">上一篇</span>← 06 · 扩展系统</a>
+  <a class="next" href="./08-rpc.html"><span class="dir">下一篇</span>08 · 无头模式与协议栈 →</a>
+</nav>
+
+<footer class="colophon">Pi 源码深度剖析 · 基于 worktree 368e013de（v0.84.1）</footer>
+</main>
+<script src="./script.js"></script>
+</body>
+</html>

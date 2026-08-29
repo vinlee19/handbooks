@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>04 · 写路径与 ACID 提交</title>
+<style>
+  :root{--bg:#f7f8fb;--card:#fff;--ink:#1a2233;--muted:#5b6472;--accent:#3b5bdb;--accent2:#7048e8;--teal:#0ca678;--orange:#e8590c;--red:#e03131;--line:#dde3ee;--code-bg:#f1f3f9}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.78}
+  header{background:linear-gradient(135deg,#5f3dc4,#7048e8 55%,#9775fa);color:#fff;padding:44px 8% 36px}
+  header h1{font-size:28px}header p{opacity:.95;font-size:15px;max-width:920px;margin-top:8px}
+  nav.top{background:#101832;padding:10px 8%;font-size:13.5px}
+  nav.top a{color:#9db8ff;text-decoration:none;margin-right:18px}
+  nav.top a.cur{color:#fff;font-weight:700}
+  main{max-width:1150px;margin:0 auto;padding:34px 4% 90px}
+  h2{font-size:23px;margin:42px 0 14px;padding-left:14px;border-left:5px solid #7048e8}
+  h3{font-size:18px;margin:26px 0 10px;color:#4c1d95}
+  p{margin:10px 0}.lead{color:var(--muted);font-size:15.5px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px 26px;margin:16px 0;box-shadow:0 1px 3px rgba(30,42,90,.05)}
+  code{font-family:"SF Mono",Menlo,Consolas,monospace;background:var(--code-bg);border-radius:5px;padding:1px 7px;font-size:.92em;color:#0b3a8f}
+  pre{background:#0f1730;color:#dbe4ff;border-radius:10px;padding:16px 20px;overflow-x:auto;font-size:13px;line-height:1.6;margin:14px 0}
+  pre .c{color:#7d8bb0}.k{color:#82aaff}.s{color:#c3e88d}.t2{color:#ffcb6b}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th{background:#f3ecff;color:#4c1d95;text-align:left;padding:8px 12px;border:1px solid var(--line)}
+  td{padding:7px 12px;border:1px solid var(--line);vertical-align:top}
+  .svgwrap{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin:20px 0;overflow-x:auto}
+  .svgwrap .cap{text-align:center;color:var(--muted);font-size:13px;margin-top:8px}
+  .note{border-left:4px solid var(--orange);background:#fff4ec;border-radius:0 8px 8px 0;padding:11px 16px;margin:13px 0;font-size:14px}
+  .tip{border-left:4px solid var(--teal);background:#e9faf3;border-radius:0 8px 8px 0;padding:11px 16px;margin:13px 0;font-size:14px}
+  .warn{border-left:4px solid var(--red);background:#fdeeee;border-radius:0 8px 8px 0;padding:11px 16px;margin:13px 0;font-size:14px}
+  svg text{font-family:-apple-system,PingFang SC,sans-serif}
+</style>
+</head>
+<body>
+<header>
+  <h1>04 · 写路径与 ACID 提交</h1>
+  <p>从 <code>Dataset::insert</code> 到新版本可见：编码（02 篇）只是第一站。本章聚焦：数据文件如何写出、Transaction 如何表达变更、乐观并发如何裁决冲突、S3 上如何做到原子提交、删除如何工作、以及 Compaction 的 Rewrite 事务。</p>
+</header>
+<nav class="top">
+  <a href="index.html">总览</a><a href="01-physical-layout.html">01 物理布局</a><a href="02-encoding.html">02 编码体系</a><a href="03-read-path.html">03 读路径</a><a class="cur" href="04-write-path.html">04 写路径与提交</a><a href="05-vector-index.html">05 向量索引</a><a href="06-scalar-index.html">06 标量索引/FTS</a><a href="07-linalg-simd.html">07 SIMD</a><a href="08-bindings-ecosystem.html">08 生态</a>
+</nav>
+<main>
+
+<h2>1. 写入口：InsertBuilder 与三种写入模式</h2>
+<p class="lead">写 API 全家福（<code>rust/lance/src/dataset/write.rs</code>，4757 行）：<code>Dataset::write / insert / append / overwrite</code>、<code>MergeInsert</code>（upsert，14,537 行）、<code>Update</code>、<code>Delete</code>。底层都汇聚到同一个流水线：</p>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1080 500" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 4-1 · 写入流水线（InsertBuilder 内部视角）</text>
+  <g font-size="12.5">
+    <rect x="40" y="56" width="200" height="120" rx="9" fill="#eef2ff" stroke="#3b5bdb"/>
+    <text x="140" y="82" text-anchor="middle" font-weight="700" fill="#243b8a">输入流</text>
+    <text x="55" y="108">RecordBatch 流</text>
+    <text x="55" y="130" font-size="11.5" fill="#5b6472">（可无限大，流式处理）</text>
+    <text x="55" y="156" font-size="11" fill="#8a93a6">可选：schema 规范化</text>
+
+    <rect x="290" y="56" width="220" height="120" rx="9" fill="#fff4ec" stroke="#e8590c"/>
+    <text x="400" y="82" text-anchor="middle" font-weight="700" fill="#a34700">BatchEncoder</text>
+    <text x="305" y="108" font-size="11.5">逐列 FieldEncoder 并行编码</text>
+    <text x="305" y="130" font-size="11.5">产出 EncodedBatch</text>
+    <text x="305" y="156" font-size="11" fill="#8a93a6">02 篇的两层编码在此执行</text>
+
+    <rect x="560" y="56" width="220" height="120" rx="9" fill="#e7f7f1" stroke="#0ca678"/>
+    <text x="670" y="82" text-anchor="middle" font-weight="700" fill="#087f5b">FileWriter（v2.1）</text>
+    <text x="575" y="108" font-size="11.5">page 满(默认≈8-32MiB)才 flush</text>
+    <text x="575" y="130" font-size="11.5">buffer 对齐写入</text>
+    <text x="575" y="156" font-size="11" fill="#8a93a6">write_batches → finish 写 footer</text>
+
+    <rect x="830" y="56" width="210" height="120" rx="9" fill="#0f1730"/>
+    <text x="935" y="82" text-anchor="middle" font-weight="700" fill="#9db8ff">data/{frag_id}.lance</text>
+    <text x="845" y="108" font-size="11.5" fill="#dbe4ff">上传对象存储</text>
+    <text x="845" y="130" font-size="11.5" fill="#dbe4ff">multipart/单次 PUT</text>
+    <text x="845" y="156" font-size="11" fill="#7d8bb0">此时数据已持久但"不可见"</text>
+
+    <rect x="290" y="230" width="500" height="110" rx="9" fill="#f3ecff" stroke="#7048e8" stroke-width="1.6"/>
+    <text x="540" y="256" text-anchor="middle" font-weight="700" fill="#4c1d95">Transaction { read_version, operation, blob_new_fragments, … }</text>
+    <text x="310" y="282" font-size="12">operation ∈ Append / Delete / Overwrite / CreateIndex / Rewrite /</text>
+    <text x="310" y="304" font-size="12">Merge / UpdateConfig / ReserveRowIds / DataReplacement …</text>
+    <text x="310" y="326" font-size="11" fill="#8a93a6">operation.rs:39 起的枚举，proto 定义于 transaction.proto</text>
+
+    <rect x="290" y="368" width="500" height="96" rx="9" fill="#fdf0f0" stroke="#e03131" stroke-width="1.6"/>
+    <text x="540" y="394" text-anchor="middle" font-weight="700" fill="#c92a2a">commit_transaction（乐观并发重试循环）</text>
+    <text x="310" y="420" font-size="12">加载 read_version 之后的所有事务 → TransactionRebase 逐个判冲突</text>
+    <text x="310" y="442" font-size="12">无冲突 → 写 _transactions/{rv}-{uuid}.txn → 写新 manifest → 成功</text>
+
+    <line x1="240" y1="116" x2="286" y2="116" stroke="#5b6472" stroke-width="1.8"/>
+    <line x1="510" y1="116" x2="556" y2="116" stroke="#5b6472" stroke-width="1.8"/>
+    <line x1="780" y1="116" x2="826" y2="116" stroke="#5b6472" stroke-width="1.8"/>
+    <line x1="935" y1="176" x2="935" y2="206" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="935" y1="206" x2="700" y2="206" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="700" y1="206" x2="700" y2="226" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="540" y1="340" x2="540" y2="364" stroke="#5b6472" stroke-width="1.8"/>
+  </g>
+</svg>
+<div class="cap">图 4-1 · 写流水线。红框（提交成功）之前的一切都是"孤儿数据"，失败可直接遗弃，由 cleanup 回收。</div>
+</div>
+
+<div class="card">
+<h3 style="margin-top:0">三种模式的语义差别</h3>
+<table>
+<tr><th>模式</th><th>Transaction.operation</th><th>物理动作</th></tr>
+<tr><td><b>Create/Overwrite</b></td><td><code>Overwrite{fragments, schema, …}</code></td><td>全新 fragment 集，重置 max_fragment_id 之外的元数据；num_retries=0 时为"严格覆盖"，不自动消解冲突</td></tr>
+<tr><td><b>Append</b></td><td><code>Append{fragments}</code></td><td>新 fragment 追加；提交时才正式分配 fragment id（"continuing from the dataset's highest id ever used"）</td></tr>
+<tr><td><b>Delete（谓词删除）</b></td><td><code>Delete{updated_fragments, deleted_fragment_ids, predicate}</code></td><td>谓词命中的 fragment 写 deletion 文件（小删除）；全 fragment 命中→直接移除该 fragment（<code>deleted_fragment_ids</code>）</td></tr>
+<tr><td><b>Compaction</b></td><td><code>Rewrite{groups, rewritten_indices, frag_reuse_index}</code></td><td>旧 fragments → 新 fragments 的"数据搬家"；<b>必须重映射</b>所有引用旧行地址的索引（rewritten_indices 记录映射表）</td></tr>
+</table>
+</div>
+
+<h2>2. 乐观并发提交：重试循环逐行解读</h2>
+<p class="lead"><code>commit_transaction</code>（<code>rust/lance/src/io/commit.rs:1338</code>）是全仓库最精妙的并发代码。核心循环（简化）：</p>
+
+<pre><code><span class="k">while</span> backoff.attempt() &lt; num_attempts {
+    <span class="c">// ① 悲观预检：无论首发成功率如何，每次都先拉取 read_version 之后的全部事务</span>
+    (dataset, other_transactions) = load_and_sort_new_transactions(&amp;dataset).<span class="k">await</span>?;
+    ensure_can_write_manifest(&amp;dataset.manifest)?;
+
+    <span class="c">// ② 逐个检查冲突：TransactionRebase 判定"我的变更 vs 他人变更"是否可重放</span>
+    <span class="k">let mut</span> rebase = TransactionRebase::try_new(&amp;original_dataset, transaction, affected_rows).<span class="k">await</span>?;
+    <span class="k">for</span> (other_version, other_txn) <span class="k">in</span> &amp;other_transactions {
+        rebase.check_txn(other_txn, *other_version)?;   <span class="c">// 冲突 → Err(CommitConflict)</span>
+    }
+    transaction = rebase.finish(&amp;dataset).<span class="k">await</span>?;      <span class="c">// 可自动合并的（如 Append）重定 fragment id</span>
+
+    <span class="c">// ③ 小事务内联进 manifest，大事务写 _transactions/ 文件</span>
+    <span class="k">let</span> inline = pb::Transaction::from(&amp;transaction).encoded_len() &lt;= MAX_INLINE_TRANSACTION_BYTES;
+    current_transaction_file = write_transaction_file(...).<span class="k">await</span>?;
+
+    <span class="c">// ④ 原子发布 manifest（见 §3）；失败/超时 → 清理事务文件 → backoff 重试</span>
+}</code></pre>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1080 420" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 4-2 · 冲突消解决策矩阵（TransactionRebase / conflicts.rs）</text>
+  <g font-size="12">
+    <rect x="70" y="60" width="200" height="40" fill="#3b5bdb"/><text x="170" y="85" text-anchor="middle" fill="#fff" font-weight="700">我方 \ 他人</text>
+    <rect x="270" y="60" width="160" height="40" fill="#eef2ff"/><text x="350" y="85" text-anchor="middle" fill="#243b8a" font-weight="600">Append</text>
+    <rect x="430" y="60" width="160" height="40" fill="#eef2ff"/><text x="510" y="85" text-anchor="middle" fill="#243b8a" font-weight="600">Delete</text>
+    <rect x="590" y="60" width="160" height="40" fill="#eef2ff"/><text x="670" y="85" text-anchor="middle" fill="#243b8a" font-weight="600">Overwrite</text>
+    <rect x="750" y="60" width="150" height="40" fill="#eef2ff"/><text x="825" y="85" text-anchor="middle" fill="#243b8a" font-weight="600">Rewrite</text>
+    <rect x="900" y="60" width="140" height="40" fill="#eef2ff"/><text x="970" y="85" text-anchor="middle" fill="#243b8a" font-weight="600">CreateIndex</text>
+
+    <rect x="70" y="100" width="200" height="56" fill="#e7f7f1"/><text x="170" y="132" text-anchor="middle" fill="#087f5b" font-weight="700">Append</text>
+    <rect x="270" y="100" width="160" height="56" fill="#b2f2bb"/><text x="350" y="124" text-anchor="middle">✅ 自动 rebase：</text><text x="350" y="144" text-anchor="middle">重新分配 frag id</text>
+    <rect x="430" y="100" width="160" height="56" fill="#ffe3bf"/><text x="510" y="124" text-anchor="middle">⚠️ 无行交集可过；</text><text x="510" y="144" text-anchor="middle">交集→冲突</text>
+    <rect x="590" y="100" width="160" height="56" fill="#ffc9c9"/><text x="670" y="132" text-anchor="middle" fill="#c92a2a">❌ 冲突</text>
+    <rect x="750" y="100" width="150" height="56" fill="#ffe3bf"/><text x="825" y="132" text-anchor="middle" fill="#a34700">⚠️ 保留？需校验</text>
+    <rect x="900" y="100" width="140" height="56" fill="#b2f2bb"/><text x="970" y="132" text-anchor="middle">✅ 可过</text>
+
+    <rect x="70" y="156" width="200" height="56" fill="#e7f7f1"/><text x="170" y="188" text-anchor="middle" fill="#087f5b" font-weight="700">Delete</text>
+    <rect x="270" y="156" width="160" height="56" fill="#b2f2bb"/><text x="350" y="188" text-anchor="middle">✅ 可过</text>
+    <rect x="430" y="156" width="160" height="56" fill="#ffe3bf"/><text x="510" y="180" text-anchor="middle">⚠️ 同 fragment 并发删：</text><text x="510" y="200" text-anchor="middle">合并 deletion 后可过</text>
+    <rect x="590" y="156" width="160" height="56" fill="#ffc9c9"/><text x="670" y="188" text-anchor="middle" fill="#c92a2a">❌ 冲突</text>
+    <rect x="750" y="156" width="150" height="56" fill="#ffe3bf"/><text x="825" y="188" text-anchor="middle" fill="#a34700">⚠️ 视行交集</text>
+    <rect x="900" y="156" width="140" height="56" fill="#b2f2bb"/><text x="970" y="188" text-anchor="middle">✅ 可过</text>
+
+    <rect x="70" y="212" width="200" height="56" fill="#e7f7f1"/><text x="170" y="244" text-anchor="middle" fill="#087f5b" font-weight="700">Rewrite</text>
+    <rect x="270" y="212" width="160" height="56" fill="#ffe3bf"/><text x="350" y="244" text-anchor="middle" fill="#a34700">⚠️ 行地址变了</text>
+    <rect x="430" y="212" width="160" height="56" fill="#ffc9c9"/><text x="510" y="244" text-anchor="middle" fill="#c92a2a">❌ 通常冲突</text>
+    <rect x="590" y="212" width="160" height="56" fill="#ffc9c9"/><text x="670" y="244" text-anchor="middle" fill="#c92a2a">❌ 冲突</text>
+    <rect x="750" y="212" width="150" height="56" fill="#ffe3bf"/><text x="825" y="244" text-anchor="middle" fill="#a34700">⚠️ 需链式重放</text>
+    <rect x="900" y="212" width="140" height="56" fill="#b2f2bb"/><text x="970" y="244" text-anchor="middle">✅ 可过</text>
+
+    <rect x="70" y="268" width="200" height="56" fill="#e7f7f1"/><text x="170" y="300" text-anchor="middle" fill="#087f5b" font-weight="700">CreateIndex</text>
+    <rect x="270" y="268" width="160" height="56" fill="#b2f2bb"/><text x="350" y="300" text-anchor="middle">✅ 可过</text>
+    <rect x="430" y="268" width="160" height="56" fill="#b2f2bb"/><text x="510" y="300" text-anchor="middle">✅ 可过</text>
+    <rect x="590" y="268" width="160" height="56" fill="#ffc9c9"/><text x="670" y="300" text-anchor="middle" fill="#c92a2a">❌ 冲突</text>
+    <rect x="750" y="268" width="150" height="56" fill="#ffe3bf"/><text x="825" y="300" text-anchor="middle" fill="#a34700">⚠️ 索引过时→重算</text>
+    <rect x="900" y="268" width="140" height="56" fill="#ffe3bf"/><text x="970" y="300" text-anchor="middle" fill="#a34700">⚠️ 同名替换</text>
+
+    <text x="70" y="360" fill="#5b6472" font-size="11.5">✅=无冲突直接重放 　⚠️=有条件可过（合并/重映射/校验） 　❌=CommitConflict，报错交还用户</text>
+    <text x="70" y="384" fill="#8a93a6" font-size="11.5">源码：rust/lance-table/src/transaction/conflicts.rs + rust/lance/src/io/commit.rs（TransactionRebase）</text>
+  </g>
+</svg>
+<div class="cap">图 4-2 · 冲突矩阵（示意，实际实现按操作对逐对编码）。"Append vs Append 自动 rebase"是高频场景——多个流式写入者互不阻塞。</div>
+</div>
+
+<h2>3. 原子性从哪来：Manifest 的发布协议</h2>
+<p class="lead">Lance 没有"锁服务"依赖（除非你配置 DynamoDB/外部 manifest）。原子性来自<b>对象存储的单对象 PUT/RENAME 语义</b>：</p>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1080 470" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 4-3 · 两套提交协议：本地 rename vs 云上 conditional put</text>
+  <defs><marker id="w1" markerWidth="9" markerHeight="9" refX="7" refY="2.6" orient="auto"><path d="M0,0 L7,2.6 L0,5.2" fill="none" stroke="#7048e8" stroke-width="1.5"/></marker></defs>
+  <g font-size="12.5">
+    <rect x="50" y="60" width="450" height="360" rx="10" fill="#f3ecff" stroke="#7048e8" stroke-width="1.5"/>
+    <text x="275" y="88" text-anchor="middle" font-weight="700" fill="#4c1d95">本地 / 支持原子 rename 的存储</text>
+    <text x="70" y="118">1. 写 manifest 到临时路径</text>
+    <text x="70" y="146">2. rename → _versions/{v}.manifest</text>
+    <text x="70" y="172" font-size="11.5" fill="#5b6472">（POSIX rename 原子 ⇒ 天然互斥）</text>
+    <text x="70" y="210">版本竞争：谁 rename 成功谁赢，</text>
+    <text x="70" y="234">输家用 load_and_sort 重读后 rebase 重试</text>
+    <text x="70" y="274">V2 命名：_versions/{u64::MAX−v 补零20}.manifest</text>
+    <text x="70" y="300" font-size="11.5" fill="#5b6472">字典序最新 ⇒ list 第一个即最新版本</text>
+    <text x="70" y="336">另有 write_version_hint：提交后顺手写</text>
+    <text x="70" y="358">_versions/latest_version_hint.json（单 PUT）</text>
+    <text x="70" y="392" font-size="11.5" fill="#087f5b">⇒ 读端 O(1) 拿最新版本号</text>
+
+    <rect x="580" y="60" width="450" height="360" rx="10" fill="#eef2ff" stroke="#3b5bdb" stroke-width="1.5"/>
+    <text x="805" y="88" text-anchor="middle" font-weight="700" fill="#243b8a">S3 等（无 rename）→ CommitHandler 抽象</text>
+    <text x="600" y="118">① ExternalManifestCommitHandler：</text>
+    <text x="615" y="142" font-size="12" fill="#5b6472">外部存储（DynamoDB 表 / REST catalog）持锁+版本号</text>
+    <text x="600" y="176">② InlineTransaction 协议（默认）：</text>
+    <text x="615" y="200" font-size="12" fill="#5b6472">manifest 文件名即提交声明 → "先到先得"由</text>
+    <text x="615" y="222" font-size="12" fill="#5b6472">conditional put(if-none-match)/staging 目录仲裁</text>
+    <text x="600" y="256">③ 事务文件 _transactions/{rv}-{uuid}.txn：</text>
+    <text x="615" y="280" font-size="12" fill="#5b6472">所有竞争者先把事务落盘（路径含 read_version）</text>
+    <text x="615" y="302" font-size="12" fill="#5b6472">→ 后续重试者可以"看到彼此"做 rebase</text>
+    <text x="600" y="336">小事务内联进 manifest（MAX_INLINE_TRANSACTION_BYTES）</text>
+    <text x="600" y="364" font-size="12" fill="#5b6472">省一次 GET：读端无需回读 _transactions/</text>
+    <text x="600" y="398" font-size="11.5" fill="#243b8a" font-weight="700">ManifestNamingScheme::V2 + hint 文件 + 事务内联</text>
+    <text x="600" y="418" font-size="11.5" fill="#243b8a" font-weight="700">= 专为对象存储设计的完整提交协议</text>
+  </g>
+</svg>
+<div class="cap">图 4-3 · 提交协议。reader_feature_flags 的 bit5（disable transaction file）允许关掉事务文件来省请求。</div>
+</div>
+
+<h2>4. 删除的完整链路（Delete）</h2>
+<div class="card">
+<p><code>dataset.delete("id > 100")</code> 的执行（<code>dataset/write/delete.rs</code>）：</p>
+<ol style="margin:10px 0 0 22px;font-size:14px">
+  <li><b>谓词分类</b>：能否全靠标量索引回答？能→直接得 row id 集合；否则扫描该谓词涉及的列。</li>
+  <li><b>按 fragment 求掩码</b>：命中的 row address 归组到各 fragment，转成 fragment 内偏移集合。</li>
+  <li><b>写 deletion 文件</b>：小集合→Arrow 数组型（<code>.arrow</code>）；大集合→RoaringBitmap 型（<code>.bitmap</code>）。若该 fragment 已有 deletion 文件，新旧<b>合并</b>后写新文件。</li>
+  <li><b>提交</b>：<code>Operation::Delete{updated_fragments(带新 deletion_file), deleted_fragment_ids(全删的), predicate}</code>。</li>
+  <li><b>读时生效</b>：Scanner 对每个 fragment 加载 deletion 掩码，与扫描结果做差集（<code>apply_deletions_as_nulls</code> 可配置为"显示为 null"而非剔除）。</li>
+</ol>
+<p style="font-size:13px;color:#5b6472;margin-top:10px">DeletionFile 结构（fragment.rs:421）：{read_version（基于哪个版本删除——MVCC 语义）, id, file_type: Array|Bitmap, num_deleted_rows, base_id}。删除不重写数据文件 ⇒ 删除是 O(命中数) 而非 O(表大小)。</p>
+</div>
+
+<h2>5. Compaction（optimize）：Rewrite 事务与索引重映射</h2>
+<div class="svgwrap">
+<svg viewBox="0 0 1080 330" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 4-4 · Compaction 数据流：行地址全量迁移 + 索引映射表</text>
+  <g font-size="12">
+    <rect x="60" y="56" width="220" height="180" rx="9" fill="#fff4ec" stroke="#e8590c"/>
+    <text x="170" y="82" text-anchor="middle" font-weight="700" fill="#a34700">Compaction 前</text>
+    <text x="80" y="110">frag0: 1000 行(被删 900)</text>
+    <text x="80" y="134">frag1: 50 行（小文件）</text>
+    <text x="80" y="158">frag2: 80 行（小文件）</text>
+    <text x="80" y="190" font-size="11.5" fill="#8a93a6">索引 fragment_bitmap:</text>
+    <text x="80" y="210" font-size="11.5" fill="#8a93a6">{0,1,2} 均被覆盖</text>
+
+    <rect x="400" y="56" width="280" height="180" rx="9" fill="#e7f7f1" stroke="#0ca678"/>
+    <text x="540" y="82" text-anchor="middle" font-weight="700" fill="#087f5b">重写阶段（并行）</text>
+    <text x="420" y="110">读 frag0 有效行(100)+frag1+frag2</text>
+    <text x="420" y="136">→ 写新文件 frag3: 230 行</text>
+    <text x="420" y="166">构建行映射: old_row_addr→new</text>
+    <text x="420" y="196" font-size="11.5" fill="#8a93a6">copy 扫描直接复用 v2 页，</text>
+    <text x="420" y="216" font-size="11.5" fill="#8a93a6">无需解码-再编码（零拷贝迁移）</text>
+
+    <rect x="760" y="56" width="280" height="180" rx="9" fill="#f3ecff" stroke="#7048e8"/>
+    <text x="900" y="82" text-anchor="middle" font-weight="700" fill="#4c1d95">Rewrite 事务</text>
+    <text x="780" y="110">groups: [ {old:[0,1,2], new:[3]} ]</text>
+    <text x="780" y="136">rewritten_indices: 索引 uuid →</text>
+    <text x="780" y="158">新 fragment_bitmap + 行地址映射</text>
+    <text x="780" y="188" font-size="11.5" fill="#8a93a6">索引文件本体不改（append 式</text>
+    <text x="780" y="208" font-size="11.5" fill="#8a93a6">补一个 delta/映射页）</text>
+
+    <line x1="280" y1="146" x2="396" y2="146" stroke="#5b6472" stroke-width="1.8"/>
+    <line x1="680" y1="146" x2="756" y2="146" stroke="#5b6472" stroke-width="1.8"/>
+    <text x="60" y="272" font-size="12.5" fill="#5b6472">关键：Rewrite 会改变 row address ⇒ 所有引用旧地址的索引都要 <tspan fill="#7048e8" font-weight="700">remap</tspan>（optimize.rs 里 rewritten_indices / RowIdSequence）。</text>
+    <text x="60" y="296" font-size="12.5" fill="#5b6472">索引覆盖位图（fragment_bitmap）让"哪些行没有索引"永远可知 —— 新 append 的 fragment 不在位图内，查询时对它们走暴力扫描（详见 05 篇）。</text>
+  </g>
+</svg>
+<div class="cap">图 4-4 · Compaction。判据默认：fragment 行数 &lt; 目标行数的指定比例、删除率超阈值、文件太碎等（optimize.rs 可配）。</div>
+</div>
+
+<div class="warn"><b>常见误区：</b>①"overwrite 会立即删除旧文件"——错，旧文件属于旧版本，只有 cleanup（retention 策略）才物理删除；②"append 是原子的"——单事务内原子，跨多个 insert 各自是独立事务；③"delete 后数据立即不可见"——新读者立即不可见（新 manifest），进行中的旧读者继续读旧快照（MVCC 隔离）。</div>
+
+<div class="tip"><b>与 Delta Lake / Iceberg 对照：</b>Lance 的事务模型与 Delta 的 JSON commit log、Iceberg 的 metadata.json 指针同构（都是"不可变文件 + 原子指针切换"），差异在：Lance 的数据文件本身为随机访问特化（大 page/结构编码）、事务粒度可以携带行地址映射（Rewrite+索引 remap 是原生能力，Iceberg 需要重写索引表）。</div>
+
+</main>
+<nav class="top" style="text-align:center">
+  <a href="03-read-path.html">« 03 读路径</a> · <a href="05-vector-index.html">05 向量索引 »</a>
+</nav>
+</body>
+</html>

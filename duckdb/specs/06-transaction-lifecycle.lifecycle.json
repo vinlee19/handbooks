@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "DuckDB 事务生命周期：快照、提交与撤销",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      620
+    ],
+    "views": [
+      {
+        "id": "main-path",
+        "label": "正常路径",
+        "focus": [
+          "begin",
+          "running",
+          "precommit",
+          "committed",
+          "cleanup"
+        ],
+        "note": "BEGIN 分配快照时间戳，提交时 WAL 落盘并改写版本号。"
+      },
+      {
+        "id": "rollback",
+        "label": "回滚",
+        "focus": [
+          "running",
+          "rollback"
+        ],
+        "note": "逆序回放 undo buffer，本地写入直接丢弃。"
+      },
+      {
+        "id": "conflict",
+        "label": "乐观冲突",
+        "focus": [
+          "running",
+          "conflict"
+        ],
+        "note": "更新撞上别人的版本链即刻报错，无等待无死锁。"
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "事务主路径（DuckTransaction）"
+    },
+    {
+      "id": "abortlane",
+      "label": "回滚路径"
+    },
+    {
+      "id": "terminal",
+      "label": "冲突终态"
+    }
+  ],
+  "states": [
+    {
+      "id": "begin",
+      "type": "start",
+      "label": "BEGIN",
+      "lane": "main",
+      "col": 0,
+      "step": "01"
+    },
+    {
+      "id": "running",
+      "type": "active",
+      "label": "快照读写",
+      "lane": "main",
+      "col": 1,
+      "step": "02"
+    },
+    {
+      "id": "precommit",
+      "type": "active",
+      "label": "WAL 落盘",
+      "lane": "main",
+      "col": 2,
+      "step": "03"
+    },
+    {
+      "id": "committed",
+      "type": "success",
+      "label": "版本号改写",
+      "lane": "main",
+      "col": 3,
+      "step": "04"
+    },
+    {
+      "id": "cleanup",
+      "type": "neutral",
+      "label": "undo 释放",
+      "lane": "main",
+      "col": 4,
+      "step": "05"
+    },
+    {
+      "id": "rollback",
+      "type": "failure",
+      "label": "ROLLBACK",
+      "lane": "abortlane",
+      "col": 0
+    },
+    {
+      "id": "conflict",
+      "type": "failure",
+      "label": "乐观冲突",
+      "lane": "terminal",
+      "col": 0,
+      "yOffset": -15
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t_rb",
+      "from": "running",
+      "to": "rollback",
+      "label": "用户回滚",
+      "variant": "dashed",
+      "labelAt": [
+        180,
+        262
+      ]
+    },
+    {
+      "id": "t_cf",
+      "from": "running",
+      "to": "conflict",
+      "label": "更新撞版本链",
+      "variant": "security",
+      "labelAt": [
+        325,
+        350
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "主路径五步",
+      "items": [
+        "BEGIN：分配 start_time（读快照）与 transaction_id（写版本）",
+        "写操作进 UndoBuffer + 本地存储，基表只挂版本链",
+        "提交把版本号从 transaction_id 改写为 commit_id，读快照语义就此定型"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "回滚即逆放",
+      "items": [
+        "UndoBuffer 逆序回放即可完全恢复原状",
+        "事务本地行组（LocalStorage）直接丢弃",
+        "catalog 变更同样走 undo（CatalogEntry 版本链 Undo）"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "乐观并发",
+      "items": [
+        "先到先得：同一行第二个更新者立即收到冲突异常",
+        "没有任何等待或死锁检测，OLAP 场景冲突天然稀少",
+        "undo 空间等最老活跃事务离开后才真正释放（Cleanup）"
+      ]
+    }
+  ]
+}

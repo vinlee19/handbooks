@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Apache Burr 源码深度剖析 · 总导航</title>
+<style>
+:root{
+  --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --line:#e2e8f0;
+  --blue:#2563eb; --blue-bg:#eff6ff; --green:#16a34a; --green-bg:#f0fdf4;
+  --amber:#d97706; --amber-bg:#fffbeb; --purple:#9333ea; --purple-bg:#faf5ff;
+  --red:#dc2626; --red-bg:#fef2f2; --code-bg:#0f172a;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.75}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.94);backdrop-filter:blur(6px);color:#e2e8f0;display:flex;gap:12px;align-items:center;padding:10px 24px;font-size:13px;flex-wrap:wrap}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:3px 8px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav .brand{font-weight:700;color:#fff;font-size:14px;letter-spacing:.5px;margin-right:8px}
+.topnav .brand span{color:#60a5fa}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+.hero{background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:52px 0;margin-bottom:32px}
+.hero h1{margin:0 0 10px;font-size:32px;line-height:1.3}
+.hero p{margin:0 0 12px;color:#cbd5e1;font-size:15px;max-width:860px}
+.hero .tag{display:inline-block;background:rgba(96,165,250,.16);border:1px solid rgba(96,165,250,.4);color:#93c5fd;font-size:12px;padding:2px 10px;border-radius:999px;margin:2px 8px 2px 0}
+main{padding-bottom:64px}
+h2{font-size:24px;border-left:5px solid var(--blue);padding-left:12px;margin:44px 0 10px}
+h3{font-size:18px;margin:28px 0 6px;color:#1d4ed8}
+h4{font-size:15.5px;margin:20px 0 6px;color:#0f172a}
+p,li{color:#334155;font-size:14.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:16px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.grid{display:grid;gap:16px}
+.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:860px){.grid.c2,.grid.c3{grid-template-columns:1fr}}
+figure{margin:20px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;overflow-x:auto}
+figcaption{font-size:13px;color:var(--muted);text-align:center;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+figcaption b{color:#1d4ed8}
+pre{background:var(--code-bg);color:#e2e8f0;padding:16px 18px;border-radius:10px;overflow-x:auto;font-size:12.8px;line-height:1.65}
+code{font-family:"SF Mono",Menlo,Consolas,"Courier New",monospace}
+p code,li code,td code,h3 code,h4 code,figcaption code{background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:5px;font-size:.9em}
+pre code{background:none;color:inherit;padding:0}
+.c-key{color:#7dd3fc}.c-str{color:#fbbf24}.c-com{color:#94a3b8;font-style:italic}.c-fn{color:#a5b4fc}.c-num{color:#f472b6}.c-dec{color:#fde047}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:#fff}
+th{background:#1e293b;color:#fff;text-align:left;padding:8px 12px;font-weight:600}
+td{border:1px solid var(--line);padding:7px 12px;vertical-align:top}
+tr:nth-child(even) td{background:#f8fafc}
+.path{font-family:monospace;background:#f1f5f9;border:1px solid var(--line);padding:1px 7px;border-radius:5px;font-size:12.5px;color:#0f766e;word-break:break-all}
+.note{border-left:4px solid var(--amber);background:var(--amber-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.note b{color:#92400e}
+.tip{border-left:4px solid var(--green);background:var(--green-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.tip b{color:#166534}
+.warn{border-left:4px solid var(--red);background:var(--red-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.warn b{color:#991b1b}
+.toc{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;margin:20px 0}
+.toc a{display:flex;gap:12px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 16px;text-decoration:none;color:var(--ink);transition:.15s}
+.toc a:hover{border-color:var(--blue);box-shadow:0 4px 12px rgba(37,99,235,.12);transform:translateY(-2px)}
+.toc .n{flex:none;width:44px;height:44px;border-radius:10px;background:var(--blue-bg);color:var(--blue);font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center}
+.toc .t{font-weight:700;margin-bottom:2px;font-size:14.5px}
+.toc .d{font-size:12.5px;color:var(--muted);line-height:1.55}
+.pager{display:flex;justify-content:space-between;margin:40px 0 8px}
+.pager a{background:#fff;border:1px solid var(--line);padding:10px 18px;border-radius:10px;text-decoration:none;color:var(--ink);font-size:14px}
+.pager a:hover{border-color:var(--blue);color:var(--blue)}
+footer.foot{text-align:center;color:#94a3b8;font-size:12.5px;padding:24px 0 40px}
+/* ===== SVG 图表共享样式 ===== */
+svg text{font-family:inherit}
+svg .t{fill:#1e293b;font-size:13px}
+svg .tb{fill:#fff;font-weight:700;font-size:13px}
+svg .ts{fill:#475569;font-size:11px}
+svg .tt{fill:#0f172a;font-weight:700;font-size:15px}
+svg .tc{fill:#64748b;font-size:11px;font-family:Menlo,monospace}
+svg .lbl{fill:#334155;font-size:11.5px}
+svg .ar{stroke:#64748b;stroke-width:1.5;fill:none}
+svg .ar-b{stroke:#2563eb;stroke-width:1.8;fill:none}
+svg .ar-dash{stroke:#94a3b8;stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+svg .zone{fill:#f8fafc;stroke:#cbd5e1;stroke-dasharray:6 4}
+svg .bx{stroke-width:1.5}
+svg .b-blue{fill:#eff6ff;stroke:#3b82f6}
+svg .b-blue-d{fill:#dbeafe;stroke:#2563eb}
+svg .b-green{fill:#f0fdf4;stroke:#22c55e}
+svg .b-green-d{fill:#dcfce7;stroke:#16a34a}
+svg .b-amber{fill:#fffbeb;stroke:#f59e0b}
+svg .b-purple{fill:#faf5ff;stroke:#a855f7}
+svg .b-red{fill:#fef2f2;stroke:#ef4444}
+svg .b-slate{fill:#f1f5f9;stroke:#94a3b8}
+svg .b-dark{fill:#1e293b;stroke:#0f172a}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">Apache&nbsp;Burr<span>·源码深度剖析</span></span>
+  <a href="index.html">总导航</a><a href="01-overview.html">项目全景</a>
+  <a href="02-core-state.html">State</a><a href="03-core-action.html">Action</a>
+  <a href="04-core-application.html">运行时</a><a href="05-graph-builder.html">Graph/Builder</a>
+  <a href="06-lifecycle-hooks.html">Hooks/Tracing</a><a href="07-persistence.html">持久化</a>
+  <a href="08-parallelism.html">并行</a><a href="09-tracking.html">追踪系统</a>
+  <a href="10-ui-frontend.html">遥测 UI</a><a href="11-integrations.html">集成生态</a>
+  <a href="12-execution-flow.html">端到端全景</a>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <h1>Apache Burr 源码深度剖析</h1>
+    <p>从 0 到 1 完全读懂一个「以状态机为核心」的 AI 应用框架 —— 涵盖执行引擎、不可变状态、流式执行、生命周期钩子、持久化、并行计算、追踪服务端与 React 遥测 UI 的全部底层实现。13 份图文并茂的文档，40+ 张手绘架构图，所有结论均附带真实源码 <code style="background:rgba(255,255,255,.12);color:#e2e8f0;padding:1px 6px;border-radius:4px;font-size:.85em">文件:行号</code> 引用。</p>
+    <span class="tag">版本 0.42.0</span><span class="tag">Python 零依赖内核</span><span class="tag">FastAPI 追踪服务</span><span class="tag">React 18 + Vite UI</span><span class="tag">Apache License 2.0</span>
+  </div>
+</header>
+
+<main class="wrap">
+
+<h2>Burr 是什么</h2>
+<div class="card">
+<p><b>Apache Burr</b>（孵化中，前身是 DagWorks 的 Hamilton 状态管理框架）是一个用于构建<b>会做决策的应用</b>的 Python 框架：聊天机器人、Agent、模拟器、多 Agent 协作、RAG 管道，甚至非 LLM 的传统工作流。它的核心思想是——</p>
+<p style="text-align:center;font-size:16px"><b>把应用表达为一张<b style="color:#1d4ed8">状态机（有向图）</b>：节点是 <span style="color:#1d4ed8">Action</span>，边是带条件的 <span style="color:#1d4ed8">Transition</span>，贯穿全局的是一份<b style="color:#1d4ed8">不可变的 State</b>。</b></p>
+<p>它由三部分组成（对应 <span class="path">README.md:113-117</span>）：</p>
+<ol>
+<li><b>一个低抽象、零依赖的状态机库</b>（<span class="path">burr/core/</span>）—— 只有 <code>Action / State / Application / ApplicationBuilder</code> 四个核心概念，没有隐藏的 Prompt 模板魔法；</li>
+<li><b>一套开源的实时遥测 UI</b>（<span class="path">telemetry/ui/</span> + <span class="path">burr/tracking/</span>）—— 执行的每一步、每个 LLM 调用的 span、每次状态变更都落盘并在浏览器中可视化、可注释、可回放；</li>
+<li><b>持久化与集成生态</b>（<span class="path">burr/core/persistence.py</span>、<span class="path">burr/integrations/</span>）—— 断点恢复、fork/spawn、SQLite/PostgreSQL/MongoDB/Redis 持久化，OpenTelemetry/Langfuse/Bedrock/Hamilton/Haystack 等集成。</li>
+</ol>
+<div class="tip"><b>为什么值得精读源码？</b> Burr 用不到 2 万行 Python 实现了 LangGraph 级别的能力，代码分层极其清晰：核心引擎不依赖任何第三方库；流式执行用纯生成器协议实现；观测系统完全构建在「生命周期钩子」这一个扩展点上。它是学习「如何设计一个可观测的执行引擎」的最佳范本之一。</div>
+</div>
+
+<h2>全局物理架构总图</h2>
+<p>下图是 Burr 运行时的<b>物理架构</b>：左侧是用户编写的 Python 应用进程，中间是落盘在 <code>~/.burr</code> 的 JSON 数据层，右侧是独立进程的 FastAPI 追踪服务与浏览器中的 React UI。这套「同机文件共享」的设计让追踪系统对应用零侵入（异步写 JSONL），同时让 UI 能实时刷新。</p>
+
+<figure>
+<svg viewBox="0 0 1040 640" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#64748b"/></marker>
+<marker id="arrb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker>
+<marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#16a34a"/></marker>
+</defs>
+<!-- 用户进程 -->
+<rect class="zone" x="20" y="50" width="330" height="560" rx="14"/>
+<text class="tt" x="40" y="80">① 用户 Python 进程</text>
+<text class="ts" x="40" y="98">pip install apache-burr（零基础依赖）</text>
+<rect class="bx b-blue" x="45" y="115" width="280" height="86" rx="10"/>
+<text class="tb" x="60" y="140" style="fill:#1e3a8a">ApplicationBuilder</text>
+<text class="ts" x="60" y="158">with_actions / with_transitions</text>
+<text class="ts" x="60" y="174">with_tracker / with_state_persister</text>
+<text class="tc" x="60" y="192">application.py:2201</text>
+<rect class="bx b-blue-d" x="45" y="225" width="280" height="118" rx="10"/>
+<text class="tb" x="60" y="250" style="fill:#1e3a8a">Application（执行引擎）</text>
+<text class="ts" x="60" y="268">run / iterate / step / stream_result</text>
+<text class="ts" x="60" y="284">Graph 遍历 + 状态推进 + hooks 派发</text>
+<text class="tc" x="60" y="302">application.py:835 · run:1336</text>
+<text class="ts" x="60" y="326" style="fill:#7c3aed">State 不可变对象（state.py:273）</text>
+<rect class="bx b-green" x="45" y="368" width="280" height="76" rx="10"/>
+<text class="tb" x="60" y="392" style="fill:#14532d">Lifecycle Hooks（观测切面）</text>
+<text class="ts" x="60" y="410">lifecycle/base.py —— 11 类钩子</text>
+<text class="tc" x="60" y="430">追踪/持久化/tracing 全是插件</text>
+<rect class="bx b-green" x="45" y="468" width="133" height="64" rx="10"/>
+<text class="tb" x="55" y="490" style="fill:#14532d">LocalTracking</text>
+<text class="tb" x="55" y="506" style="fill:#14532d">Client</text>
+<text class="tc" x="55" y="523">client.py:155</text>
+<rect class="bx b-green" x="192" y="468" width="133" height="64" rx="10"/>
+<text class="tb" x="202" y="490" style="fill:#14532d">Persister</text>
+<text class="tb" x="202" y="506" style="fill:#14532d">SQLite/PG/...</text>
+<text class="tc" x="202" y="523">persistence.py:312</text>
+<rect class="bx b-slate" x="45" y="556" width="280" height="40" rx="10"/>
+<text class="ts" x="60" y="574">你的业务代码：@action 里调 LLM / 查库 / 计算</text>
+<text class="ts" x="60" y="589">examples/multi-modal-chatbot/application.py</text>
+<!-- 数据层 -->
+<rect class="zone" x="390" y="50" width="250" height="560" rx="14" style="fill:#fffbeb"/>
+<text class="tt" x="410" y="80">② 本地数据层（同机磁盘）</text>
+<text class="ts" x="410" y="98">DEFAULT_STORAGE_DIR = ~/.burr</text>
+<rect class="bx b-amber" x="412" y="120" width="206" height="200" rx="10"/>
+<text class="tb" x="428" y="145" style="fill:#92400e">~/.burr/&lt;project&gt;/&lt;app_id&gt;/</text>
+<text class="tc" x="428" y="168">graph.json     状态机结构</text>
+<text class="tc" x="428" y="186">metadata.json  标识/父子指针</text>
+<text class="tc" x="428" y="204">log.jsonl      逐步事件流</text>
+<text class="tc" x="428" y="222">children.jsonl fork/spawn 子应用</text>
+<text class="ts" x="428" y="252">由 LocalTrackingClient 写入</text>
+<text class="ts" x="428" y="268">(client.py:165-172)</text>
+<text class="ts" x="428" y="298">每步一条 JSON，含序列化后</text>
+<text class="ts" x="428" y="314">的 state / result / span 树</text>
+<rect class="bx b-amber" x="412" y="344" width="206" height="92" rx="10"/>
+<text class="tb" x="428" y="368" style="fill:#92400e">SQLite / 数据库（可选）</text>
+<text class="tc" x="428" y="390">demos.db · persister 落盘</text>
+<text class="ts" x="428" y="410">sequence_id + position + state</text>
+<text class="ts" x="428" y="426">支持断点恢复 initialize_from</text>
+<rect class="bx b-purple" x="412" y="462" width="206" height="70" rx="10"/>
+<text class="tb" x="428" y="486" style="fill:#6b21a8">远端观测（可选）</text>
+<text class="tc" x="428" y="508">S3TrackingClient → S3</text>
+<text class="tc" x="428" y="524">OpenTelemetry / Langfuse</text>
+<!-- 服务端 -->
+<rect class="zone" x="680" y="50" width="340" height="560" rx="14" style="fill:#f0fdf4"/>
+<text class="tt" x="700" y="80">③ 追踪服务进程（独立部署）</text>
+<text class="ts" x="700" y="98">burr CLI → uvicorn，默认端口 7241</text>
+<rect class="bx b-green-d" x="705" y="118" width="290" height="130" rx="10" style="fill:#dcfce7" style="stroke:#16a34a"/>
+<text class="tb" x="720" y="142" style="fill:#14532d">FastAPI 服务 burr/tracking/server/run.py</text>
+<text class="tc" x="720" y="164">GET /api/v0/projects</text>
+<text class="tc" x="720" y="181">GET /api/v0/{project}/{partition}/apps</text>
+<text class="tc" x="720" y="198">GET /api/v0/{project}/{app}/{part}/apps</text>
+<text class="tc" x="720" y="215">annotations CRUD · run.py:192 create_burr_ui_app</text>
+<text class="ts" x="720" y="236">LocalBackend 直接读 ② 中同一份文件</text>
+<rect class="bx b-green" x="705" y="272" width="290" height="84" rx="10"/>
+<text class="tb" x="720" y="296" style="fill:#14532d">静态托管：打包好的 React UI</text>
+<text class="ts" x="720" y="316">burr/tracking/server/build/（SPA）</text>
+<text class="ts" x="720" y="334">telemetry/ui 构建产物，importlib 加载</text>
+<text class="ts" x="720" y="350">也可 mount_burr_ui() 挂进你的 FastAPI</text>
+<rect class="bx b-slate" x="705" y="380" width="290" height="56" rx="10"/>
+<text class="ts" x="720" y="402">备选后端：SQLiteS3Backend（tracking/server/s3/）</text>
+<text class="ts" x="720" y="419">SQLite 索引 + S3 快照 + SQS 事件驱动（BIP-0042）</text>
+<rect class="bx b-red" x="705" y="458" width="290" height="120" rx="10"/>
+<text class="tb" x="720" y="482" style="fill:#7f1d1d">④ 浏览器 · 遥测 UI</text>
+<text class="ts" x="720" y="502">React 18 + Vite + Tailwind + reactflow</text>
+<text class="ts" x="720" y="520">项目列表 → 应用列表 → 单应用视图：</text>
+<text class="ts" x="720" y="538">状态机图(当前步高亮) · 步骤时间线</text>
+<text class="ts" x="720" y="556">State 数据视图 · Token/成本分析</text>
+<text class="ts" x="720" y="574">注释标注 · 复现代码片段</text>
+<!-- 箭头 -->
+<path class="ar-b" d="M325 280 L410 240" marker-end="url(#arrb)"/>
+<text class="lbl" x="330" y="252" style="fill:#2563eb">每步异步追加</text>
+<text class="lbl" x="330" y="268" style="fill:#2563eb">JSONL 事件</text>
+<path class="ar" d="M325 500 L410 480" marker-end="url(#arr)"/>
+<text class="lbl" x="332" y="478">断点存取</text>
+<path class="ar" d="M618 210 L703 190" marker-end="url(#arrg)"/>
+<text class="lbl" x="624" y="186" style="fill:#16a34a">读同一份文件</text>
+<text class="lbl" x="624" y="202" style="fill:#16a34a">（零拷贝共享）</text>
+<path class="ar" d="M850 250 L850 270" marker-end="url(#arrg)"/>
+<path class="ar-b" d="M860 405 L960 405 L960 380" marker-end="url(#arrb)" style="stroke-dasharray:4 3"/>
+<text class="lbl" x="866" y="398" style="fill:#2563eb">HTTP 静态资源</text>
+<path class="ar-b" d="M960 458 L960 300 L998 300" marker-end="url(#arrb)"/>
+<text class="lbl" x="966" y="430" style="fill:#2563eb">REST/JSON</text>
+<text class="lbl" x="966" y="446" style="fill:#2563eb">轮询刷新</text>
+<text class="ts" x="410" y="590">同一台机器，也可以分机部署（S3 后端）</text>
+</svg>
+<figcaption><b>图 0-1 · Burr 全局物理架构总图</b> —— 用户进程（蓝）通过生命周期钩子把事件写入本地 JSONL（黄）；追踪服务进程（绿）读取同一份文件并通过 REST 提供给浏览器中的 React UI（红）；数据库持久化与远端观测（紫）为可选旁路。这就是「应用零侵入、观测强隔离」的物理布局。</figcaption>
+</figure>
+
+<h2>文档目录（建议按序阅读）</h2>
+<div class="toc">
+<a href="01-overview.html"><span class="n">01</span><span><span class="t">项目全景与代码地图</span><span class="d">Burr 的设计哲学、三大组成部分、仓库目录树、包管理体系（flit / 零依赖 / extras / CLI 入口）</span></span></a>
+<a href="02-core-state.html"><span class="n">02</span><span><span class="t">State 深度剖析</span><span class="d">不可变状态模型、copy-on-write、5 种 StateDelta、serde 序列化管线、TypingSystem 类型系统</span></span></a>
+<a href="03-core-action.html"><span class="n">03</span><span><span class="t">Action 体系</span><span class="d">Function/Reducer 二分模型、@action 装饰器与 bind、流式 Action、Conditions 条件系统与 safe_expr 安全解释器</span></span></a>
+<a href="04-core-application.html"><span class="n">04</span><span><span class="t">Application 运行时（核心）</span><span class="d">执行循环、run/iterate/step/stream_result、PRIOR_STEP 游标、ApplicationContext、fork/spawn</span></span></a>
+<a href="05-graph-builder.html"><span class="n">05</span><span><span class="t">Graph 与 ApplicationBuilder</span><span class="d">图模型与条件转移解析、fluent 构建器、build() 时的状态装载与断点恢复决策</span></span></a>
+<a href="06-lifecycle-hooks.html"><span class="n">06</span><span><span class="t">生命周期钩子与 Tracing</span><span class="d">11 类 Hook 协议、LifecycleAdapterSet 派发机制、ActionSpan/span 树追踪实现</span></span></a>
+<a href="07-persistence.html"><span class="n">07</span><span><span class="t">持久化与断点恢复</span><span class="d">Persister 协议、PersisterHook 桥接、SQLitePersister、故障续跑、六种数据库实现</span></span></a>
+<a href="08-parallelism.html"><span class="n">08</span><span><span class="t">并行执行</span><span class="d">map_reduce_action、SubGraphTask 子应用、线程池/asyncio.gather/Ray、父子状态级联</span></span></a>
+<a href="09-tracking.html"><span class="n">09</span><span><span class="t">追踪客户端与服务端</span><span class="d">LocalTrackingClient 与 ~/.burr 存储布局、事件模型、FastAPI 服务端、S3/SQS 生产后端</span></span></a>
+<a href="10-ui-frontend.html"><span class="n">10</span><span><span class="t">React 遥测 UI</span><span class="d">React18+Vite 架构、路由与组件、reactflow 状态机视图、构建发布链路、demo 数据</span></span></a>
+<a href="11-integrations.html"><span class="n">11</span><span><span class="t">集成生态</span><span class="d">Hamilton/Bedrock/Haystack/OpenTelemetry/Langfuse/Pydantic/Streamlit/Ray/serde 插件全景</span></span></a>
+<a href="12-execution-flow.html"><span class="n">12</span><span><span class="t">端到端执行全景</span><span class="d">以 counter 与多模态聊天机器人为例逐行走通全链路：从 app.run() 到 UI 呈现的完整时序</span></span></a>
+</div>
+
+<h2>核心概念速览</h2>
+<div class="grid c2">
+<div class="card">
+<h3>四个一等公民</h3>
+<table>
+<tr><th>概念</th><th>一句话定义</th><th>源码</th></tr>
+<tr><td><code>Action</code></td><td>计算（reads→run）+ 状态更新（writes→update）的图节点</td><td><span class="path">action.py:306</span></td></tr>
+<tr><td><code>State</code></td><td>不可变 KV 状态，所有变更返回新对象</td><td><span class="path">state.py:273</span></td></tr>
+<tr><td><code>Application</code></td><td>持有图+状态游标的运行时，驱动循环执行</td><td><span class="path">application.py:835</span></td></tr>
+<tr><td><code>Transition</code></td><td>带条件的有向边，首条命中即走</td><td><span class="path">graph.py:33</span></td></tr>
+</table>
+</div>
+<div class="card">
+<h3>两个内置「游标」</h3>
+<p>Application 的当前位置不在内存里，而在 State 的两个双下划线键中（<span class="path">application.py:85-86</span>）：</p>
+<ul>
+<li><code>__PRIOR_STEP</code> —— 上一步执行的 action 名，决定下一步走哪条边；</li>
+<li><code>__SEQUENCE_ID</code> —— 步数计数器，每步自增，是持久化与追踪的对账主键。</li>
+</ul>
+<p>因为游标在 State 里，「断点恢复」就等价于「载入一份 State」—— 这是 Burr 持久化设计最优雅的一点。</p>
+</div>
+</div>
+
+<div class="grid c2">
+<div class="card">
+<h3>执行 API 的四个层级</h3>
+<table>
+<tr><th>API</th><th>粒度</th><th>返回</th></tr>
+<tr><td><code>run / arun</code></td><td>跑到 halt 条件</td><td>最终 (action, result, state)</td></tr>
+<tr><td><code>iterate / aiterate</code></td><td>每步 yield</td><td>生成器（可逐步观察状态）</td></tr>
+<tr><td><code>step / astep</code></td><td>单步</td><td>(action, result, state)</td></tr>
+<tr><td><code>stream_result / astream_result</code></td><td>流式单步</td><td>StreamingResultContainer</td></tr>
+</table>
+</div>
+<div class="card">
+<h3>一个扩展点统治观测</h3>
+<p>追踪、持久化、tracing、并行级联……全部通过 <b>Lifecycle Hook</b>（<span class="path">lifecycle/base.py</span>）挂进引擎，核心代码对它们一无所知：</p>
+<ul>
+<li><code>post_application_create</code> → 追踪器写 graph.json</li>
+<li><code>pre_run_step / post_run_step</code> → 追踪事件、状态存档</li>
+<li><code>pre_start_stream / post_stream_item</code> → 流式观测</li>
+</ul>
+<div class="note"><b>精读建议：</b> 先读 04（运行时）建立主循环心智模型，再读 02/03 补数据结构细节，最后按需读观测与集成部分。</div>
+</div>
+</div>
+
+<div class="pager"><span></span><a href="01-overview.html">下一篇：01 项目全景 →</a></div>
+</main>
+<footer class="foot">Apache Burr 源码学习笔记 · 基于 v0.42.0 · debug 学习分支 · 所有行号以仓库当前代码为准</footer>
+</body>
+</html>

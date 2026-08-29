@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>04 · 双层索引与删除向量 — Moonlink 源码深度解析</title>
+<style>
+:root{
+  --blue:#2563eb;--green:#16a34a;--orange:#ea580c;--purple:#7c3aed;--gray:#64748b;--red:#dc2626;
+  --ink:#1e293b;--muted:#64748b;--bg:#f6f8fa;--card:#fff;--line:#e2e8f0;--code-bg:#0d1117;--code-ink:#e6edf3;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.8}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.97);display:flex;flex-wrap:wrap;gap:2px;padding:8px 16px;font-size:13px}
+.topnav .brand{color:#fbbf24;font-weight:700;margin-right:10px;padding:4px 6px}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:4px 10px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav a.active{background:var(--blue);color:#fff}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 20px 80px}
+.page-head{background:linear-gradient(135deg,#0f172a,#7f1d1d);border-radius:14px;color:#f1f5f9;padding:30px 34px;margin-bottom:26px}
+.page-head h1{font-size:28px;margin-bottom:6px}
+.page-head p{color:#cbd5e1;font-size:14.5px}
+h2{font-size:23px;margin:40px 0 12px;padding-left:12px;border-left:5px solid var(--red)}
+h3{font-size:18px;margin:24px 0 8px;color:#0f172a}
+p{margin:10px 0;color:#334155}
+.lead{font-size:15.5px;color:#475569}
+.figure{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin:20px 0}
+.fig-title{font-weight:700;font-size:14.5px;color:#0f172a;margin-bottom:4px}
+.fig-title .fno{color:var(--blue)}
+.fig-desc{font-size:13px;color:var(--muted);margin-bottom:10px}
+svg{width:100%;height:auto;display:block}
+code{background:#eef2f7;border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:.88em;color:#be185d}
+pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:16px 18px;overflow-x:auto;font-size:13px;line-height:1.6;margin:14px 0}
+pre code{background:none;border:none;color:inherit;padding:0}
+.k{color:#ff7b72}.t{color:#79c0ff}.s{color:#a5d6ff}.c{color:#8b949e;font-style:italic}.n{color:#ffa657}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px;background:var(--card)}
+th{background:#f1f5f9;text-align:left}
+th,td{border:1px solid var(--line);padding:8px 12px;vertical-align:top}
+tbody tr:nth-child(even){background:#fafbfc}
+.callout{border-left:4px solid var(--blue);background:#eff6ff;border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0;font-size:14px}
+.callout.warn{border-color:var(--orange);background:#fff7ed}
+.callout.good{border-color:var(--green);background:#f0fdf4}
+.callout b{color:#0f172a}
+.footer{display:flex;justify-content:space-between;margin-top:60px;padding-top:18px;border-top:1px solid var(--line);font-size:14px}
+.footer a{color:var(--blue);text-decoration:none;font-weight:600}
+ul,ol{margin:8px 0 8px 24px}
+li{margin:4px 0}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">🥮 Moonlink 源码解析</span>
+  <a href="index.html">总导航</a>
+  <a href="01-overview.html">01 总体架构</a>
+  <a href="02-ingestion.html">02 数据摄入</a>
+  <a href="03-core-engine.html">03 存储引擎</a>
+  <a class="active" href="04-index-dv.html">04 索引与 DV</a>
+  <a href="05-wal-recovery.html">05 WAL 与恢复</a>
+  <a href="06-iceberg.html">06 Iceberg 集成</a>
+  <a href="07-query.html">07 查询路径</a>
+  <a href="08-control-plane.html">08 控制面</a>
+  <a href="09-concurrency-lsn.html">09 并发模型</a>
+</nav>
+
+<div class="wrap">
+<div class="page-head">
+  <h1>Chapter 04 · 双层索引与 Deletion Vector</h1>
+  <p>主键索引决定「DELETE 能不能 O(1) 定位」，删除向量决定「ICEberg 读侧怎么知道哪些行没了」。这一章是 moonlink 最有原创性的部分。</p>
+</div>
+
+<h2>4.1 双层索引总览</h2>
+<p class="lead">索引随着数据的位置分两层：<b>MemIndex</b> 管内存里的行，<b>GlobalIndex（FileIndex）</b>管已经 flush 成文件的行。两层都是「主键哈希 → RecordLocation」的哈希结构，flush 时从一层「重映射」到另一层。</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 4-1</span> · MooncakeIndex 双层结构与索引随 flush 迁移</div>
+  <svg viewBox="0 0 1160 620" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="d11" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    </defs>
+    <!-- code box -->
+    <rect x="30" y="40" width="1100" height="120" rx="10" fill="#0d1117"/>
+    <text x="50" y="66" font-family="Menlo,monospace" font-size="12.5" fill="#8b949e">// storage/index.rs —— 索引的真实定义</text>
+    <text x="50" y="90" font-family="Menlo,monospace" font-size="12.5" fill="#e6edf3"><tspan fill="#ff7b72">pub struct</tspan> MooncakeIndex {</text>
+    <text x="70" y="112" font-family="Menlo,monospace" font-size="12.5" fill="#e6edf3">in_memory_index: <tspan fill="#79c0ff">HashSet</tspan>&lt;IndexPtr&gt;,        <tspan fill="#8b949e">// 当前 MemSlice 的索引（Arc 指针集合）</tspan></text>
+    <text x="70" y="134" font-family="Menlo,monospace" font-size="12.5" fill="#e6edf3">file_indices: <tspan fill="#79c0ff">Vec</tspan>&lt;FileIndex&gt;,              <tspan fill="#8b949e">// FileIndex = GlobalIndex，磁盘上的持久索引</tspan></text>
+    <text x="50" y="152" font-family="Menlo,monospace" font-size="12.5" fill="#e6edf3">}</text>
+
+    <!-- mem index layer -->
+    <text x="30" y="200" font-size="14" font-weight="700" fill="#16a34a">第一层 · MemIndex（内存，随 MemSlice 生死）</text>
+    <g font-size="11.5">
+      <rect x="30" y="216" width="256" height="120" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+      <text x="158" y="240" text-anchor="middle" font-weight="700" fill="#14532d">SinglePrimitive</text>
+      <text x="158" y="262" text-anchor="middle" fill="#166534">hashbrown HashTable&lt;…&gt;</text>
+      <text x="158" y="282" text-anchor="middle" fill="#166534">单列整型主键（最常见）</text>
+      <text x="158" y="304" text-anchor="middle" font-size="10.5" fill="#15803d">hash → (hash, location)</text>
+      <rect x="306" y="216" width="256" height="120" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+      <text x="434" y="240" text-anchor="middle" font-weight="700" fill="#14532d">Key</text>
+      <text x="434" y="262" text-anchor="middle" fill="#166534">复合主键：HashTable&lt;KeyWithIdentity&gt;</text>
+      <text x="434" y="282" text-anchor="middle" fill="#166534">存整行 identity 用于精确比对</text>
+      <text x="434" y="304" text-anchor="middle" font-size="10.5" fill="#15803d">防哈希碰撞误删</text>
+      <rect x="582" y="216" width="256" height="120" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+      <text x="710" y="240" text-anchor="middle" font-weight="700" fill="#14532d">FullRow</text>
+      <text x="710" y="262" text-anchor="middle" fill="#166534">MultiMap&lt;PrimaryKey, location&gt;</text>
+      <text x="710" y="282" text-anchor="middle" fill="#166534">允许重复键（allow_duplicate）</text>
+      <text x="710" y="304" text-anchor="middle" font-size="10.5" fill="#15803d">一对多场景</text>
+      <rect x="858" y="216" width="256" height="120" rx="10" fill="#f1f5f9" stroke="#94a3b8"/>
+      <text x="986" y="240" text-anchor="middle" font-weight="700" fill="#334155">None</text>
+      <text x="986" y="262" text-anchor="middle" fill="#64748b">append-only 表（row_identity=None）</text>
+      <text x="986" y="282" text-anchor="middle" fill="#64748b">无索引 → 无删除能力</text>
+      <text x="986" y="304" text-anchor="middle" font-size="10.5" fill="#64748b">写入路径零索引开销</text>
+    </g>
+    <!-- arrow flush -->
+    <rect x="30" y="366" width="1084" height="70" rx="10" fill="#ffedd5" stroke="#ea580c"/>
+    <text x="572" y="394" text-anchor="middle" font-weight="700" fill="#7c2d12" font-size="13">flush 边界：remap_index() 把 MemIndex 重映射成 GlobalIndex</text>
+    <text x="572" y="418" text-anchor="middle" fill="#9a3412" font-size="12">disk_slice.rs：旧索引值（内存位置）逐条取出 → 换算成 (file_id, row_offset) → 插入 GlobalIndexBuilder</text>
+    <line x1="572" y1="336" x2="572" y2="366" stroke="#475569" stroke-width="2" marker-end="url(#d11)"/>
+    <!-- global index layer -->
+    <text x="30" y="470" font-size="14" font-weight="700" fill="#7c3aed">第二层 · GlobalIndex（持久化 bucket hash map，persisted_bucket_hash_map.rs）</text>
+    <g font-size="11.5">
+      <rect x="30" y="486" width="340" height="110" rx="10" fill="#f3e8ff" stroke="#7c3aed"/>
+      <text x="200" y="510" text-anchor="middle" font-weight="700" fill="#4c1d95">IndexBlock（一个 puffin blob）</text>
+      <text x="200" y="532" text-anchor="middle" fill="#6d28d9">64-bit hash → (file_id, row_offset)</text>
+      <text x="200" y="552" text-anchor="middle" fill="#6d28d9">bucket 化存储，块满 512MiB 定稿</text>
+      <text x="200" y="576" text-anchor="middle" font-size="10.5" fill="#7c3aed">IndexBlockBuilder 顺序构建 + CRC</text>
+      <rect x="400" y="486" width="340" height="110" rx="10" fill="#f3e8ff" stroke="#7c3aed"/>
+      <text x="570" y="510" text-anchor="middle" font-weight="700" fill="#4c1d95">GlobalIndex { index_blocks, files }</text>
+      <text x="570" y="532" text-anchor="middle" fill="#6d28d9">多个 index block 的有序集合</text>
+      <text x="570" y="552" text-anchor="middle" fill="#6d28d9">查询时 GlobalIndexMergingIterator 归并</text>
+      <text x="570" y="576" text-anchor="middle" font-size="10.5" fill="#7c3aed">同一 key 可能出现在多个 block（历史 flush）</text>
+      <rect x="770" y="486" width="360" height="110" rx="10" fill="#fff" stroke="#d8b4fe"/>
+      <text x="950" y="510" text-anchor="middle" font-weight="700" fill="#4c1d95">为什么自研而不用于 B-Tree？</text>
+      <text x="950" y="532" text-anchor="middle" fill="#6d28d9">只需要点查（按主键定位），哈希足矣；</text>
+      <text x="950" y="552" text-anchor="middle" fill="#6d28d9">块化设计天然支持 merge（CH06 index merge）</text>
+      <text x="950" y="576" text-anchor="middle" font-size="10.5" fill="#7c3aed">blob 序列化格式与 DV 同样是自定义二进制</text>
+    </g>
+  </svg>
+</div>
+
+<h2>4.2 索引查找：DELETE 如何 O(1) 定位</h2>
+<p class="lead">一条 <code>DELETE FROM t WHERE pk=42</code>（经 CDC 到达为 Delete 事件）的完整旅程：</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 4-2</span> · 删除定位流程：内存层命中 → 打位图；内存层未命中 → 查文件索引 → 记删除日志</div>
+  <svg viewBox="0 0 1160 560" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="d21" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#dc2626"/></marker>
+      <marker id="d22" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    </defs>
+    <g font-size="12">
+      <rect x="30" y="60" width="220" height="90" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+      <text x="140" y="88" text-anchor="middle" font-weight="700" fill="#1e3a8a">Delete{row, lsn}</text>
+      <text x="140" y="112" text-anchor="middle" font-size="11" fill="#3b5ba9">get_lookup_key(&amp;row) → u64</text>
+      <text x="140" y="132" text-anchor="middle" font-size="11" fill="#3b5ba9">（主键哈希；append-only 直接返回）</text>
+
+      <rect x="330" y="60" width="240" height="90" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+      <text x="450" y="88" text-anchor="middle" font-weight="700" fill="#14532d">查 MemIndex</text>
+      <text x="450" y="112" text-anchor="middle" font-size="11" fill="#166534">fast_delete(hash)：HashTable 查找</text>
+      <text x="450" y="132" text-anchor="middle" font-size="11" fill="#166534">命中 → RecordLocation(batch_id, off)</text>
+
+      <rect x="650" y="36" width="230" height="70" rx="10" fill="#fee2e2" stroke="#dc2626"/>
+      <text x="765" y="62" text-anchor="middle" font-weight="700" fill="#7f1d1d">命中：内存删除</text>
+      <text x="765" y="84" text-anchor="middle" font-size="11" fill="#b91c1c">批位图 delete_row(offset)</text>
+      <text x="765" y="100" text-anchor="middle" font-size="11" fill="#b91c1c">（BatchDeletionVector）</text>
+      <rect x="650" y="124" width="230" height="70" rx="10" fill="#fee2e2" stroke="#dc2626"/>
+      <text x="765" y="150" text-anchor="middle" font-weight="700" fill="#7f1d1d">未命中：查 file_indices</text>
+      <text x="765" y="172" text-anchor="middle" font-size="11" fill="#b91c1c">GlobalIndex 归并查 hash</text>
+      <text x="765" y="188" text-anchor="middle" font-size="11" fill="#b91c1c">→ (file_id, row_offset)</text>
+
+      <rect x="940" y="36" width="190" height="70" rx="10" fill="#fef3c7" stroke="#ca8a04"/>
+      <text x="1035" y="62" text-anchor="middle" font-weight="700" fill="#713f12">磁删：记录 RawDeletionRecord</text>
+      <text x="1035" y="84" text-anchor="middle" font-size="11" fill="#854d0e">位置 + lsn + xact_id</text>
+      <text x="1035" y="100" text-anchor="middle" font-size="11" fill="#854d0e">进删除日志（图3-5）</text>
+      <rect x="940" y="124" width="190" height="70" rx="10" fill="#fef3c7" stroke="#ca8a04"/>
+      <text x="1035" y="150" text-anchor="middle" font-weight="700" fill="#713f12">更新 DiskFileEntry</text>
+      <text x="1035" y="172" text-anchor="middle" font-size="11" fill="#854d0e">committed_deletion_vector</text>
+      <text x="1035" y="188" text-anchor="middle" font-size="11" fill="#854d0e">内存位图 +1（未持久化前）</text>
+
+      <line x1="250" y1="105" x2="330" y2="105" stroke="#dc2626" stroke-width="1.8" marker-end="url(#d21)"/>
+      <line x1="570" y1="82" x2="650" y2="71" stroke="#dc2626" stroke-width="1.8" marker-end="url(#d21)"/>
+      <text x="610" y="64" text-anchor="middle" font-size="10.5" fill="#dc2626">命中</text>
+      <line x1="570" y1="128" x2="650" y2="159" stroke="#475569" stroke-width="1.8" marker-end="url(#d22)"/>
+      <text x="610" y="162" text-anchor="middle" font-size="10.5" fill="#475569">未命中</text>
+      <line x1="880" y1="159" x2="940" y2="159" stroke="#dc2626" stroke-width="1.8" marker-end="url(#d21)"/>
+      <line x1="765" y1="106" x2="765" y2="124" stroke="#475569" stroke-width="1.4" marker-end="url(#d22)"/>
+      <text x="765" y="119" text-anchor="middle" font-size="10.5" fill="#475569">也不在内存</text>
+    </g>
+    <!-- end to end example -->
+    <rect x="30" y="240" width="1100" height="130" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+    <text x="55" y="268" font-weight="700" fill="#334155">端到端实例：pk=42 已随 flush_7 落盘，现在收到 DELETE pk=42（lsn=900）</text>
+    <g font-size="12" fill="#475569">
+      <text x="55" y="294">① hash(42) 在 MemIndex 未命中（该行早 flush 走了）→ ② GlobalIndex 归并查到 DiskFile{file_id:7, row_offset:124}</text>
+      <text x="55" y="318">③ 记录 RawDeletionRecord{(file 7, 124), lsn:900, xact_id:88} 进 committed/uncommitted 删除日志　④ DiskFileEntry[7].committed_deletion_vector.insert(124)</text>
+      <text x="55" y="342">⑤ 下次 iceberg snapshot 时：位图序列化成 puffin blob → Iceberg v3 deletion vector 正式挂到 file 7 上（CH06）</text>
+    </g>
+    <!-- delete_if_exists -->
+    <rect x="30" y="390" width="540" height="140" rx="10" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="55" y="418" font-weight="700" fill="#1e3a8a">delete_if_exists 语义</text>
+    <g font-size="12" fill="#1e293b">
+      <text x="55" y="444">PG 的 DELETE 天然「删不到就算了」；TableEvent::Delete 带 delete_if_exists 标志</text>
+      <text x="55" y="468">· false 且删不到 → 报错回滚路径（约束更严的场景）</text>
+      <text x="55" y="492">· REST upsert 展开成 Delete{delete_if_exists:true} + Append —— 删不到就直接插入</text>
+    </g>
+    <rect x="590" y="390" width="540" height="140" rx="10" fill="#f0fdf4" stroke="#16a34a"/>
+    <text x="615" y="418" font-weight="700" fill="#14532d">Upsert = Delete + Append（sink 层展开，moonlink_sink.rs）</text>
+    <g font-size="12" fill="#166534">
+      <text x="615" y="444">PG 的 UPDATE 消息包含旧键与新行：翻译成两个 TableEvent，</text>
+      <text x="615" y="468">在同一个事务（同 lsn 区间）内依次投递：Delete{old_key} → Append{new_row}</text>
+      <text x="615" y="492">actor 串行处理保证顺序；删除打标与插入走 §4.2 / §3.2 两条既有路径</text>
+    </g>
+  </svg>
+</div>
+
+<h2>4.3 Deletion Vector：内存位图与 puffin 序列化</h2>
+<p class="lead">删除向量有两副面孔：<b>内存里</b>是 <code>BatchDeletionVector</code>（Roaring 风格位图，挂在批/文件上）；<b>持久化后</b>是 puffin 文件里的一个 blob，完全遵循 Iceberg v3 deletion vector 规范 —— 外部引擎也认。</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 4-3</span> · DV 双副面孔与 puffin blob 二进制布局</div>
+  <svg viewBox="0 0 1160 620" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="d31" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    </defs>
+    <!-- in-memory -->
+    <text x="30" y="36" font-size="14" font-weight="700" fill="#dc2626">内存态 · BatchDeletionVector（delete_vector.rs）</text>
+    <g font-size="11.5">
+      <rect x="30" y="50" width="540" height="180" rx="10" fill="#fee2e2" stroke="#dc2626"/>
+      <text x="300" y="76" text-anchor="middle" font-weight="700" fill="#7f1d1d">per 批 / per data file 一张位图</text>
+      <g font-family="Menlo,monospace" font-size="11" fill="#7f1d1d">
+        <text x="50" y="104">行号:  0 1 2 3 4 5 6 7 8 9 …</text>
+        <text x="50" y="128">位图:  □ □ ■ □ □ □ ■ □ □ □ …   ■=已删除</text>
+        <text x="50" y="152">API:   delete_row(idx) / apply_to_batch() / collect_active_rows()</text>
+        <text x="50" y="184">存储:  Roaring 风格分桶 —— 稠密段用位图、稀疏段用整数数组，</text>
+        <text x="50" y="204">　　　　兼顾「删 3 行」和「删 10 万行」的内存效率</text>
+      </g>
+    </g>
+    <!-- arrow -->
+    <line x1="570" y1="140" x2="620" y2="140" stroke="#475569" stroke-width="2" marker-end="url(#d31)"/>
+    <text x="595" y="128" text-anchor="middle" font-size="10.5" fill="#475569">iceberg snapshot</text>
+    <text x="595" y="158" text-anchor="middle" font-size="10.5" fill="#475569">写 DV blob</text>
+    <!-- serialized -->
+    <text x="640" y="36" font-size="14" font-weight="700" fill="#7c3aed">持久态 · puffin blob（deletion_vector.rs::serialize）</text>
+    <g font-size="11">
+      <rect x="640" y="50" width="490" height="180" rx="10" fill="#f3e8ff" stroke="#7c3aed"/>
+      <text x="885" y="76" text-anchor="middle" font-weight="700" fill="#4c1d95">二进制布局（Iceberg v3 DV 规范）</text>
+      <g font-family="Menlo,monospace" font-size="10.5" fill="#4c1d95">
+        <rect x="660" y="90" width="60" height="34" fill="#ede9fe" stroke="#a78bfa"/>
+        <text x="690" y="112" text-anchor="middle">4B len</text>
+        <rect x="720" y="90" width="80" height="34" fill="#ddd6fe" stroke="#8b5cf6"/>
+        <text x="760" y="106" text-anchor="middle">4B magic</text>
+        <text x="760" y="119" text-anchor="middle" font-size="8.5">D1 D3 39 64</text>
+        <rect x="800" y="90" width="240" height="34" fill="#c4b5fd" stroke="#7c3aed"/>
+        <text x="920" y="112" text-anchor="middle">RoaringTreemap 序列化（u64 扩展格式）</text>
+        <rect x="1040" y="90" width="70" height="34" fill="#ddd6fe" stroke="#8b5cf6"/>
+        <text x="1075" y="112" text-anchor="middle">4B crc32c</text>
+        <text x="885" y="148" text-anchor="middle" fill="#6d28d9">len = magic + bitmap 的总长（大端）；crc 覆盖 magic+bitmap</text>
+        <text x="885" y="172" text-anchor="middle" fill="#6d28d9">blob properties: cardinality / referenced-data-file</text>
+        <text x="885" y="196" text-anchor="middle" fill="#6d28d9">/ mooncake-deletion-vector-max-num-rows（私有扩展）</text>
+        <text x="885" y="220" text-anchor="middle" fill="#7c3aed">不变量：一个 puffin 文件恰好一个 blob（load_blob_from_puffin_file 断言）</text>
+      </g>
+    </g>
+    <!-- puffin file anatomy -->
+    <rect x="30" y="260" width="1100" height="150" rx="10" fill="#fff" stroke="#d8b4fe"/>
+    <text x="55" y="288" font-weight="700" fill="#4c1d95">puffin 文件解剖（PuffinBlobRef：cache handle + offset + size + num_rows）</text>
+    <g font-family="Menlo,monospace" font-size="11" fill="#4c1d95">
+      <rect x="55" y="302" width="1050" height="40" fill="#faf5ff" stroke="#d8b4fe"/>
+      <text x="70" y="327">… (file_index blob 或 DV blob 只占一个，其余是 puffin footer) … | 4B blob len | magic | bitmap | crc | … footer(magic PUFFIN) …</text>
+      <text x="55" y="366" font-family="-apple-system,sans-serif" font-size="11.5" fill="#6d28d9">IcebergTableSyncer::sync_deletion_vector 为每个「有删除的 data file」生成一个 puffin 文件；提交时把 DV blob 挂到对应 data file 上</text>
+      <text x="55" y="382" font-family="-apple-system,sans-serif" font-size="11.5" fill="#6d28d9">（经 content_offset 引用，见 CH06 的 PuffinWrite workaround —— 重写 manifest 挂载 DV 元数据）。</text>
+      <text x="55" y="402" font-family="-apple-system,sans-serif" font-size="11.5" fill="#6d28d9">type = DELETION_VECTOR_V1；snapshot_id/sequence 提交前未知故置 −1 —— 这些细节都写在 deletion_vector.rs 头注释里。</text>
+    </g>
+    <!-- read side -->
+    <rect x="30" y="440" width="1100" height="150" rx="10" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="55" y="468" font-weight="700" fill="#1e3a8a">读侧怎么消费 DV？（CH07 预告）</text>
+    <g font-size="12" fill="#1e293b">
+      <text x="55" y="494">· DataFusion / duckdb_mooncake：读 puffin → seek(offset+8) → 反序列化 RoaringTreemap → 合并 position_deletes →</text>
+      <text x="55" y="518">　把连续已删/存活行区间转成 RowSelector::skip/select（run-length）注入 ParquetAccessPlan —— 行级裁剪直接下推到 parquet reader；</text>
+      <text x="55" y="542">· Spark/Trino 等 Iceberg 引擎：按 v3 规范自己读 puffin DV —— 这就是「写入对 Iceberg 友好」的最终形态；</text>
+      <text x="55" y="566">· 与 equality-delete 的本质区别：DV 是「行位置删除」，读时只需按位图跳行，不需要和 delete 文件做键关联（无 join 放大）。</text>
+    </g>
+  </svg>
+</div>
+
+<h2>4.4 索引合并（index merge）与 compaction 的关系</h2>
+<div class="callout good"><b>设计闭环：</b>flush 越多，GlobalIndex 的 block 越碎 → 查询要归并的 block 越多 → moonlink 用「把小 index block 合并成大 block」的方式整理索引（FileIndexMergeConfig：16–32 个未满 512MiB 的 block 触发）。合并索引必然涉及「重写索引指向的数据文件」的配合，所以与 data compaction 同一个快照周期只允许一个在途（BackgroundTaskStatus 串行化），避免重映射打架。</div>
+
+<table>
+  <thead><tr><th>机制</th><th>触发条件（release 默认）</th><th>产物</th></tr></thead>
+  <tbody>
+    <tr><td>MemIndex 建索引</td><td>建表时 row_identity ≠ None</td><td>MemSlice 内哈希表</td></tr>
+    <tr><td>remap → GlobalIndex</td><td>每次 flush（图 3-3 ③）</td><td>新 IndexBlock（puffin blob）</td></tr>
+    <tr><td>index merge</td><td>未满 512MiB 的 block 数 ∈ [16, 32]</td><td>更大的 block，旧 block 报废</td></tr>
+    <tr><td>DV 持久化</td><td>iceberg snapshot 时有未持久化删除</td><td>puffin DV blob 挂到 data file</td></tr>
+    <tr><td>数据 compaction</td><td>可合并文件数 ∈ [16, 32] 且（&lt;512MiB 或删除率 ≥50%）</td><td>≈512MiB 大文件 + 重映射表</td></tr>
+  </tbody>
+</table>
+
+<div class="footer">
+  <a href="03-core-engine.html">← 03 存储引擎</a>
+  <a href="05-wal-recovery.html">下一章：05 WAL 与崩溃恢复 →</a>
+</div>
+</div>
+</body>
+</html>

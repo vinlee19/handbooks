@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>06 · 标量索引与全文检索</title>
+<style>
+  :root{--bg:#f7f8fb;--card:#fff;--ink:#1a2233;--muted:#5b6472;--accent:#3b5bdb;--accent2:#7048e8;--teal:#0ca678;--orange:#e8590c;--red:#e03131;--line:#dde3ee;--code-bg:#f1f3f9}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.78}
+  header{background:linear-gradient(135deg,#1c7ed6,#228be6 55%,#4dabf7);color:#fff;padding:44px 8% 36px}
+  header h1{font-size:28px}header p{opacity:.95;font-size:15px;max-width:920px;margin-top:8px}
+  nav.top{background:#101832;padding:10px 8%;font-size:13.5px}
+  nav.top a{color:#9db8ff;text-decoration:none;margin-right:18px}
+  nav.top a.cur{color:#fff;font-weight:700}
+  main{max-width:1150px;margin:0 auto;padding:34px 4% 90px}
+  h2{font-size:23px;margin:42px 0 14px;padding-left:14px;border-left:5px solid #1c7ed6}
+  h3{font-size:18px;margin:26px 0 10px;color:#1864ab}
+  p{margin:10px 0}.lead{color:var(--muted);font-size:15.5px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px 26px;margin:16px 0;box-shadow:0 1px 3px rgba(30,42,90,.05)}
+  code{font-family:"SF Mono",Menlo,Consolas,monospace;background:var(--code-bg);border-radius:5px;padding:1px 7px;font-size:.92em;color:#0b3a8f}
+  pre{background:#0f1730;color:#dbe4ff;border-radius:10px;padding:16px 20px;overflow-x:auto;font-size:13px;line-height:1.6;margin:14px 0}
+  pre .c{color:#7d8bb0}.k{color:#82aaff}.s{color:#c3e88d}.t2{color:#ffcb6b}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th{background:#e7f5ff;color:#1864ab;text-align:left;padding:8px 12px;border:1px solid var(--line)}
+  td{padding:7px 12px;border:1px solid var(--line);vertical-align:top}
+  .svgwrap{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin:20px 0;overflow-x:auto}
+  .svgwrap .cap{text-align:center;color:var(--muted);font-size:13px;margin-top:8px}
+  .note{border-left:4px solid var(--orange);background:#fff4ec;border-radius:0 8px 8px 0;padding:11px 16px;margin:13px 0;font-size:14px}
+  .tip{border-left:4px solid var(--teal);background:#e9faf3;border-radius:0 8px 8px 0;padding:11px 16px;margin:13px 0;font-size:14px}
+  svg text{font-family:-apple-system,PingFang SC,sans-serif}
+</style>
+</head>
+<body>
+<header>
+  <h1>06 · 标量索引与全文检索（FTS）</h1>
+  <p>向量检索只是半个故事——生产 ANN 查询几乎总是带结构化过滤。本章解析 BTree/Bitmap/ZoneMap/NGram/RTree/Bloom 的实现与 <b>Inverted 索引 + BM25 全文检索</b>（词表、posting list、WAND 逐层加速），以及"索引掩码 → prefilter → ANN"的融合机制。</p>
+</header>
+<nav class="top">
+  <a href="index.html">总览</a><a href="01-physical-layout.html">01 物理布局</a><a href="02-encoding.html">02 编码体系</a><a href="03-read-path.html">03 读路径</a><a href="04-write-path.html">04 写路径与提交</a><a href="05-vector-index.html">05 向量索引</a><a class="cur" href="06-scalar-index.html">06 标量索引/FTS</a><a href="07-linalg-simd.html">07 SIMD</a><a href="08-bindings-ecosystem.html">08 生态</a>
+</nav>
+<main>
+
+<h2>1. 标量索引家族</h2>
+<div class="card">
+<table>
+<tr><th>索引</th><th>数据结构</th><th>擅长的谓词</th><th>源码</th></tr>
+<tr><td><b>BTree</b></td><td>B+ 树（页=子索引文件，支持 sub-lookups 并行）</td><td>等值/范围（&lt; &gt; BETWEEN）</td><td><code>scalar/btree/</code></td></tr>
+<tr><td><b>Bitmap</b></td><td>每唯一值一个 Roaring bitmap</td><td>低基数等值/IN</td><td><code>scalar/bitmap.rs</code></td></tr>
+<tr><td><b>ZoneMap</b></td><td>每页 min/max/null_count（存在索引元数据里，非独立索引）</td><td>范围谓词的页级跳过</td><td><code>scalar/zonemap.rs</code> + encoding statistics.rs</td></tr>
+<tr><td><b>Inverted</b></td><td>词表(term dict) + posting list + BM25 打分</td><td>全文 MATCH/PHRASE/布尔组合</td><td><code>scalar/inverted/</code>（20+ 文件）</td></tr>
+<tr><td><b>NGram</b></td><td>n-gram 倒排（like '%xx%' 加速）</td><td>子串/模糊匹配</td><td><code>scalar/ngram/</code></td></tr>
+<tr><td><b>RTree</b></td><td>R 树（几何列）</td><td>空间相交/包含</td><td><code>scalar/rtree/</code>（配 lance-geo）</td></tr>
+<tr><td><b>Bloom</b></td><td>布隆过滤器（lance-core utils）</td><td>高基数点查预筛</td><td><code>scalar/bloomfilter.rs</code></td></tr>
+<tr><td><b>LabelList / JSON / FMIndex / compound / cross-column</b></td><td>列表元素倒排 / JSON 路径 / FM 索引 / 复合索引 / 跨列联合</td><td>专项场景</td><td><code>scalar/*.rs</code></td></tr>
+</table>
+</div>
+
+<h2>2. BTree 索引的物理形态</h2>
+<div class="svgwrap">
+<svg viewBox="0 0 1080 380" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 6-1 · BTree 索引：页式存储 + sub-lookup 并行下探</text>
+  <g font-size="12">
+    <rect x="390" y="48" width="300" height="40" rx="7" fill="#3b5bdb"/>
+    <text x="540" y="73" text-anchor="middle" fill="#fff" font-weight="700">根：分区描述 + max 值数组</text>
+    <rect x="180" y="120" width="200" height="40" rx="7" fill="#4dabf7"/><text x="280" y="145" text-anchor="middle" fill="#fff">内部节点（页）</text>
+    <rect x="440" y="120" width="200" height="40" rx="7" fill="#4dabf7"/><text x="540" y="145" text-anchor="middle" fill="#fff">内部节点</text>
+    <rect x="700" y="120" width="200" height="40" rx="7" fill="#4dabf7"/><text x="800" y="145" text-anchor="middle" fill="#fff">内部节点</text>
+    <rect x="80" y="196" width="180" height="44" rx="7" fill="#e7f7f1" stroke="#0ca678"/><text x="170" y="215" text-anchor="middle" fill="#087f5b" font-weight="600">叶子页：排序键数组</text><text x="170" y="232" text-anchor="middle" fill="#087f5b" font-size="11">+ row id 序列</text>
+    <rect x="290" y="196" width="180" height="44" rx="7" fill="#e7f7f1" stroke="#0ca678"/><text x="380" y="215" text-anchor="middle" fill="#087f5b" font-weight="600">叶子页</text><text x="380" y="232" text-anchor="middle" font-size="11" fill="#087f5b">…</text>
+    <rect x="500" y="196" width="180" height="44" rx="7" fill="#e7f7f1" stroke="#0ca678"/><text x="590" y="215" text-anchor="middle" fill="#087f5b" font-weight="600">叶子页</text><text x="590" y="232" text-anchor="middle" font-size="11" fill="#087f5b">…</text>
+    <rect x="710" y="196" width="180" height="44" rx="7" fill="#e7f7f1" stroke="#0ca678"/><text x="800" y="215" text-anchor="middle" fill="#087f5b" font-weight="600">叶子页</text><text x="800" y="232" text-anchor="middle" font-size="11" fill="#087f5b">…</text>
+    <rect x="920" y="196" width="120" height="44" rx="7" fill="#fff4ec" stroke="#e8590c"/>
+    <text x="980" y="215" text-anchor="middle" fill="#a34700" font-weight="600">训练子索引</text><text x="980" y="232" text-anchor="middle" font-size="11" fill="#a34700">(TrainingLeaf)</text>
+    <line x1="480" y1="88" x2="300" y2="116" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="540" y1="88" x2="540" y2="116" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="600" y1="88" x2="780" y2="116" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="250" y1="160" x2="185" y2="192" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="290" y1="160" x2="365" y2="192" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="520" y1="160" x2="580" y2="192" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="780" y1="160" x2="810" y2="192" stroke="#5b6472" stroke-width="1.5"/>
+    <text x="60" y="290" font-size="12.5" fill="#5b6472">查询谓词 id BETWEEN 500 AND 800 → 根二分定位候选子树 → 各子树<b>并行</b>下探（每个叶子页是独立可调度单元）</text>
+    <text x="60" y="316" font-size="12.5" fill="#5b6472">→ 命中 row id 集 → 转 RoaringBitmap → 交并差组合（expression.rs）</text>
+    <text x="60" y="346" font-size="12" fill="#8a93a6">索引本体用 Lance 文件格式存储；查询命中部分只需读相关页（列裁剪思想复用）</text>
+  </g>
+</svg>
+<div class="cap">图 6-1 · BTree。范围查询天然并行：多叶子同时下发 I/O（与 03 篇调度器无缝衔接）。</div>
+</div>
+
+<h2>3. Inverted 索引：词表 → posting list → BM25</h2>
+<p class="lead">FTS 子系统（<code>scalar/inverted/</code>）是仓库中最"数据库内核"味道的部分：自带分词器框架（<code>tokenizer/</code>，接 lance-tokenizer crate）、打分器（<code>scorer.rs</code>）、WAND 分支定界（<code>wand.rs</code>）、复合查询（<code>compound/</code>：Boolean/Phrase/Boost）与跨列联合（<code>cross_column.rs</code>）。</p>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1080 470" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 6-2 · Inverted 索引结构与查询管线</text>
+  <g font-size="12">
+    <!-- build -->
+    <rect x="50" y="52" width="300" height="200" rx="10" fill="#eef2ff" stroke="#3b5bdb"/>
+    <text x="200" y="78" text-anchor="middle" font-weight="700" fill="#243b8a">构建（builder.rs）</text>
+    <text x="66" y="104">doc 文本 → 分词（lance-tokenizer）</text>
+    <text x="66" y="128" font-size="11.5" fill="#5b6472">unicode 分词/小写/停用词/自定义词表</text>
+    <text x="66" y="156">term → (doc, freq, position) 收集</text>
+    <text x="66" y="184">排序聚合 → 每 term 一段 posting</text>
+    <text x="66" y="212" font-size="11.5" fill="#5b6472">posting 块按 bitpack 选择物理编码</text>
+    <text x="66" y="232" font-size="11.5" fill="#5b6472">(PostingTailCodec, block_size 可配)</text>
+
+    <!-- layout -->
+    <rect x="400" y="52" width="320" height="200" rx="10" fill="#e7f7f1" stroke="#0ca678"/>
+    <text x="560" y="78" text-anchor="middle" font-weight="700" fill="#087f5b">存储布局</text>
+    <text x="416" y="104" font-family="Menlo,monospace" font-size="11.5">term_dict:  词 → (offset, len, df)</text>
+    <text x="416" y="128" font-family="Menlo,monospace" font-size="11.5">posting:    doc_ids[] + freqs[]</text>
+    <text x="416" y="152" font-family="Menlo,monospace" font-size="11.5">positions:  短语查询用位置流</text>
+    <text x="416" y="178" font-size="11.5" fill="#5b6472">按"段(segment)"分块，块内按行地址组织</text>
+    <text x="416" y="200" font-size="11.5" fill="#5b6472">docset 缓存(cache_codec.rs) 热词常驻</text>
+    <text x="416" y="226" font-size="11.5" fill="#c92a2a">doc 未建索引的行由 FlatMatch 扫描兜底</text>
+
+    <!-- query -->
+    <rect x="770" y="52" width="270" height="200" rx="10" fill="#fff4ec" stroke="#e8590c"/>
+    <text x="905" y="78" text-anchor="middle" font-weight="700" fill="#a34700">查询（query.rs）</text>
+    <text x="786" y="104">MATCH 'hello world' →</text>
+    <text x="786" y="128" font-size="11.5" fill="#5b6472">分词 → 各 term 查 posting →</text>
+    <text x="786" y="152" font-size="11.5" fill="#5b6472">BM25 打分（scorer.rs: k1/b 参数）</text>
+    <text x="786" y="180">Phrase → 位置流校验相邻</text>
+    <text x="786" y="204">Boolean → 集合代数</text>
+    <text x="786" y="228" font-size="11.5" fill="#5b6472">WAND: 堆顶上限剪枝 top-k</text>
+
+    <line x1="350" y1="150" x2="396" y2="150" stroke="#5b6472" stroke-width="1.8"/>
+    <line x1="720" y1="150" x2="766" y2="150" stroke="#5b6472" stroke-width="1.8"/>
+
+    <!-- pipeline -->
+    <rect x="50" y="290" width="990" height="140" rx="10" fill="#f3ecff" stroke="#7048e8"/>
+    <text x="545" y="316" text-anchor="middle" font-weight="700" fill="#4c1d95">混合检索（向量 + FTS）在执行计划中的形态</text>
+    <text x="80" y="346" font-family="Menlo,monospace" font-size="12.5">MatchQueryExec ─┐                      ┌→ RRF/加权融合 ─→ TakeExec ─→ 输出</text>
+    <text x="80" y="374" font-family="Menlo,monospace" font-size="12.5">                ├→ 各自产生 doc/row_id 打分集 →</text>
+    <text x="80" y="402" font-family="Menlo,monospace" font-size="12.5">ANNIvf*Exec ────┘                      └→ （或 FTS 仅作 prefilter 掩码喂给 ANN）</text>
+    <text x="80" y="424" font-size="11.5" fill="#8a93a6">fts.rs: MatchQueryExec/PhraseQueryExec/BooleanQueryExec/BoostQueryExec/CompoundQueryExec/CrossColumnCompoundQueryExec</text>
+  </g>
+</svg>
+<div class="cap">图 6-2 · FTS 管线。BM25 的 IDF 来自全局统计，WAND 让 top-k 查询不必穷举全部 posting。</div>
+</div>
+
+<h2>4. 谓词下推与 prefilter：三路融合</h2>
+<div class="svgwrap">
+<svg viewBox="0 0 1080 330" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 6-3 · 一个 WHERE 子句的四种命运</text>
+  <g font-size="12">
+    <rect x="390" y="46" width="300" height="44" rx="9" fill="#0f1730"/>
+    <text x="540" y="73" text-anchor="middle" fill="#dbe4ff" font-weight="700">WHERE category='toy' AND price &lt; 50</text>
+
+    <rect x="40" y="140" width="230" height="130" rx="9" fill="#e7f7f1" stroke="#0ca678"/>
+    <text x="155" y="166" text-anchor="middle" font-weight="700" fill="#087f5b">① 索引可答</text>
+    <text x="55" y="192" font-size="11.5">category 有 Bitmap → mask₁</text>
+    <text x="55" y="216" font-size="11.5">price 有 BTree → mask₂</text>
+    <text x="55" y="240" font-size="11.5" fill="#087f5b">AND 合并 → 行集合</text>
+    <text x="55" y="260" font-size="11.5" fill="#087f5b">CountFromMaskExec 直接 count</text>
+
+    <rect x="300" y="140" width="230" height="130" rx="9" fill="#eef2ff" stroke="#3b5bdb"/>
+    <text x="415" y="166" text-anchor="middle" font-weight="700" fill="#243b8a">② 有索引但有残余</text>
+    <text x="315" y="192" font-size="11.5">索引掩码先筛 → 命中行回表</text>
+    <text x="315" y="216" font-size="11.5">LanceFilterExec 验证</text>
+    <text x="315" y="240" font-size="11.5" fill="#243b8a">谓词被"拆半"下发</text>
+    <text x="315" y="260" font-size="11.5" fill="#243b8a">（DataFusion 优化器）</text>
+
+    <rect x="560" y="140" width="230" height="130" rx="9" fill="#f3ecff" stroke="#7048e8"/>
+    <text x="675" y="166" text-anchor="middle" font-weight="700" fill="#4c1d95">③ 无索引</text>
+    <text x="575" y="192" font-size="11.5">LancePushdownScanExec：</text>
+    <text x="575" y="216" font-size="11.5">zone map 页级跳过 + 只读</text>
+    <text x="575" y="240" font-size="11.5">谓词涉及列 → 全量行过滤</text>
+    <text x="575" y="260" font-size="11.5" fill="#4c1d95">大列后置投影省 I/O</text>
+
+    <rect x="820" y="140" width="220" height="130" rx="9" fill="#fff4ec" stroke="#e8590c"/>
+    <text x="930" y="166" text-anchor="middle" font-weight="700" fill="#a34700">④ 与 ANN 融合</text>
+    <text x="835" y="192" font-size="11.5">掩码 → DatasetPreFilter</text>
+    <text x="835" y="216" font-size="11.5">ANN 遍历图时按位跳过</text>
+    <text x="835" y="240" font-size="11.5" fill="#a34700">高选择性: ACORN 模式</text>
+    <text x="835" y="260" font-size="11.5" fill="#a34700">低选择性: 扫后过滤</text>
+
+    <line x1="470" y1="90" x2="170" y2="136" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="540" y1="90" x2="415" y2="136" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="610" y1="90" x2="675" y2="136" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="680" y1="82" x2="930" y2="136" stroke="#5b6472" stroke-width="1.5"/>
+  </g>
+</svg>
+<div class="cap">图 6-3 · 谓词路由。Lance 优化器（io/exec/optimizer.rs）在 DataFusion 规则之上加了 Lance 特有规则：索引替换、count 下推、zone map 感知。</div>
+</div>
+
+<div class="note"><b>ZoneMap 在哪？</b>它不是独立索引而是<b>随编码生成</b>的统计（lance-encoding statistics.rs：DataBlock 层记录 min/max/null_count）。v2 文件把这些统计存在列元数据 buffer 里，pushdown 扫描用它们整页跳过——"免费的范围索引"。</div>
+
+<div class="tip"><b>建索引的通用心智模型：</b>所有标量索引 = "把 row id 按<b>键</b>组织成可剪枝结构 + 用 Lance 文件存" 。区别只在键的形态（有序值/唯一值/词元/n-gram/几何框）。因此：① 索引可与数据不同 fragment 版本（fragment_bitmap 校验）；② 索引更新=重建受影响 fragment 部分；③ 一切索引查询结果都是行地址位图，进入统一的下游融合。</div>
+
+</main>
+<nav class="top" style="text-align:center">
+  <a href="05-vector-index.html">« 05 向量索引</a> · <a href="07-linalg-simd.html">07 SIMD »</a>
+</nav>
+</body>
+</html>

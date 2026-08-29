@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>01 · 项目全景与代码地图 — Apache Burr 源码剖析</title>
+<style>
+:root{
+  --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --line:#e2e8f0;
+  --blue:#2563eb; --blue-bg:#eff6ff; --green:#16a34a; --green-bg:#f0fdf4;
+  --amber:#d97706; --amber-bg:#fffbeb; --purple:#9333ea; --purple-bg:#faf5ff;
+  --red:#dc2626; --red-bg:#fef2f2; --code-bg:#0f172a;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.75}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.94);backdrop-filter:blur(6px);color:#e2e8f0;display:flex;gap:12px;align-items:center;padding:10px 24px;font-size:13px;flex-wrap:wrap}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:3px 8px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav .brand{font-weight:700;color:#fff;font-size:14px;letter-spacing:.5px;margin-right:8px}
+.topnav .brand span{color:#60a5fa}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+.hero{background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:40px 0;margin-bottom:28px}
+.hero h1{margin:0 0 8px;font-size:28px}
+.hero p{margin:0;color:#cbd5e1;font-size:14.5px;max-width:860px}
+main{padding-bottom:64px}
+h2{font-size:23px;border-left:5px solid var(--blue);padding-left:12px;margin:42px 0 10px}
+h3{font-size:18px;margin:26px 0 6px;color:#1d4ed8}
+h4{font-size:15.5px;margin:18px 0 6px}
+p,li{color:#334155;font-size:14.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:16px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.grid{display:grid;gap:16px}
+.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:860px){.grid.c2,.grid.c3{grid-template-columns:1fr}}
+figure{margin:20px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;overflow-x:auto}
+figcaption{font-size:13px;color:var(--muted);text-align:center;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+figcaption b{color:#1d4ed8}
+pre{background:var(--code-bg);color:#e2e8f0;padding:16px 18px;border-radius:10px;overflow-x:auto;font-size:12.8px;line-height:1.65}
+code{font-family:"SF Mono",Menlo,Consolas,"Courier New",monospace}
+p code,li code,td code,h3 code,h4 code,figcaption code{background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:5px;font-size:.9em}
+pre code{background:none;color:inherit;padding:0}
+.c-key{color:#7dd3fc}.c-str{color:#fbbf24}.c-com{color:#94a3b8;font-style:italic}.c-fn{color:#a5b4fc}.c-num{color:#f472b6}.c-dec{color:#fde047}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:#fff}
+th{background:#1e293b;color:#fff;text-align:left;padding:8px 12px;font-weight:600}
+td{border:1px solid var(--line);padding:7px 12px;vertical-align:top}
+tr:nth-child(even) td{background:#f8fafc}
+.path{font-family:monospace;background:#f1f5f9;border:1px solid var(--line);padding:1px 7px;border-radius:5px;font-size:12.5px;color:#0f766e;word-break:break-all}
+.note{border-left:4px solid var(--amber);background:var(--amber-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.note b{color:#92400e}
+.tip{border-left:4px solid var(--green);background:var(--green-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.tip b{color:#166534}
+.warn{border-left:4px solid var(--red);background:var(--red-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.pager{display:flex;justify-content:space-between;margin:40px 0 8px}
+.pager a{background:#fff;border:1px solid var(--line);padding:10px 18px;border-radius:10px;text-decoration:none;color:var(--ink);font-size:14px}
+.pager a:hover{border-color:var(--blue);color:var(--blue)}
+footer.foot{text-align:center;color:#94a3b8;font-size:12.5px;padding:24px 0 40px}
+svg text{font-family:inherit}
+svg .t{fill:#1e293b;font-size:13px}
+svg .tb{fill:#fff;font-weight:700;font-size:13px}
+svg .ts{fill:#475569;font-size:11px}
+svg .tt{fill:#0f172a;font-weight:700;font-size:15px}
+svg .tc{fill:#64748b;font-size:11px;font-family:Menlo,monospace}
+svg .lbl{fill:#334155;font-size:11.5px}
+svg .ar{stroke:#64748b;stroke-width:1.5;fill:none}
+svg .ar-b{stroke:#2563eb;stroke-width:1.8;fill:none}
+svg .ar-dash{stroke:#94a3b8;stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+svg .zone{fill:#f8fafc;stroke:#cbd5e1;stroke-dasharray:6 4}
+svg .bx{stroke-width:1.5}
+svg .b-blue{fill:#eff6ff;stroke:#3b82f6}
+svg .b-blue-d{fill:#dbeafe;stroke:#2563eb}
+svg .b-green{fill:#f0fdf4;stroke:#22c55e}
+svg .b-green-d{fill:#dcfce7;stroke:#16a34a}
+svg .b-amber{fill:#fffbeb;stroke:#f59e0b}
+svg .b-purple{fill:#faf5ff;stroke:#a855f7}
+svg .b-red{fill:#fef2f2;stroke:#ef4444}
+svg .b-slate{fill:#f1f5f9;stroke:#94a3b8}
+svg .b-dark{fill:#1e293b;stroke:#0f172a}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">Apache&nbsp;Burr<span>·源码深度剖析</span></span>
+  <a href="index.html">总导航</a><a href="01-overview.html"><b>项目全景</b></a>
+  <a href="02-core-state.html">State</a><a href="03-core-action.html">Action</a>
+  <a href="04-core-application.html">运行时</a><a href="05-graph-builder.html">Graph/Builder</a>
+  <a href="06-lifecycle-hooks.html">Hooks/Tracing</a><a href="07-persistence.html">持久化</a>
+  <a href="08-parallelism.html">并行</a><a href="09-tracking.html">追踪系统</a>
+  <a href="10-ui-frontend.html">遥测 UI</a><a href="11-integrations.html">集成生态</a>
+  <a href="12-execution-flow.html">端到端全景</a>
+</nav>
+
+<header class="hero"><div class="wrap">
+  <h1>01 · 项目全景与代码地图</h1>
+  <p>设计哲学 → 仓库目录树 → 包内部结构 → 包管理体系（flit/零依赖/extras/CLI）→ CI 与发布。读完本篇，你应当对「代码在哪里、为什么这样分层」有完整的心智地图。</p>
+</div></header>
+
+<main class="wrap">
+
+<h2>1.1 设计哲学：刻意「低抽象」</h2>
+<div class="card">
+<p>Burr 的 README 开宗明义（<span class="path">README.md:35</span>）：让开发「会做决策的应用」变得简单，用<b>简单的 Python 积木</b>表达——不引入隐藏魔法。体现在工程上就是四条铁律：</p>
+<ol>
+<li><b>零运行时依赖</b>：<span class="path">pyproject.toml:25</span> 中 <code>dependencies = []</code>。装上 <code>apache-burr</code> 内核不需要 pip 解析任何第三方包，State/Action/Application 都是纯标准库实现（<code>dataclasses / abc / contextvars / inspect</code>）。</li>
+<li><b>显式状态契约</b>：每个 action 必须声明 <code>reads=[...]</code> 和 <code>writes=[...]</code>，写未声明的键直接抛错（<span class="path">application.py:256-261</span>）。这让 UI 能画出每个节点的数据签名，也让 fork/恢复变得安全。</li>
+<li><b>位置即状态</b>：执行游标 <code>__PRIOR_STEP</code>/<code>__SEQUENCE_ID</code> 存在 State 里而不是运行时对象里，「恢复执行」=「载入 State」，不需要单独的位置存储。</li>
+<li><b>观测是插件不是内核</b>：追踪、持久化、tracing 全部通过 Lifecycle Hook 注入（06 篇），删除它们核心引擎一行不改——这也是它从 DagWorks 商业产品平滑捐给 Apache 的结构基础。</li>
+</ol>
+<div class="note"><b>名字由来：</b>Burr 以美国政治家 Aaron Burr 命名——它最初是 Apache Hamilton（DAG 框架）的「状态管理外壳」，后来成长为独立框架，并保留了对 Hamilton 的一等集成（11 篇）。</div>
+</div>
+
+<h2>1.2 仓库目录树</h2>
+<figure>
+<svg viewBox="0 0 1060 700" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#64748b"/></marker></defs>
+<rect class="bx b-blue" x="20" y="20" width="470" height="664" rx="12" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="tt" x="40" y="48">仓库根目录</text>
+<text class="tc" x="40" y="76">burr/                  Python 包（本库本体 ~19.7k 行）</text>
+<text class="tc" x="40" y="96">├── core/              ★ 执行引擎（application/action/state/graph）</text>
+<text class="tc" x="40" y="116">├── lifecycle/         ★ 生命周期钩子（base/internal/default）</text>
+<text class="tc" x="40" y="136">├── visibility/        ★ span 追踪（tracing.py）</text>
+<text class="tc" x="40" y="156">├── tracking/          ★ 追踪客户端 + FastAPI 服务端 + S3 后端</text>
+<text class="tc" x="40" y="176">├── integrations/      ★ 集成（hamilton/bedrock/otel/persisters/serde…）</text>
+<text class="tc" x="40" y="196">├── cli/               burr / burr-demo / burr-admin-* 命令</text>
+<text class="tc" x="40" y="216">├── examples/          随 wheel 分发的 5 个演示应用</text>
+<text class="tc" x="40" y="236">├── telemetry.py       ASF 后保留的 no-op 桩（禁用旧遥测）</text>
+<text class="tc" x="40" y="256">└── version.py         importlib.metadata 读版本</text>
+<text class="tc" x="40" y="286">telemetry/ui/          React 遥测 UI 源码（Vite 6 + TS）</text>
+<text class="tc" x="40" y="306">examples/              40+ 可运行示例（chatbot/RAG/agent/部署…）</text>
+<text class="tc" x="40" y="326">docs/                  Sphinx 文档（发布到 burr.apache.org）</text>
+<text class="tc" x="40" y="346">website/               Next.js 15 营销站点</text>
+<text class="tc" x="40" y="366">tests/                 pytest 套件（core/tracking/visibility/…）</text>
+<text class="tc" x="40" y="386">scripts/               ASF 发布工具（apache_release.py 等）</text>
+<text class="tc" x="40" y="406">burr-redirect/         PyPI 旧包名 burr 的重定向壳</text>
+<text class="tc" x="40" y="426">pyproject.toml         flit 构建 · 零依赖 · 20+ extras</text>
+<text class="tc" x="40" y="456">.github/workflows/     CI：python-package / ui / docs / site…</text>
+<text class="ts" x="40" y="492">★ = 本系列文档重点</text>
+<rect class="bx b-amber" x="520" y="20" width="520" height="200" rx="12" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="tb" x="540" y="48" style="fill:#92400e">burr/core/ —— 引擎五件套（约 6500 行）</text>
+<text class="tc" x="540" y="74">application.py  2874 行  运行时 + Builder（04/05 篇）</text>
+<text class="tc" x="540" y="94">action.py       2021 行  Action 模型/流式/条件（03 篇）</text>
+<text class="tc" x="540" y="114">state.py         491 行  不可变 State + Delta（02 篇）</text>
+<text class="tc" x="540" y="134">graph.py         385 行  图模型与遍历（05 篇）</text>
+<text class="tc" x="540" y="154">persistence.py   725 行  持久化协议 + SQLite（07 篇）</text>
+<text class="tc" x="540" y="174">parallelism.py   895 行  map-reduce 并行（08 篇）</text>
+<text class="tc" x="540" y="194">serde.py/typing.py       序列化与类型系统（02 篇）</text>
+<rect class="bx b-purple" x="520" y="240" width="520" height="180" rx="12" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="tb" x="540" y="268" style="fill:#6b21a8">观测与追踪层</text>
+<text class="tc" x="540" y="294">lifecycle/base.py   518 行  11 类 Hook ABC（06 篇）</text>
+<text class="tc" x="540" y="314">lifecycle/internal.py       LifecycleAdapterSet 派发</text>
+<text class="tc" x="540" y="334">visibility/tracing.py 490 行 ActionSpan/TracerFactory</text>
+<text class="tc" x="540" y="354">tracking/client.py  680 行  LocalTrackingClient（09 篇）</text>
+<text class="tc" x="540" y="374">tracking/server/            FastAPI + LocalBackend/S3（09/10 篇）</text>
+<rect class="bx b-green" x="520" y="440" width="520" height="120" rx="12" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tb" x="540" y="468" style="fill:#14532d">物理架构中的两个「独立交付物」</text>
+<text class="tc" x="540" y="494">① telemetry/ui/build → 打进 wheel 的 SPA（10 篇）</text>
+<text class="tc" x="540" y="514">② burr CLI（uvicorn :7241）一条命令起 UI 服务</text>
+<text class="ts" x="540" y="540">burr + burr-demo + burr-admin-build-ui 等 6 个 console_scripts</text>
+<rect class="bx b-slate" x="520" y="580" width="520" height="104" rx="12" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="tb" x="540" y="608" style="fill:#1e293b">数据流总结</text>
+<text class="ts" x="540" y="632">builder 构建 Application → run() 驱动循环 → hooks 写 ~/.burr</text>
+<text class="ts" x="540" y="652">→ FastAPI 读文件 → React UI 可视化 → 注释/回放/复现</text>
+</svg>
+<figcaption><b>图 1-1 · 仓库目录树与代码量地图</b> —— 引擎五件套集中在 <code>burr/core/</code>，观测层（lifecycle/visibility/tracking）与之物理隔离，UI 是独立的前端工程构建后嵌入 wheel。</figcaption>
+</figure>
+
+<h2>1.3 包内部依赖结构</h2>
+<p>下图是 <code>burr</code> 包内部的 import 依赖方向。注意两条设计约束：<b>core 不 import 任何上层</b>（依赖单向向下）；<b>tracking server 依赖 core 的数据结构但 core 不知道 server 的存在</b>。</p>
+<figure>
+<svg viewBox="0 0 1060 560" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<rect class="bx b-blue" x="40" y="330" width="430" height="170" rx="12" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="tt" x="60" y="360">Layer 0 · 内核（零第三方依赖）</text>
+<rect class="bx b-blue-d" x="60" y="380" width="120" height="44" rx="8" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="76" y="400" font-weight="700">state.py</text><text class="tc" x="76" y="416">State/Delta</text>
+<rect class="bx b-blue-d" x="196" y="380" width="120" height="44" rx="8" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="212" y="400" font-weight="700">action.py</text><text class="tc" x="212" y="416">Action/Cond</text>
+<rect class="bx b-blue-d" x="332" y="380" width="120" height="44" rx="8" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="348" y="400" font-weight="700">graph.py</text><text class="tc" x="348" y="416">Graph/Trans</text>
+<rect class="bx b-blue-d" x="60" y="440" width="120" height="44" rx="8" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="76" y="460" font-weight="700">serde.py</text><text class="tc" x="76" y="476">序列化注册表</text>
+<rect class="bx b-blue-d" x="196" y="440" width="256" height="44" rx="8" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="212" y="460" font-weight="700">application.py</text><text class="tc" x="212" y="476">Application/Builder（依赖左侧全部）</text>
+<rect class="bx b-purple" x="540" y="330" width="230" height="170" rx="12" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="tt" x="560" y="360">Layer 1 · 观测切面</text>
+<text class="tc" x="560" y="386">lifecycle/  Hook ABC + 派发器</text>
+<text class="tc" x="560" y="408">visibility/tracing.py  span 树</text>
+<text class="tc" x="560" y="434">core/persistence.py</text>
+<text class="ts" x="560" y="454">（Persister 协议，物理上在 core</text>
+<text class="ts" x="560" y="470">但只被 hooks 引用，逻辑同层）</text>
+<rect class="bx b-green" x="810" y="330" width="230" height="170" rx="12" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tt" x="830" y="360">Layer 2 · 追踪与集成</text>
+<text class="tc" x="830" y="386">tracking/client.py（写盘）</text>
+<text class="tc" x="830" y="408">tracking/s3client.py（写 S3）</text>
+<text class="tc" x="830" y="434">integrations/*（外接世界）</text>
+<text class="tc" x="830" y="460">core/parallelism.py</text>
+<rect class="bx b-amber" x="40" y="60" width="1000" height="230" rx="12" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="tt" x="60" y="90">Layer 3 · 交付物（用户视角的完整产品）</text>
+<rect class="bx b-slate" x="70" y="115" width="290" height="150" rx="10" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="90" y="142" font-weight="700">cli/__main__.py（505 行）</text>
+<text class="tc" x="90" y="166">burr            → cli_run_server :7241</text>
+<text class="tc" x="90" y="186">burr-demo       → demo 数据 + 服务</text>
+<text class="tc" x="90" y="206">burr-admin-build-ui → npm build+拷贝</text>
+<text class="tc" x="90" y="226">burr-test-case  → 测试用例生成</text>
+<rect class="bx b-slate" x="395" y="115" width="290" height="150" rx="10" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="415" y="142" font-weight="700">tracking/server/（FastAPI）</text>
+<text class="tc" x="415" y="166">run.py    路由 + SPA 托管</text>
+<text class="tc" x="415" y="186">backend.py LocalBackend 读 ~/.burr</text>
+<text class="tc" x="415" y="206">schema.py  pydantic 响应模型</text>
+<text class="tc" x="415" y="226">s3/        SQLiteS3Backend（SQS）</text>
+<rect class="bx b-slate" x="720" y="115" width="290" height="150" rx="10" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="740" y="142" font-weight="700">telemetry/ui/（React 工程）</text>
+<text class="tc" x="740" y="166">src/App.tsx 路由：projects/app/…</text>
+<text class="tc" x="740" y="186">reactflow 图视图 + 步骤时间线</text>
+<text class="tc" x="740" y="206">openapi-typescript 生成 API 客户端</text>
+<text class="tc" x="740" y="226">构建产物 → burr/tracking/server/build</text>
+<path class="ar-b" d="M255 330 L255 268" marker-end="url(#arr2)"/>
+<text class="tc" x="262" y="300" style="fill:#2563eb">被封装</text>
+<path class="ar-b" d="M655 330 L520 320 L520 268" marker-end="url(#arr2)"/>
+<path class="ar-b" d="M925 330 L880 320 L880 268" marker-end="url(#arr2)"/>
+<text class="ts" x="60" y="545">规则：依赖只能从上往下（Layer 3 → 2 → 1 → 0）；任何反向 import 都视为架构破坏。</text>
+<text class="ts" x="60" y="525"> </text>
+</svg>
+<figcaption><b>图 1-2 · 包内部分层依赖图</b> —— 四层单向依赖。内核（Layer 0）可独立安装使用；观测层只依赖内核；追踪/集成层把内核 + 钩子组装成完整产品；CLI 与服务端是面向用户的交付物。</figcaption>
+</figure>
+
+<h2>1.4 包管理体系：flit + extras</h2>
+<div class="grid c2">
+<div class="card">
+<h3>为什么是 flit + 零依赖</h3>
+<p><span class="path">pyproject.toml</span> 用 <code>flit_core</code> 构建（纯 Python，无 C 扩展），项目名 <code>apache-burr</code>（PyPI 上的旧名 <code>burr</code> 通过 <span class="path">burr-redirect/</span> 壳包重定向）。<b>基础安装没有任何依赖</b>，Python ≥ 3.9。</p>
+<p>所有可选能力都是 extras，按需安装：</p>
+<pre><code>pip install <span class="c-str">"apache-burr[start]"</span>   <span class="c-com"># 新手全家桶：UI+示例+依赖</span>
+pip install <span class="c-str">"apache-burr[tracking]"</span> <span class="c-com"># 客户端+服务端</span>
+pip install <span class="c-str">"apache-burr[graphviz]"</span> <span class="c-com"># app.visualize()</span>
+pip install <span class="c-str">"apache-burr[developer]"</span> <span class="c-com"># 全部</span></code></pre>
+</div>
+<div class="card">
+<h3>6 个 console_scripts</h3>
+<table>
+<tr><th>命令</th><th>作用</th></tr>
+<tr><td><code>burr</code></td><td>启动追踪 UI 服务（uvicorn :7241）</td></tr>
+<tr><td><code>burr-demo</code></td><td>拷贝内置 demo 数据到 ~/.burr 并启动</td></tr>
+<tr><td><code>burr-admin-server</code></td><td>同 burr（管理侧别名）</td></tr>
+<tr><td><code>burr-admin-build-ui</code></td><td>npm 构建 React UI 并拷入包内</td></tr>
+<tr><td><code>burr-admin-publish</code></td><td>发布构建产物</td></tr>
+<tr><td><code>burr-test-case</code></td><td>把运行记录固化为 pytest 用例</td></tr>
+</table>
+<p style="font-size:13px;color:var(--muted)">定义见 <span class="path">pyproject.toml:245-252</span>，实现集中在 <span class="path">burr/cli/__main__.py</span>。</p>
+</div>
+</div>
+
+<h2>1.5 extras 依赖体系图</h2>
+<figure>
+<svg viewBox="0 0 1060 540" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#16a34a"/></marker></defs>
+<rect class="bx b-blue-d" x="380" y="30" width="300" height="70" rx="12" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="tt" x="400" y="58" style="fill:#1e3a8a">apache-burr 内核</text>
+<text class="ts" x="400" y="80">dependencies = []（零依赖，pyproject.toml:25）</text>
+<rect class="bx b-amber" x="30" y="150" width="310" height="360" rx="12" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="tb" x="50" y="178" style="fill:#92400e">观测 / 追踪类 extras</text>
+<text class="tc" x="50" y="204">tracking-client     → pydantic≥2</text>
+<text class="tc" x="50" y="224">tracking-client-s3  → + boto3</text>
+<text class="tc" x="50" y="244">tracking-server    → fastapi/uvicorn/</text>
+<text class="tc" x="50" y="262">                     pydantic-settings…</text>
+<text class="tc" x="50" y="282">tracking-server-s3 → tortoise-orm/</text>
+<text class="tc" x="50" y="300">                     aiobotocore/aerich</text>
+<text class="tc" x="50" y="320">tracking = client + server</text>
+<text class="tc" x="50" y="348">opentelemetry → otel SDK/OTLP</text>
+<text class="tc" x="50" y="368">langfuse      → langfuse SDK</text>
+<text class="tc" x="50" y="396">cli → click/loguru/requests</text>
+<text class="ts" x="50" y="428">（启动 UI 或 with_tracker 需要</text>
+<text class="ts" x="50" y="444"> tracking-client + cli 两项）</text>
+<rect class="bx b-green" x="375" y="150" width="310" height="360" rx="12" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tb" x="395" y="178" style="fill:#14532d">持久化 / 数据类 extras</text>
+<text class="tc" x="395" y="204">aiosqlite / asyncpg / postgresql</text>
+<text class="tc" x="395" y="224">(psycopg2) / pymongo / redis</text>
+<text class="tc" x="395" y="252">pydantic → 类型化 State/Guardrails</text>
+<text class="tc" x="395" y="280">graphviz → app.visualize()</text>
+<text class="tc" x="395" y="308">ray → RayExecutor 分布式并行</text>
+<text class="tc" x="395" y="336">streamlit → 旧版可视化浏览器</text>
+<text class="ts" x="395" y="368">serde 插件（pandas/langchain）</text>
+<text class="ts" x="395" y="386">按已安装库自动注册（state.py:487-491）</text>
+<rect class="bx b-purple" x="720" y="150" width="310" height="360" rx="12" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="tb" x="740" y="178" style="fill:#6b21a8">LLM / 框架类 extras</text>
+<text class="tc" x="740" y="204">bedrock → boto3（Converse API）</text>
+<text class="tc" x="740" y="232">hamilton → sf-hamilton（DAG 即动作）</text>
+<text class="tc" x="740" y="260">haystack → 深度集成 + Pipeline 转换</text>
+<text class="tc" x="740" y="288">learn / start = tracking + streamlit</text>
+<text class="tc" x="740" y="308">   + graphviz + hamilton + cli + 示例</text>
+<text class="tc" x="740" y="336">developer = 以上全部（开发用）</text>
+<text class="ts" x="740" y="368">注：OpenAI/Anthropic 无官方封装——</text>
+<text class="ts" x="740" y="386">官方姿势是在 @action 里直接调 SDK</text>
+<path class="ar" d="M185 150 L400 103" marker-end="url(#arr3)"/>
+<path class="ar" d="M530 150 L530 103" marker-end="url(#arr3)"/>
+<path class="ar" d="M875 150 L660 103" marker-end="url(#arr3)"/>
+<text class="ts" x="30" y="530">可选依赖永不进入内核 import 链：所有 extras 的 import 都是延迟的（函数体内 import），未装 extras 时只报友好错误 —— 见 integrations/base.py 的 require_plugin()。</text>
+</svg>
+<figcaption><b>图 1-3 · extras 依赖体系</b> —— 内核保持零依赖；三类 extras（观测追踪 / 持久化数据 / LLM 框架）全部懒加载，组合出 <code>start</code>/<code>developer</code> 等大而全入口。</figcaption>
+</figure>
+
+<h2>1.6 CI 与发布流水线</h2>
+<figure>
+<svg viewBox="0 0 1060 400" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<rect class="bx b-slate" x="30" y="40" width="200" height="90" rx="10" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="50" y="66" font-weight="700">GitHub Actions</text>
+<text class="tc" x="50" y="90">python-package.yml</text>
+<text class="ts" x="50" y="108">pytest 矩阵（Python 3.12）</text>
+<rect class="bx b-slate" x="30" y="150" width="200" height="80" rx="10" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="tc" x="50" y="174">ui.yml — Node 22</text>
+<text class="ts" x="50" y="192">React UI 单元测试/构建</text>
+<rect class="bx b-slate" x="30" y="250" width="200" height="110" rx="10" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="tc" x="50" y="274">docs.yml / sphinx-docs.yml</text>
+<text class="tc" x="50" y="292">build-site.yml（Next.js 站点）</text>
+<text class="tc" x="50" y="310">release-validation.yml</text>
+<text class="ts" x="50" y="328">每周校验 ASF 发布工件</text>
+<rect class="bx b-amber" x="300" y="80" width="240" height="110" rx="10" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="320" y="106" font-weight="700">flit build</text>
+<text class="ts" x="320" y="128">产 apache-burr wheel/sdist</text>
+<text class="ts" x="320" y="146">[tool.flit.sdist] 控制 examples</text>
+<text class="ts" x="320" y="164">哪些示例打进 wheel（5 个演示）</text>
+<rect class="bx b-amber" x="600" y="80" width="220" height="110" rx="10" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="620" y="106" font-weight="700">scripts/ ASF 发布</text>
+<text class="tc" x="620" y="128">apache_release.py 签名/哈希</text>
+<text class="tc" x="620" y="146">check_asf_headers.py 许可头</text>
+<text class="tc" x="620" y="164">verify_apache_artifacts.py</text>
+<rect class="bx b-green" x="860" y="80" width="170" height="110" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="880" y="106" font-weight="700">PyPI + SVN</text>
+<text class="ts" x="880" y="128">apache-burr==0.42.0</text>
+<text class="ts" x="880" y="146">Apache 孵化器发布流程</text>
+<path class="ar-b" d="M230 95 L298 110" marker-end="url(#arr4)"/>
+<path class="ar-b" d="M540 135 L598 135" marker-end="url(#arr4)"/>
+<path class="ar-b" d="M820 135 L858 135" marker-end="url(#arr4)"/>
+<text class="ts" x="30" y="390">Apache 孵化器要求：每个源文件带 ASF 许可头（check_asf_headers 强制）、发布工件可验证、无匿名遥测（因此 burr/telemetry.py 已退化为 no-op 桩）。</text>
+</svg>
+<figcaption><b>图 1-4 · CI 与 ASF 发布流水线</b> —— 四条工作流覆盖 Python/UI/文档/站点，发布走 ASF 签名验证流程。</figcaption>
+</figure>
+
+<h2>1.7 与同类框架对比</h2>
+<div class="card">
+<table>
+<tr><th>框架</th><th>抽象核心</th><th>与 Burr 的关键差异</th></tr>
+<tr><td>LangGraph</td><td>图 + 检查点</td><td>深度绑定 LangChain 生态；Burr 保持框架无关、显式 reads/writes 契约</td></tr>
+<tr><td>Temporal</td><td>持久工作流</td><td>重基础设施（专属集群）；Burr 是嵌入式库 + 可选本地 UI</td></tr>
+<tr><td>LangChain</td><td>链式组合</td><td>隐式状态传递；Burr 状态显式、可控、可序列化</td></tr>
+<tr><td>Hamilton</td><td>数据流 DAG</td><td>单次 DAG 执行无环；Burr 补充有环状态机；两者可互相嵌套（11 篇）</td></tr>
+</table>
+<p style="font-size:13px;color:var(--muted)">对比来源：<span class="path">README.md:151-158</span>。Burr 独有组合：显式状态机 + 零依赖 + 内置开源监控 UI + 同时适用 LLM/非 LLM 场景。</p>
+</div>
+
+<div class="tip"><b>读码路线建议：</b>按本文分层图自底向上——先 <span class="path">state.py</span>（02 篇）与 <span class="path">action.py</span>（03 篇）这两个无依赖的数据结构文件，再攻 <span class="path">application.py</span> 的执行主循环（04 篇），最后向外扩展到观测与集成。</div>
+
+<div class="pager"><a href="index.html">← 总导航</a><a href="02-core-state.html">下一篇：02 State 深度剖析 →</a></div>
+</main>
+<footer class="foot">Apache Burr 源码学习笔记 · 01 项目全景 · 基于 v0.42.0</footer>
+</body>
+</html>

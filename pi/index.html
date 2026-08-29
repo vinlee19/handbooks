@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pi 源码深度剖析 · 总览</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<nav class="topnav"><div class="topnav-inner">
+  <a class="brand" href="./index.html">pi deep-dive</a>
+  <a class="pg cur" href="./index.html">总览</a>
+  <a class="pg" href="./01-architecture.html">01 物理架构</a>
+  <a class="pg" href="./02-ai.html">02 pi-ai</a>
+  <a class="pg" href="./03-agent.html">03 agent-core</a>
+  <a class="pg" href="./04-coding-agent.html">04 coding-agent</a>
+  <a class="pg" href="./05-session-compaction.html">05 会话与压缩</a>
+  <a class="pg" href="./06-extensions.html">06 扩展系统</a>
+  <a class="pg" href="./07-tui.html">07 TUI</a>
+  <a class="pg" href="./08-rpc.html">08 RPC</a>
+  <a class="pg" href="./09-supply-chain.html">09 构建发布</a>
+</div></nav>
+
+<main>
+<div class="hero">
+  <div class="kicker">Pi 源码深度剖析</div>
+  <h1>从 0 到 1 读懂一个生产级 AI Coding Agent</h1>
+  <div class="sub">本系列基于对 earendil-works/pi 仓库全部源码的逐包阅读（worktree @ <code>368e013de</code>，包版本 0.84.1，约 11.6 万行 TypeScript）。目标：讲清 pi 的原理、架构与底层源码——每个关键机制都配有手绘架构图与真实代码摘录。</div>
+</div>
+
+<div class="callout note">
+  <div class="co-title">与 docs/study/ 的关系</div>
+  <p>仓库里另有一套此前产出的 markdown 学习笔记（<code>docs/study/</code>，13 篇）。本 HTML 系列完全独立：内容基于同一代码状态重新撰写，图表全部重画为矢量 SVG，不依赖旧笔记。两套文档可互相参照。</p>
+</div>
+
+<h2><span class="no">1</span>Pi 是什么</h2>
+<p>Pi（<code>@earendil-works/pi-coding-agent</code>，命令 <code>pi</code>）是一个运行在终端里的 AI 编码代理：你用自然语言提需求，它读取你的代码、执行 shell 命令、编辑文件，循环往复直到任务完成。但它对自己的定位不是"一个 CLI 工具"，而是 <strong>Agent Harness（代理挽具）</strong>——一个可自扩展的代理运行时，CLI 只是用它的公共 SDK 拼出来的第一个应用。</p>
+<p>整个仓库是一个 monorepo，按依赖方向严格分层。底层是统一 40+ 家 LLM 供应商的 <code>pi-ai</code>；其上是实现"循环 + 工具调用 + 状态管理"的 <code>pi-agent-core</code>；旁边是一个不依赖任何业务包的终端渲染引擎 <code>pi-tui</code>；顶层 <code>pi-coding-agent</code> 把三者组装成产品。每个包都可以独立被第三方引用——事实上 coding-agent 自己就构建在这些公共 API 之上，它的 RPC 模式、扩展系统、JSON 事件模式没有走任何内部后门。</p>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 700" width="980" role="img" aria-label="全景分层架构图">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <!-- 用户与终端 -->
+  <rect x="60" y="18" width="170" height="52" rx="6" class="n-user"></rect>
+  <text x="145" y="40" text-anchor="middle" class="t t-b">你（开发者）</text>
+  <text x="145" y="58" text-anchor="middle" class="t-s">自然语言 / 快捷键</text>
+  <rect x="300" y="18" width="220" height="52" rx="6" class="n"></rect>
+  <text x="410" y="40" text-anchor="middle" class="t t-b">终端模拟器</text>
+  <text x="410" y="58" text-anchor="middle" class="t-s">iTerm / VS Code / tmux / SSH</text>
+  <line x1="230" y1="44" x2="294" y2="44" class="edge" marker-end="url(#ar)"></line>
+
+  <!-- pi 进程 -->
+  <rect x="40" y="108" width="900" height="462" rx="10" fill="#ffffff" stroke="#b6bcc6" stroke-width="1.6"></rect>
+  <text x="60" y="132" class="zone-label" style="fill:#3c4250">pi 进程（单个 Node ≥22 / Bun 进程，约 11.6 万行 TypeScript）</text>
+
+  <!-- coding-agent 层 -->
+  <rect x="70" y="148" width="840" height="112" rx="8" class="zone-fill-ca"></rect>
+  <text x="86" y="170" class="zone-label" style="fill:var(--c-ca)">packages/coding-agent — 应用编排层（58.7k 行）</text>
+  <rect x="90" y="182" width="122" height="62" rx="6" class="n-ca"></rect>
+  <text x="151" y="207" text-anchor="middle" class="t-s t-b">CLI 入口</text>
+  <text x="151" y="224" text-anchor="middle" class="t-s">main.ts / 4 种模式</text>
+  <rect x="226" y="182" width="122" height="62" rx="6" class="n-ca"></rect>
+  <text x="287" y="207" text-anchor="middle" class="t-s t-b">AgentSession</text>
+  <text x="287" y="224" text-anchor="middle" class="t-s">编排 / 事件广播</text>
+  <rect x="362" y="182" width="122" height="62" rx="6" class="n-ca"></rect>
+  <text x="423" y="207" text-anchor="middle" class="t-s t-b">7 个内置工具</text>
+  <text x="423" y="224" text-anchor="middle" class="t-s">read/bash/edit/…</text>
+  <rect x="498" y="182" width="122" height="62" rx="6" class="n-ca"></rect>
+  <text x="559" y="207" text-anchor="middle" class="t-s t-b">扩展系统</text>
+  <text x="559" y="224" text-anchor="middle" class="t-s">30+ 事件钩子</text>
+  <rect x="634" y="182" width="122" height="62" rx="6" class="n-ca"></rect>
+  <text x="695" y="207" text-anchor="middle" class="t-s t-b">会话存储</text>
+  <text x="695" y="224" text-anchor="middle" class="t-s">JSONL / 树形分支</text>
+  <rect x="770" y="182" width="122" height="62" rx="6" class="n-ca"></rect>
+  <text x="831" y="207" text-anchor="middle" class="t-s t-b">交互界面</text>
+  <text x="831" y="224" text-anchor="middle" class="t-s">6399 行 interactive</text>
+
+  <!-- agent 层 -->
+  <rect x="70" y="292" width="520" height="112" rx="8" class="zone-fill-agent"></rect>
+  <text x="86" y="314" class="zone-label" style="fill:var(--c-agent)">packages/agent — Agent 运行时（12.4k 行）</text>
+  <rect x="90" y="326" width="115" height="62" rx="6" class="n-agent"></rect>
+  <text x="147" y="351" text-anchor="middle" class="t-s t-b">Agent 循环</text>
+  <text x="147" y="368" text-anchor="middle" class="t-s">agent-loop.ts</text>
+  <rect x="219" y="326" width="115" height="62" rx="6" class="n-agent"></rect>
+  <text x="276" y="351" text-anchor="middle" class="t-s t-b">工具流水线</text>
+  <text x="276" y="368" text-anchor="middle" class="t-s">prepare→exec</text>
+  <rect x="348" y="326" width="115" height="62" rx="6" class="n-agent"></rect>
+  <text x="405" y="351" text-anchor="middle" class="t-s t-b">上下文压缩</text>
+  <text x="405" y="368" text-anchor="middle" class="t-s">compaction</text>
+  <rect x="477" y="326" width="98" height="62" rx="6" class="n-agent"></rect>
+  <text x="526" y="351" text-anchor="middle" class="t-s t-b">执行环境</text>
+  <text x="526" y="368" text-anchor="middle" class="t-s">shell/fs</text>
+
+  <!-- tui 层 -->
+  <rect x="620" y="292" width="290" height="112" rx="8" class="zone-fill-tui"></rect>
+  <text x="636" y="314" class="zone-label" style="fill:var(--c-tui)">packages/tui — 终端渲染（16.2k 行）</text>
+  <rect x="640" y="326" width="250" height="26" rx="5" class="n-tui"></rect>
+  <text x="765" y="343" text-anchor="middle" class="t-s t-b">差分渲染器（主屏 / 全屏）</text>
+  <rect x="640" y="360" width="250" height="26" rx="5" class="n-tui"></rect>
+  <text x="765" y="377" text-anchor="middle" class="t-s t-b">组件库 · 输入解析 · Markdown</text>
+
+  <!-- ai 层 -->
+  <rect x="70" y="436" width="840" height="76" rx="8" class="zone-fill-ai"></rect>
+  <text x="86" y="456" class="zone-label" style="fill:var(--c-ai)">packages/ai — 统一模型层（22.7k 行）</text>
+  <rect x="90" y="466" width="150" height="34" rx="5" class="n-ai"></rect>
+  <text x="165" y="487" text-anchor="middle" class="t-s t-b">Models / Provider 注册表</text>
+  <rect x="254" y="466" width="150" height="34" rx="5" class="n-ai"></rect>
+  <text x="329" y="487" text-anchor="middle" class="t-s t-b">10 种协议适配器</text>
+  <rect x="418" y="466" width="130" height="34" rx="5" class="n-ai"></rect>
+  <text x="483" y="487" text-anchor="middle" class="t-s t-b">SSE 解析 · 事件流</text>
+  <rect x="562" y="466" width="130" height="34" rx="5" class="n-ai"></rect>
+  <text x="627" y="487" text-anchor="middle" class="t-s t-b">双层重试</text>
+  <rect x="706" y="466" width="186" height="34" rx="5" class="n-ai"></rect>
+  <text x="799" y="487" text-anchor="middle" class="t-s t-b">历史消毒 · OAuth · 计价</text>
+
+  <!-- 协议与遥测小条 -->
+  <rect x="70" y="524" width="196" height="30" rx="5" class="n-proto"></rect>
+  <text x="168" y="543" text-anchor="middle" class="t-xs t-b">telemetry（纯契约，935 行）</text>
+  <rect x="280" y="524" width="196" height="30" rx="5" class="n-proto"></rect>
+  <text x="378" y="543" text-anchor="middle" class="t-xs t-b">protocol（CBOR 线协议，1236 行）</text>
+  <rect x="490" y="524" width="150" height="30" rx="5" class="n-proto"></rect>
+  <text x="565" y="543" text-anchor="middle" class="t-xs t-b">client（SDK，1225 行）</text>
+  <rect x="654" y="524" width="256" height="30" rx="5" class="n-proto"></rect>
+  <text x="782" y="543" text-anchor="middle" class="t-xs t-b">server（远程会话实验，2299 行）</text>
+
+  <!-- 进程内外箭头 -->
+  <line x1="410" y1="70" x2="410" y2="106" class="edge" marker-end="url(#ar)"></line>
+  <text x="420" y="94" class="t-xs">stdin/stdout · ANSI 转义序列</text>
+
+  <!-- 云端 -->
+  <rect x="40" y="612" width="900" height="76" rx="8" class="zone"></rect>
+  <text x="60" y="634" class="zone-label">云端 / 互联网</text>
+  <rect x="70" y="642" width="290" height="34" rx="5" class="n-cloud"></rect>
+  <text x="215" y="663" text-anchor="middle" class="t-s t-b">LLM Provider API（Anthropic / OpenAI / Google / …）</text>
+  <rect x="384" y="642" width="170" height="34" rx="5" class="n-cloud"></rect>
+  <text x="469" y="663" text-anchor="middle" class="t-s t-b">models.dev 模型目录</text>
+  <rect x="578" y="642" width="180" height="34" rx="5" class="n-cloud"></rect>
+  <text x="668" y="663" text-anchor="middle" class="t-s t-b">npm registry / GitHub</text>
+  <rect x="782" y="642" width="148" height="34" rx="5" class="n-cloud"></rect>
+  <text x="856" y="663" text-anchor="middle" class="t-s t-b">pi.dev + R2 公告</text>
+
+  <path d="M 300 556 L 215 640" class="edge" marker-end="url(#ar)"></path>
+  <text x="196" y="600" class="t-xs">HTTPS + SSE 流</text>
+  <path d="M 470 556 L 469 640" class="edge edge-dash" marker-end="url(#ar)"></path>
+  <text x="478" y="600" class="t-xs">构建期拉取 / 运行时刷新</text>
+  <path d="M 780 556 L 856 640" class="edge edge-dash" marker-end="url(#ar)"></path>
+  <text x="760" y="600" class="t-xs">版本检查</text>
+</svg>
+</div>
+<figcaption>图 1 · Pi 全景分层架构：一个进程内的四层依赖栈 + 云端边界。箭头方向即依赖与数据流向，上层依赖下层，下层对上层一无所知。</figcaption>
+</figure>
+
+<h2><span class="no">2</span>包依赖关系</h2>
+<p>依赖图是一张严格的 DAG（有向无环图），这是整个仓库最重要的架构约束：<code>pi-ai</code> 不知道 <code>pi-agent-core</code> 的存在，<code>pi-agent-core</code> 不知道 coding-agent 的存在。每往下一层，代码就更通用一分；每往上一层，代码就更产品化一分。底层包因此可以被完全不同的宿主复用（比如用 <code>pi-agent-core</code> + 自定义工具做一个浏览器自动化代理）。</p>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 430" width="980" role="img" aria-label="包依赖图">
+  <defs>
+    <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <!-- L3 顶层 -->
+  <rect x="330" y="18" width="230" height="48" rx="6" class="n-ca"></rect>
+  <text x="445" y="38" text-anchor="middle" class="t t-b">coding-agent</text>
+  <text x="445" y="56" text-anchor="middle" class="t-s">CLI 产品 + SDK + 扩展宿主</text>
+  <rect x="60" y="18" width="190" height="48" rx="6" class="n-proto" stroke-dasharray="5 4"></rect>
+  <text x="155" y="38" text-anchor="middle" class="t t-b">evals（私有）</text>
+  <text x="155" y="56" text-anchor="middle" class="t-s">LLM 行为评测，不发布</text>
+
+  <!-- L2 -->
+  <rect x="150" y="128" width="190" height="48" rx="6" class="n-agent"></rect>
+  <text x="245" y="148" text-anchor="middle" class="t t-b">pi-agent-core</text>
+  <text x="245" y="166" text-anchor="middle" class="t-s">Agent 循环 · harness · 压缩</text>
+  <rect x="700" y="128" width="150" height="48" rx="6" class="n-proto"></rect>
+  <text x="775" y="148" text-anchor="middle" class="t t-b">server</text>
+  <text x="775" y="166" text-anchor="middle" class="t-s">远程会话服务</text>
+
+  <!-- L1 -->
+  <rect x="130" y="238" width="180" height="48" rx="6" class="n-ai"></rect>
+  <text x="220" y="258" text-anchor="middle" class="t t-b">pi-ai</text>
+  <text x="220" y="276" text-anchor="middle" class="t-s">多 provider 统一 API</text>
+  <rect x="560" y="238" width="140" height="48" rx="6" class="n-proto"></rect>
+  <text x="630" y="258" text-anchor="middle" class="t t-b">client</text>
+  <text x="630" y="276" text-anchor="middle" class="t-s">传输无关 SDK</text>
+
+  <!-- L0 -->
+  <rect x="150" y="348" width="170" height="48" rx="6" class="n-proto"></rect>
+  <text x="235" y="368" text-anchor="middle" class="t t-b">telemetry</text>
+  <text x="235" y="386" text-anchor="middle" class="t-s">零依赖纯契约</text>
+  <rect x="430" y="348" width="150" height="48" rx="6" class="n-proto"></rect>
+  <text x="505" y="368" text-anchor="middle" class="t t-b">protocol</text>
+  <text x="505" y="386" text-anchor="middle" class="t-s">仅依赖 typebox</text>
+  <rect x="770" y="348" width="140" height="48" rx="6" class="n-tui"></rect>
+  <text x="840" y="368" text-anchor="middle" class="t t-b">tui</text>
+  <text x="840" y="386" text-anchor="middle" class="t-s">零内部依赖</text>
+
+  <!-- 边 -->
+  <path d="M 235 348 L 220 288" class="edge" marker-end="url(#ar2)"></path>
+  <path d="M 220 238 L 238 178" class="edge" marker-end="url(#ar2)"></path>
+  <path d="M 505 348 C 540 310 590 296 622 288" class="edge" marker-end="url(#ar2)"></path>
+  <path d="M 520 348 C 620 320 720 290 762 280" class="edge" marker-end="url(#ar2)"></path>
+  <path d="M 312 262 C 480 250 640 200 712 178" class="edge" marker-end="url(#ar2)"></path>
+  <path d="M 320 140 C 360 110 390 84 405 68" class="edge" marker-end="url(#ar2)"></path>
+  <path d="M 270 238 C 320 180 360 110 415 66" class="edge" marker-end="url(#ar2)"></path>
+  <path d="M 600 238 C 540 180 500 110 462 68" class="edge" marker-end="url(#ar2)"></path>
+  <path d="M 480 348 C 480 250 452 120 448 68" class="edge" marker-end="url(#ar2)"></path>
+  <path d="M 810 348 C 870 280 700 90 562 46" class="edge" marker-end="url(#ar2)"></path>
+  <path d="M 220 238 C 160 200 140 110 152 68" class="edge" marker-end="url(#ar2)"></path>
+  <path d="M 330 42 L 252 42" class="edge" marker-end="url(#ar2)"></path>
+</svg>
+</div>
+<figcaption>图 2 · 包依赖 DAG（箭头从被依赖方指向依赖方）。tui 与 protocol 位于两个独立的子树下，互不相交；coding-agent 是唯一同时横跨两棵子树的包。</figcaption>
+</figure>
+
+<h2><span class="no">3</span>一次对话的端到端数据流（预览）</h2>
+<p>在深入各层之前，先建立一条主干心智模型：你在终端敲下一句话之后，数据如何流经四个包、最终变成模型回复流回终端。下面是精简版（完整时序图见 <a href="./04-coding-agent.html">第 04 篇</a>）：</p>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 330" width="980" role="img" aria-label="端到端数据流预览">
+  <defs>
+    <marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+  <style>
+    .step { fill: #fff; stroke: #98a1ad; stroke-width: 1.4; }
+    .stepnum { fill: #4263eb; font-weight: 700; font-size: 12px; }
+  </style>
+
+  <!-- 第一行 -->
+  <rect x="20" y="30" width="130" height="60" rx="6" class="n-user"></rect>
+  <text x="85" y="55" text-anchor="middle" class="t-s t-b">终端输入</text>
+  <text x="85" y="72" text-anchor="middle" class="t-xs">editor.onSubmit</text>
+
+  <rect x="185" y="30" width="180" height="60" rx="6" class="n-ca"></rect>
+  <text x="275" y="50" text-anchor="middle" class="t-s t-b">AgentSession.prompt</text>
+  <text x="275" y="67" text-anchor="middle" class="t-xs">写 JSONL · 扩展 input 事件</text>
+
+  <rect x="400" y="30" width="180" height="60" rx="6" class="n-agent"></rect>
+  <text x="490" y="50" text-anchor="middle" class="t-s t-b">Agent.prompt → 循环</text>
+  <text x="490" y="67" text-anchor="middle" class="t-xs">runAgentLoop（agent 包）</text>
+
+  <rect x="615" y="30" width="170" height="60" rx="6" class="n-ai"></rect>
+  <text x="700" y="50" text-anchor="middle" class="t-s t-b">streamFn</text>
+  <text x="700" y="67" text-anchor="middle" class="t-xs">ModelRuntime.streamSimple</text>
+
+  <rect x="820" y="30" width="140" height="60" rx="6" class="n-cloud"></rect>
+  <text x="890" y="50" text-anchor="middle" class="t-s t-b">LLM API</text>
+  <text x="890" y="67" text-anchor="middle" class="t-xs">SSE 流式响应</text>
+
+  <line x1="150" y1="60" x2="183" y2="60" class="edge" marker-end="url(#ar3)"></line>
+  <line x1="365" y1="60" x2="398" y2="60" class="edge" marker-end="url(#ar3)"></line>
+  <line x1="580" y1="60" x2="613" y2="60" class="edge" marker-end="url(#ar3)"></line>
+  <line x1="785" y1="60" x2="818" y2="60" class="edge" marker-end="url(#ar3)"></line>
+  <text x="160" y="52" class="t-xs">1</text>
+  <text x="372" y="52" class="t-xs">2</text>
+  <text x="592" y="52" class="t-xs">3</text>
+  <text x="798" y="52" class="t-xs">4</text>
+
+  <!-- 回程 -->
+  <path d="M 890 90 L 890 150 L 790 150" class="edge" marker-end="url(#ar3)"></path>
+  <text x="800" y="142" class="t-xs">5 · AssistantMessageEvent 流</text>
+
+  <rect x="615" y="122" width="170" height="56" rx="6" class="n-agent"></rect>
+  <text x="700" y="145" text-anchor="middle" class="t-s t-b">循环消费事件</text>
+  <text x="700" y="162" text-anchor="middle" class="t-xs">message_update / toolcall</text>
+
+  <rect x="400" y="122" width="180" height="56" rx="6" class="n-ca"></rect>
+  <text x="490" y="145" text-anchor="middle" class="t-s t-b">工具执行（如 bash）</text>
+  <text x="490" y="162" text-anchor="middle" class="t-xs">tool_call 可被扩展拦截</text>
+
+  <rect x="185" y="122" width="180" height="56" rx="6" class="n-ca"></rect>
+  <text x="275" y="145" text-anchor="middle" class="t-s t-b">事件广播 + 渲染</text>
+  <text x="275" y="162" text-anchor="middle" class="t-xs">subscribe → TUI 差分重绘</text>
+
+  <line x1="613" y1="150" x2="582" y2="150" class="edge" marker-end="url(#ar3)"></line>
+  <line x1="398" y1="150" x2="367" y2="150" class="edge" marker-end="url(#ar3)"></line>
+
+  <!-- 工具结果回灌 -->
+  <path d="M 490 178 L 490 215 L 488 215" class="edge" marker-end="url(#ar3)"></path>
+  <text x="500" y="205" class="t-xs">6 · tool result 回灌 → 下一轮 assistant 请求（循环继续）</text>
+
+  <!-- 结束 -->
+  <path d="M 275 178 L 275 240 L 300 240" class="edge" marker-end="url(#ar3)"></path>
+  <rect x="302" y="212" width="240" height="56" rx="6" class="n-ok"></rect>
+  <text x="422" y="235" text-anchor="middle" class="t-s t-b">agent_end</text>
+  <text x="422" y="252" text-anchor="middle" class="t-xs">自动压缩检查 → 会话落盘完成</text>
+
+  <path d="M 302 240 L 150 240 L 85 240 L 85 92" class="edge" marker-end="url(#ar3)"></path>
+  <text x="95" y="120" class="t-xs">7 · 差分渲染回终端</text>
+
+  <text x="30" y="300" class="t-s">循环的"循环"体现在步骤 6：只要模型还在发起工具调用，步骤 3–6 就一直重复；</text>
+  <text x="30" y="318" class="t-s">没有任何工具调用、且 steering / follow-up 队列为空时，循环才以 agent_end 终止。</text>
+</svg>
+</div>
+<figcaption>图 3 · 一次 prompt 的端到端数据流（简化）。注意工具结果如何回灌形成循环、事件如何同时驱动渲染与持久化。</figcaption>
+</figure>
+
+<h2><span class="no">4</span>代码规模一览</h2>
+<table class="tbl">
+<thead><tr><th>包</th><th>src 文件数</th><th>src 行数</th><th>一句话职责</th><th>关键外部依赖（全部精确 pin）</th></tr></thead>
+<tbody>
+<tr><td class="mono">coding-agent</td><td>199</td><td>58,703</td><td>CLI 产品、4 种运行模式、AgentSession 编排、工具、扩展宿主、会话存储</td><td class="mono">jiti, highlight.js@10.7.3, undici, yaml, photon(wasm)</td></tr>
+<tr><td class="mono">ai</td><td>174</td><td>22,666</td><td>统一多 provider LLM API：10 种协议适配器、SSE 解析、重试、计价</td><td class="mono">@anthropic-ai/sdk, openai, @google/genai, @aws-sdk/*</td></tr>
+<tr><td class="mono">tui</td><td>38</td><td>16,210</td><td>差分渲染终端 UI 库：组件、编辑器、输入协议、图片/LaTeX</td><td class="mono">marked, get-east-asian-width</td></tr>
+<tr><td class="mono">agent</td><td>49</td><td>12,416</td><td>Agent 循环、harness、会话树、上下文压缩、内置四件套工具</td><td class="mono">diff, ignore, yaml, typebox（零 SDK 依赖）</td></tr>
+<tr><td class="mono">server</td><td>17</td><td>2,299</td><td>远程会话服务（Unix socket，实验性）</td><td class="mono">typebox</td></tr>
+<tr><td class="mono">protocol</td><td>8</td><td>1,236</td><td>CBOR 帧协议：schema、framing、自实现 RFC 8949 编解码</td><td class="mono">typebox</td></tr>
+<tr><td class="mono">client</td><td>10</td><td>1,225</td><td>传输无关的客户端 SDK（快照归并、会话租约）</td><td class="mono">（零 Node 依赖）</td></tr>
+<tr><td class="mono">telemetry</td><td>6</td><td>935</td><td>纯契约：span 类型、一致性测试套件，无任何运行时依赖</td><td class="mono">（零依赖）</td></tr>
+</tbody>
+</table>
+<p>另有约 3,000 行构建/发布脚本（<code>scripts/</code>）、630+ 个测试文件。版本 0.84.x 采用全包 lockstep 发布，tag 推送触发 CI 完成 npm OIDC 发布与 pi.dev 公告（见<a href="./09-supply-chain.html">第 09 篇</a>）。</p>
+
+<h2><span class="no">5</span>贯穿全库的四个设计决策</h2>
+<p>读完 11.6 万行代码后，以下四个决策反复出现在每一层。理解它们，后面九篇里的大量细节都会变得"理所当然"：</p>
+
+<div class="cards">
+<div class="card">
+  <div class="c-no">决策 1</div>
+  <div class="c-title">错误编码进流，而不是抛异常</div>
+  <div class="c-desc">pi-ai 的 <code>StreamFunction</code> 契约规定：流一旦开始，任何失败（网络、鉴权、解析）都必须作为 <code>{type:"error"}</code> 事件出现在流里，禁止向上抛。连动态 import 失败都会被 <code>lazy.ts</code> 转成 error 事件。上层因此可以用同一种"消费事件"的方式处理成功与失败，重试逻辑也得以在流边界统一实施。</div>
+</div>
+<div class="card">
+  <div class="c-no">决策 2</div>
+  <div class="c-title">核心包零副作用、按需加载</div>
+  <div class="c-desc"><code>pi-ai</code> 的入口明确标注 "Core only, side-effect free"：不引模型目录、不注册 provider。模型目录是构建期从 models.dev 生成的代码；11 个 API 适配器各配一个 <code>*.lazy.ts</code> 做动态 import。这让 CLI 冷启动只加载用到的部分，也让底层包可以被 tree-shake。</div>
+</div>
+<div class="card">
+  <div class="c-no">决策 3</div>
+  <div class="c-title">循环是纯函数，状态是薄壳</div>
+  <div class="c-desc"><code>agent-loop.ts</code>（796 行）是无状态的纯函数：输入 config + 消息，输出事件流，可用 faux provider 完整单测。<code>Agent</code> 类（592 行）只做三件事：持有消息队列、管理 AbortController、按序结算监听器。可测试性和可组合性都来自这个切分。</div>
+</div>
+<div class="card">
+  <div class="c-no">决策 4</div>
+  <div class="c-title">事件溯源式会话 + 可插拔存储</div>
+  <div class="c-desc">会话是 append-only 的 JSONL 事件树：每条 entry 带 <code>id/parentId</code>，分支只是移动"叶子指针"，永不改写历史。存储实现可替换（内存 / JSONL），两者由同一套 993 行 conformance 测试套件验证一致性。压缩（compaction）也只是追加一条 CompactionEntry。</div>
+</div>
+</div>
+
+<h2><span class="no">6</span>阅读路线</h2>
+<p>九篇正文按"先物理后逻辑、先主干后支线"排列。时间紧张时，按 01 → 03 → 02 → 04 的顺序读这四篇即可建立 80% 的心智模型。</p>
+
+<div class="cards">
+<a class="card" href="./01-architecture.html"><div class="c-no">01</div><div class="c-title">物理架构与运行形态</div><div class="c-desc">进程边界、磁盘布局、云端边界；interactive / print / json / rpc 四种模式与实验 server-client 的拓扑。</div><div class="c-meta">4 图 · ★☆☆</div></a>
+<a class="card" href="./02-ai.html"><div class="c-no">02</div><div class="c-title">pi-ai 统一模型层</div><div class="c-desc">事件流协议、适配器调用链、SSE 解析、历史消毒、双层重试、模型目录生成。</div><div class="c-meta">5 图 · ★★☆</div></a>
+<a class="card" href="./03-agent.html"><div class="c-no">03</div><div class="c-title">pi-agent-core</div><div class="c-desc">Agent 循环逐段拆解、工具流水线、steering/follow-up 双队列、Session 树。</div><div class="c-meta">5 图 · ★★☆</div></a>
+<a class="card" href="./04-coding-agent.html"><div class="c-no">04</div><div class="c-title">coding-agent 编排核心</div><div class="c-desc">启动链路、AgentSession、7 个内置工具、配置优先级、system prompt 组装；本集最大的端到端时序图。</div><div class="c-meta">4 图 · ★★☆</div></a>
+<a class="card" href="./05-session-compaction.html"><div class="c-no">05</div><div class="c-title">会话持久化与压缩</div><div class="c-desc">JSONL v3 逐字段、append-only 会话树、branch/resume、压缩切点算法。</div><div class="c-meta">4 图 · ★★★</div></a>
+<a class="card" href="./06-extensions.html"><div class="c-no">06</div><div class="c-title">扩展系统</div><div class="c-desc">jiti 加载、ExtensionAPI 全表、30+ 事件在主链路上的拦截点地图。</div><div class="c-meta">2 图 · ★★☆</div></a>
+<a class="card" href="./07-tui.html"><div class="c-no">07</div><div class="c-title">TUI 渲染引擎</div><div class="c-desc">字符串行差分算法、16ms 帧循环、Kitty 键盘协议回退链、文本渲染管线。</div><div class="c-meta">5 图 · ★★★</div></a>
+<a class="card" href="./08-rpc.html"><div class="c-no">08</div><div class="c-title">无头模式与协议栈</div><div class="c-desc">print/json 模式、内建 JSONL RPC、CBOR 帧格式、client/server 体系。</div><div class="c-meta">3 图 · ★★☆</div></a>
+<a class="card" href="./09-supply-chain.html"><div class="c-no">09</div><div class="c-title">构建与发布</div><div class="c-desc">Bun 单文件二进制、shrinkwrap 生成器、tag 驱动 CI、八层供应链防御。</div><div class="c-meta">3 图 · ★★☆</div></a>
+</div>
+
+<nav class="pagenav">
+  <a class="next" href="./01-architecture.html"><span class="dir">下一篇</span>01 · 物理架构与运行形态 →</a>
+</nav>
+
+<footer class="colophon">Pi 源码深度剖析 · 基于 worktree 368e013de（v0.84.1）· 图表为手绘 SVG，离线可看</footer>
+</main>
+<script src="./script.js"></script>
+</body>
+</html>

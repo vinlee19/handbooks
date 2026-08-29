@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>01 · 物理架构与运行形态 — Pi 源码深度剖析</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<nav class="topnav"><div class="topnav-inner">
+  <a class="brand" href="./index.html">pi deep-dive</a>
+  <a class="pg" href="./index.html">总览</a>
+  <a class="pg cur" href="./01-architecture.html">01 物理架构</a>
+  <a class="pg" href="./02-ai.html">02 pi-ai</a>
+  <a class="pg" href="./03-agent.html">03 agent-core</a>
+  <a class="pg" href="./04-coding-agent.html">04 coding-agent</a>
+  <a class="pg" href="./05-session-compaction.html">05 会话与压缩</a>
+  <a class="pg" href="./06-extensions.html">06 扩展系统</a>
+  <a class="pg" href="./07-tui.html">07 TUI</a>
+  <a class="pg" href="./08-rpc.html">08 RPC</a>
+  <a class="pg" href="./09-supply-chain.html">09 构建发布</a>
+</div></nav>
+
+<main>
+<div class="hero">
+  <div class="kicker">第 01 篇</div>
+  <h1>物理架构与运行形态</h1>
+  <div class="sub">先把"哪些东西跑在哪里"讲清楚：你的机器上有几个进程、pi 在磁盘上写了什么、它和云端之间只有哪些连接。这一篇是后面所有源码分析的空间坐标系。</div>
+</div>
+
+<h2><span class="no">1</span>物理架构总图</h2>
+<p>Pi 的物理形态刻意简单：<strong>默认只有一个进程</strong>。你在终端敲 <code>pi</code>，shell fork 出一个 Node（或 Bun）进程，它包办 UI、Agent 循环、模型调用和会话存储。没有守护进程、没有本地服务端口、没有 IPC。它和外界只有三类物理边界：</p>
+<ul class="clean">
+  <li><strong>终端模拟器</strong>（另一个进程）：pi 通过 PTY 与它交换字节——读键盘输入字节流，写 ANSI 转义序列做差分渲染。这是唯一的"UI 通道"。</li>
+  <li><strong>本地磁盘</strong>：全局配置与凭证在 <code>~/.pi/agent/</code>，项目级配置在 <code>&lt;项目&gt;/.pi/</code>，会话是纯 append 的 JSONL 文件。工具（bash/read/edit）直接操作你的项目源码——这也是 README 坦承"无内置权限系统、建议容器化"的原因。</li>
+  <li><strong>云端 HTTPS</strong>：模型 API 的 SSE 流、models.dev 模型目录、npm/GitHub 版本检查。没有任何私有二进制协议。</li>
+</ul>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 850" width="980" role="img" aria-label="Pi 物理架构图">
+  <defs>
+    <marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <!-- ============ 你的机器 ============ -->
+  <rect x="20" y="30" width="940" height="620" rx="12" fill="#fbfbf9" stroke="#8f97a3" stroke-width="1.8"></rect>
+  <text x="40" y="56" class="t t-b" style="font-size:14px">你的机器</text>
+
+  <!-- 终端模拟器（独立进程） -->
+  <rect x="50" y="80" width="200" height="540" rx="9" class="zone"></rect>
+  <text x="65" y="104" class="zone-label">终端模拟器进程</text>
+  <text x="65" y="121" class="t-xs">iTerm2 / VS Code / tmux / SSH</text>
+  <rect x="70" y="140" width="160" height="52" rx="6" class="n-user"></rect>
+  <text x="150" y="161" text-anchor="middle" class="t-s t-b">键盘 / 鼠标</text>
+  <text x="150" y="178" text-anchor="middle" class="t-xs">字节流 → PTY</text>
+  <rect x="70" y="215" width="160" height="52" rx="6" class="n-user"></rect>
+  <text x="150" y="236" text-anchor="middle" class="t-s t-b">VT 解析器</text>
+  <text x="150" y="253" text-anchor="middle" class="t-xs">ANSI / OSC 52 / SGR</text>
+  <rect x="70" y="290" width="160" height="52" rx="6" class="n-user"></rect>
+  <text x="150" y="311" text-anchor="middle" class="t-s t-b">屏幕网格 + 滚动区</text>
+  <text x="150" y="328" text-anchor="middle" class="t-xs">终端只认字符网格</text>
+  <rect x="70" y="380" width="160" height="90" rx="6" fill="#fff" stroke="#c9cdd4" stroke-dasharray="5 4"></rect>
+  <text x="150" y="404" text-anchor="middle" class="t-xs t-b">终端的能力 pi 不假定：</text>
+  <text x="150" y="422" text-anchor="middle" class="t-xs">Kitty 键盘协议？真彩？</text>
+  <text x="150" y="438" text-anchor="middle" class="t-xs">图片协议？超链接？</text>
+  <text x="150" y="456" text-anchor="middle" class="t-xs">→ 启动时逐一探测(07篇)</text>
+
+  <!-- pi 进程 -->
+  <rect x="280" y="80" width="330" height="540" rx="9" fill="#ffffff" stroke="#4263eb" stroke-width="2"></rect>
+  <text x="298" y="104" class="zone-label" style="fill:var(--accent)">pi 进程（默认仅此一个）</text>
+  <text x="298" y="121" class="t-xs">Node ≥ 22.19 或 Bun 编译单文件</text>
+
+  <rect x="300" y="140" width="290" height="52" rx="6" class="n-ca"></rect>
+  <text x="445" y="161" text-anchor="middle" class="t-s t-b">CLI 入口 + 运行模式分发</text>
+  <text x="445" y="178" text-anchor="middle" class="t-s">cli.ts → main.ts → interactive/print/json/rpc</text>
+
+  <rect x="300" y="212" width="290" height="52" rx="6" class="n-tui"></rect>
+  <text x="445" y="233" text-anchor="middle" class="t-s t-b">TUI 渲染引擎（interactive 模式）</text>
+  <text x="445" y="250" text-anchor="middle" class="t-s">读 stdin 字节 → 事件；差分写 stdout</text>
+
+  <rect x="300" y="284" width="290" height="52" rx="6" class="n-ca"></rect>
+  <text x="445" y="305" text-anchor="middle" class="t-s t-b">AgentSession 编排（coding-agent）</text>
+  <text x="445" y="322" text-anchor="middle" class="t-s">会话落盘 · 扩展事件 · 工具注册 · 压缩触发</text>
+
+  <rect x="300" y="356" width="290" height="52" rx="6" class="n-agent"></rect>
+  <text x="445" y="377" text-anchor="middle" class="t-s t-b">Agent 循环（pi-agent-core）</text>
+  <text x="445" y="394" text-anchor="middle" class="t-s">LLM 调用 ↔ 工具执行，直到无工具调用</text>
+
+  <rect x="300" y="428" width="290" height="52" rx="6" class="n-ai"></rect>
+  <text x="445" y="449" text-anchor="middle" class="t-s t-b">pi-ai 适配器栈</text>
+  <text x="445" y="466" text-anchor="middle" class="t-s">SSE 解析 · 重试 · 消息消毒 · 计价</text>
+
+  <rect x="300" y="506" width="290" height="52" rx="6" class="n"></rect>
+  <text x="445" y="527" text-anchor="middle" class="t-s t-b">运行时基础设施</text>
+  <text x="445" y="544" text-anchor="middle" class="t-s">undici HTTP · fetch · node:fs · child_process</text>
+
+  <line x1="445" y1="192" x2="445" y2="210" class="edge" marker-end="url(#ar1)"></line>
+  <line x1="445" y1="264" x2="445" y2="282" class="edge" marker-end="url(#ar1)"></line>
+  <line x1="445" y1="336" x2="445" y2="354" class="edge" marker-end="url(#ar1)"></line>
+  <line x1="445" y1="408" x2="445" y2="426" class="edge" marker-end="url(#ar1)"></line>
+  <line x1="445" y1="480" x2="445" y2="504" class="edge" marker-end="url(#ar1)"></line>
+
+  <!-- 磁盘 -->
+  <rect x="640" y="80" width="300" height="540" rx="9" class="zone"></rect>
+  <text x="656" y="104" class="zone-label">本地磁盘</text>
+  <rect x="658" y="122" width="264" height="180" rx="7" class="n-disk"></rect>
+  <text x="672" y="144" class="t-s t-b" style="fill:var(--c-disk)">~/.pi/agent/（全局，env 可改）</text>
+  <text x="672" y="165" class="t-xs t-mono">settings.json     偏好/默认模型</text>
+  <text x="672" y="183" class="t-xs t-mono">models.json       模型覆盖/自定义</text>
+  <text x="672" y="201" class="t-xs t-mono">auth.json         API key / OAuth 令牌</text>
+  <text x="672" y="219" class="t-xs t-mono">sessions/--cwd--/ 会话 JSONL 树</text>
+  <text x="672" y="237" class="t-xs t-mono">themes/ prompts/  自定义资源</text>
+  <text x="672" y="255" class="t-xs t-mono">bin/  tools/      fd·rg·管理工具</text>
+  <text x="672" y="273" class="t-xs t-mono">project-trust.json 项目信任记录</text>
+  <text x="672" y="291" class="t-xs t-mono">extensions/ skills/ 全局扩展与技能</text>
+
+  <rect x="658" y="316" width="264" height="130" rx="7" class="n-disk"></rect>
+  <text x="672" y="338" class="t-s t-b" style="fill:var(--c-disk)">&lt;项目&gt;/.pi/（随仓库走）</text>
+  <text x="672" y="359" class="t-xs t-mono">settings.json     项目级设置覆盖</text>
+  <text x="672" y="377" class="t-xs t-mono">extensions/       项目扩展 (*.ts)</text>
+  <text x="672" y="395" class="t-xs t-mono">skills/           项目技能 SKILL.md</text>
+  <text x="672" y="413" class="t-xs t-mono">prompts/ themes/  模板与主题</text>
+  <text x="672" y="431" class="t-xs t-mono">../.agents/skills  祖先目录技能</text>
+
+  <rect x="658" y="460" width="264" height="130" rx="7" class="n-warn"></rect>
+  <text x="672" y="482" class="t-s t-b" style="fill:var(--c-warn)">项目源码（工具的直接对象）</text>
+  <text x="672" y="503" class="t-xs">bash / read / edit / write 直接读写</text>
+  <text x="672" y="521" class="t-xs">grep / find / ls（默认关闭，可开）</text>
+  <text x="672" y="543" class="t-xs">无内置沙箱：pi 以你的用户权限运行</text>
+  <text x="672" y="561" class="t-xs">需要边界 → 容器化（Gondolin/Docker）</text>
+  <text x="672" y="579" class="t-xs">AGENTS.md 也会被读入 system prompt</text>
+
+  <!-- 进程↔终端 / 磁盘 箭头 -->
+  <line x1="250" y1="330" x2="298" y2="260" class="edge" marker-end="url(#ar1)"></line>
+  <line x1="298" y1="230" x2="252" y2="248" class="edge" marker-end="url(#ar1)"></line>
+  <rect x="192" y="286" width="118" height="28" rx="4" fill="#fcfcfa"></rect>
+  <text x="200" y="298" class="t-xs">PTY 字节流（双向）</text>
+  <text x="200" y="312" class="t-xs">raw mode + ANSI</text>
+
+  <path d="M 592 320 C 620 320 630 260 656 240" class="edge" marker-end="url(#ar1)"></path>
+  <path d="M 656 420 C 628 420 616 400 592 380" class="edge" marker-end="url(#ar1)"></path>
+  <rect x="594" y="438" width="136" height="28" rx="4" fill="#fcfcfa"></rect>
+  <text x="602" y="450" class="t-xs">JSONL append-only</text>
+  <text x="602" y="464" class="t-xs">settings/auth 读写</text>
+
+  <!-- ============ 云端 ============ -->
+  <rect x="20" y="690" width="940" height="130" rx="12" class="zone"></rect>
+  <text x="40" y="716" class="zone-label">云端 / 互联网（全部 HTTPS）</text>
+
+  <rect x="50" y="730" width="300" height="60" rx="7" class="n-cloud"></rect>
+  <text x="200" y="754" text-anchor="middle" class="t-s t-b">LLM Provider API</text>
+  <text x="200" y="772" text-anchor="middle" class="t-s">Anthropic / OpenAI / Google / Bedrock / …</text>
+
+  <rect x="380" y="730" width="170" height="60" rx="7" class="n-cloud"></rect>
+  <text x="465" y="754" text-anchor="middle" class="t-s t-b">models.dev</text>
+  <text x="465" y="772" text-anchor="middle" class="t-s">模型目录事实源</text>
+
+  <rect x="580" y="730" width="170" height="60" rx="7" class="n-cloud"></rect>
+  <text x="665" y="754" text-anchor="middle" class="t-s t-b">npm / GitHub</text>
+  <text x="665" y="772" text-anchor="middle" class="t-s">安装与版本检查</text>
+
+  <rect x="780" y="730" width="160" height="60" rx="7" class="n-cloud"></rect>
+  <text x="860" y="754" text-anchor="middle" class="t-s t-b">pi.dev + R2</text>
+  <text x="860" y="772" text-anchor="middle" class="t-s">最新版本公告</text>
+
+  <!-- 跨边界箭头 -->
+  <path d="M 520 480 C 420 660 250 690 200 728" class="edge" marker-end="url(#ar1)"></path>
+  <text x="238" y="668" class="t-xs t-b">HTTPS + SSE 流（推理请求/响应）</text>
+  <path d="M 560 520 C 520 660 480 690 468 728" class="edge edge-dash" marker-end="url(#ar1)"></path>
+  <text x="480" y="660" class="t-xs">目录刷新（可离线关闭）</text>
+  <path d="M 590 560 C 620 670 648 700 660 728" class="edge edge-dash" marker-end="url(#ar1)"></path>
+  <text x="640" y="672" class="t-xs">pi update / 版本检查</text>
+  <path d="M 470 560 C 700 640 800 680 855 728" class="edge edge-dash" marker-end="url(#ar1)"></path>
+  <text x="740" y="652" class="t-xs">latest-version 指针</text>
+</svg>
+</div>
+<figcaption>图 1-1 · Pi 物理架构总图。三个大框是三种物理边界：你的机器（内含终端进程、pi 进程、磁盘三个子边界）与云端。实线是推理主数据流，虚线是可离线关闭的辅助连接。</figcaption>
+</figure>
+
+<div class="callout design">
+  <div class="co-title">设计取舍</div>
+  <p><strong>单进程无守护</strong>意味着不存在"pi 服务挂了"这类故障面，会话状态天然落在文件里，任何时刻 kill 掉进程最多丢当前正在流式输出的那半条消息。代价是扩展只能进程内加载（第 06 篇），远程/多客户端场景只能靠实验性的 server-client 形态补齐（第 5 节）。</p>
+  <p><strong>终端是一等公民而非外设</strong>：pi 不假定终端支持什么，启动时逐一探测（Kitty 键盘协议、真彩、图片协议、超链接），探测不到就回退。这是第 07 篇的主题。</p>
+</div>
+
+<h2><span class="no">2</span>进程内的启动入口</h2>
+<p>npm 包的 <code>bin</code> 指向 <code>dist/cli.js</code>，由 <code>tsgo</code> 直接从 <code>src/cli.ts</code> 编译而来（无打包器）。入口文件只有 21 行，全部精力花在两件事上：设置进程身份，以及在任何 provider SDK 发请求之前配好 undici 全局 dispatcher（代理、超时）：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/coding-agent/src/cli.ts</span><span class="cb-note">完整文件，21 行</span></div>
+<pre><code>#!/usr/bin/env node
+import { APP_NAME } from "./config.ts";
+import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
+import { main } from "./main.ts";
+
+process.title = APP_NAME;
+process.env.PI_CODING_AGENT = "true";   // pi 专属标记
+process.env.AI_AGENT = "pi";            // 通用 AI 代理标记（供上游工具识别）
+process.emitWarning = (() => {}) as typeof process.emitWarning;
+
+// Configure undici's global dispatcher before provider SDKs issue requests.
+// Runtime settings are applied once SettingsManager has loaded global/project settings.
+configureHttpDispatcher();
+
+main(process.argv.slice(2));</code></pre>
+</div>
+
+<p>真正的编排都在 <code>main.ts</code>（972 行）。它先处理 <code>pi auth</code> / <code>pi install</code> 等一次性子命令，然后解析参数、<strong>决定运行模式</strong>。模式判定逻辑值得逐行读——注意最后一条：stdin/stdout 只要有一端不是 TTY，就自动降级为 print 模式，这让 <code>echo "..." | pi</code> 无需任何标志就能工作：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/coding-agent/src/main.ts</span><span class="cb-note">L118-129 · 模式判定</span></div>
+<pre><code>function resolveAppMode(parsed: Args, stdinIsTTY: boolean, stdoutIsTTY: boolean): AppMode {
+  if (parsed.mode === "rpc") {
+    return "rpc";
+  }
+  if (parsed.mode === "json") {
+    return "json";
+  }
+  if (parsed.print || !stdinIsTTY || !stdoutIsTTY) {
+    return "print";
+  }
+  return "interactive";
+}</code></pre>
+</div>
+
+<p>之后 <code>main()</code> 按固定顺序装配运行时，然后一次性分发到对应模式（节选，完整启动流程图见<a href="./04-coding-agent.html">第 04 篇</a>）：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/coding-agent/src/main.ts</span><span class="cb-note">L923-964 · 模式分发</span></div>
+<pre><code>if (appMode === "rpc") {
+  printTimings();
+  await runRpcMode(runtime);
+} else if (appMode === "interactive") {
+  const interactiveMode = new InteractiveMode(runtime, {
+    migratedProviders,
+    modelFallbackMessage,
+    autoTrustOnReloadCwd,
+    initialMessage,
+    initialImages,
+    initialMessages: parsed.messages,
+    verbose: parsed.verbose,
+    tuiMode: parsed.tuiMode,
+  });
+  printTimings();
+  await interactiveMode.run();
+} else {
+  printTimings();
+  const exitCode = await runPrintMode(runtime, {
+    mode: toPrintOutputMode(appMode),   // "text" | "json"
+    messages: parsed.messages,
+    initialMessage,
+    initialImages,
+  });
+  stopThemeWatcher();
+  restoreStdout();
+  if (exitCode !== 0) {
+    process.exitCode = exitCode;
+  }
+  return;
+}</code></pre>
+</div>
+
+<p>装配阶段的关键步骤（同一函数内，自上而下）：<code>runMigrations()</code> 迁移旧版 auth/session 存储 → <code>createSessionManager()</code> 按 <code>--fork/--resume/--continue/--session</code> 决定打开哪个会话文件 → <code>ProjectTrustStore</code> 判定当前项目是否受信任（决定项目级扩展/技能是否加载）→ <code>createAgentSessionRuntime()</code> 组装三件套（SettingsManager + ModelRuntime + ResourceLoader）并构建 <code>AgentSession</code>。这四步全部完成后，才轮到上面的模式分发。</p>
+
+<h2><span class="no">3</span>四种运行模式</h2>
+<p>同一个 pi 进程，按 stdin/stdout 的用法分成四种形态。它们的 Agent 循环、工具系统、会话存储完全相同——变的只是"事件如何进出进程"：</p>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 372" width="980" role="img" aria-label="四种运行模式拓扑">
+  <defs>
+    <marker id="arm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <!-- interactive -->
+  <rect x="30" y="26" width="230" height="66" rx="6" class="n-user"></rect>
+  <text x="145" y="50" text-anchor="middle" class="t-s t-b">终端（TTY）</text>
+  <text x="145" y="68" text-anchor="middle" class="t-xs">人类交互</text>
+  <rect x="430" y="26" width="300" height="66" rx="6" class="n-ca"></rect>
+  <text x="580" y="46" text-anchor="middle" class="t-s t-b">interactive 模式</text>
+  <text x="580" y="64" text-anchor="middle" class="t-xs">raw mode 键盘解析 + 全屏/主屏差分渲染</text>
+  <line x1="262" y1="48" x2="428" y2="48" class="edge" marker-end="url(#arm)"></line>
+  <line x1="428" y1="70" x2="262" y2="70" class="edge" marker-end="url(#arm)"></line>
+  <text x="290" y="42" class="t-xs">按键字节流</text>
+  <text x="300" y="86" class="t-xs">ANSI 渲染帧</text>
+
+  <!-- print -->
+  <rect x="30" y="112" width="230" height="66" rx="6" class="n"></rect>
+  <text x="145" y="136" text-anchor="middle" class="t-s t-b">shell 管道 / 脚本</text>
+  <text x="145" y="154" text-anchor="middle" class="t-xs">pi -p "..." 或 stdin 管道</text>
+  <rect x="430" y="112" width="300" height="66" rx="6" class="n-ca"></rect>
+  <text x="580" y="132" text-anchor="middle" class="t-s t-b">print 模式</text>
+  <text x="580" y="150" text-anchor="middle" class="t-xs">跑完一个完整回合，只输出最终回答后退出</text>
+  <line x1="262" y1="134" x2="428" y2="134" class="edge" marker-end="url(#arm)"></line>
+  <line x1="428" y1="156" x2="262" y2="156" class="edge" marker-end="url(#arm)"></line>
+  <text x="290" y="128" class="t-xs">prompt 文本</text>
+  <text x="300" y="172" class="t-xs">最终文本</text>
+
+  <!-- json -->
+  <rect x="30" y="198" width="230" height="66" rx="6" class="n"></rect>
+  <text x="145" y="222" text-anchor="middle" class="t-s t-b">脚本 / CI</text>
+  <text x="145" y="240" text-anchor="middle" class="t-xs">--mode json</text>
+  <rect x="430" y="198" width="300" height="66" rx="6" class="n-ca"></rect>
+  <text x="580" y="218" text-anchor="middle" class="t-s t-b">json 模式</text>
+  <text x="580" y="236" text-anchor="middle" class="t-xs">逐事件输出 JSONL（先 session header，后事件流）</text>
+  <line x1="262" y1="220" x2="428" y2="220" class="edge" marker-end="url(#arm)"></line>
+  <line x1="428" y1="242" x2="262" y2="242" class="edge" marker-end="url(#arm)"></line>
+  <text x="290" y="214" class="t-xs">prompt</text>
+  <text x="296" y="258" class="t-xs">事件 JSONL</text>
+
+  <!-- rpc -->
+  <rect x="30" y="284" width="230" height="66" rx="6" class="n-proto"></rect>
+  <text x="145" y="308" text-anchor="middle" class="t-s t-b">宿主程序（IDE / bot）</text>
+  <text x="145" y="326" text-anchor="middle" class="t-xs">spawn 子进程，长期持有</text>
+  <rect x="430" y="284" width="300" height="66" rx="6" class="n-ca"></rect>
+  <text x="580" y="304" text-anchor="middle" class="t-s t-b">rpc 模式（独立 bin: rpc-entry）</text>
+  <text x="580" y="322" text-anchor="middle" class="t-xs">双向 JSONL：命令进 / 响应+事件流出，会话常驻</text>
+  <line x1="262" y1="306" x2="428" y2="306" class="edge" marker-end="url(#arm)"></line>
+  <line x1="428" y1="328" x2="262" y2="328" class="edge" marker-end="url(#arm)"></line>
+  <text x="278" y="300" class="t-xs">RpcCommand</text>
+  <text x="284" y="344" class="t-xs">RpcResponse + 事件</text>
+
+  <!-- 右侧说明 -->
+  <rect x="770" y="26" width="190" height="324" rx="8" fill="#fbfbf9" stroke="#c9cdd4" stroke-dasharray="5 4"></rect>
+  <text x="786" y="50" class="t-s t-b">共享的内核</text>
+  <text x="786" y="74" class="t-xs">四种模式的</text>
+  <text x="786" y="92" class="t-xs">AgentSession / 工具 /</text>
+  <text x="786" y="110" class="t-xs">扩展 / 会话存储完全一致</text>
+  <text x="786" y="140" class="t-xs">区别仅在事件</text>
+  <text x="786" y="158" class="t-xs">如何进出进程边界</text>
+  <path d="M 732 60 C 760 120 760 240 734 300" class="edge edge-dash" marker-end="url(#arm)"></path>
+</svg>
+</div>
+<figcaption>图 1-2 · 四种运行模式。左列是驱动方，中列是 pi 进程内的模式实现；interactive 与非 interactive 的分界线是 stdin 是否为 TTY（见 第 2 节 的 resolveAppMode）。</figcaption>
+</figure>
+
+<table class="tbl">
+<thead><tr><th>模式</th><th>触发方式</th><th>stdin</th><th>stdout</th><th>典型用途</th></tr></thead>
+<tbody>
+<tr><td><strong>interactive</strong></td><td>默认（两端皆 TTY）</td><td>raw 模式按键流</td><td>ANSI 差分渲染</td><td>人类日常编码</td></tr>
+<tr><td><strong>print</strong></td><td><code>-p</code> 或非 TTY</td><td>prompt 文本（可选）</td><td>最终回答纯文本</td><td>脚本一句话、管道 <code>cat err | pi -p "解释"</code></td></tr>
+<tr><td><strong>json</strong></td><td><code>--mode json</code></td><td>prompt 文本</td><td>事件 JSONL（首行 session header）</td><td>程序化消费流式过程</td></tr>
+<tr><td><strong>rpc</strong></td><td><code>--mode rpc</code></td><td>命令 JSONL</td><td>响应 + 实时事件 JSONL</td><td>IDE 插件、聊天 bot 等宿主集成</td></tr>
+</tbody>
+</table>
+
+<div class="callout note">
+  <div class="co-title">细节：output-guard</div>
+  <p>非 interactive 模式启动时会调用 <code>takeOverStdout()</code>（<code>core/output-guard.ts</code>）：把 <code>process.stdout.write</code> 换成自己的实现，防止工具输出或第三方库的杂散打印污染 JSONL 协议流。RPC 模式写事件用的是严格 LF 分行的 JSONL（<code>modes/rpc/jsonl.ts</code>）——特意不用 readline，因为 readline 会按 U+2028 行分隔符切分，而 JSON 字符串里可能出现它。</p>
+</div>
+
+<h2><span class="no">4</span>实验形态：server-client</h2>
+<p>单进程模型满足不了"多个客户端共享一组会话"的场景（比如 IDE 面板和终端同时操作同一个 agent）。仓库里有一个实验性方案：把 AgentSession 搬进常驻的 <code>pi-server</code> 进程，客户端通过 Unix socket 用 CBOR 二进制协议连接。它与 第 3 节 的 RPC 模式是<strong>并存的两套协议</strong>——RPC 模式是 coding-agent 内建的 JSONL 子进程协议，server-client 是独立的 CBOR 套接字协议，互不依赖：</p>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 320" width="980" role="img" aria-label="server-client 拓扑">
+  <defs>
+    <marker id="ars" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <!-- 左：RPC 子进程 -->
+  <text x="40" y="34" class="zone-label">形态 A · RPC 子进程（稳定）</text>
+  <rect x="40" y="50" width="220" height="70" rx="6" class="n-proto"></rect>
+  <text x="150" y="76" text-anchor="middle" class="t-s t-b">宿主程序</text>
+  <text x="150" y="94" text-anchor="middle" class="t-xs">IDE 插件 / bot / 测试</text>
+  <rect x="380" y="50" width="180" height="70" rx="6" class="n-ca"></rect>
+  <text x="470" y="72" text-anchor="middle" class="t-s t-b">pi 子进程</text>
+  <text x="470" y="90" text-anchor="middle" class="t-xs">--mode rpc</text>
+  <text x="470" y="106" text-anchor="middle" class="t-xs">1 会话 = 1 进程</text>
+  <line x1="262" y1="72" x2="378" y2="72" class="edge" marker-end="url(#ars)"></line>
+  <line x1="378" y1="98" x2="262" y2="98" class="edge" marker-end="url(#ars)"></line>
+  <text x="270" y="66" class="t-xs">命令 JSONL</text>
+  <text x="276" y="114" class="t-xs">事件 JSONL</text>
+  <text x="40" y="150" class="t-xs">stdin/stdout 管道 · 人类可读 · 便于调试</text>
+
+  <!-- 右：server-client -->
+  <text x="620" y="34" class="zone-label">形态 B · server-client（实验）</text>
+  <rect x="620" y="50" width="150" height="70" rx="6" class="n-proto"></rect>
+  <text x="695" y="76" text-anchor="middle" class="t-s t-b">客户端</text>
+  <text x="695" y="94" text-anchor="middle" class="t-xs">pi-client SDK（进程内）</text>
+  <rect x="850" y="36" width="16" height="100" rx="4" class="n-disk"></rect>
+  <text x="858" y="158" text-anchor="middle" class="t-xs">Unix socket</text>
+  <rect x="620" y="180" width="330" height="110" rx="8" class="zone-fill-ca"></rect>
+  <text x="636" y="202" class="zone-label" style="fill:var(--c-ca)">pi-server 进程（常驻）</text>
+  <rect x="640" y="214" width="140" height="56" rx="5" class="n-ca"></rect>
+  <text x="710" y="238" text-anchor="middle" class="t-s t-b">会话注册表</text>
+  <text x="710" y="255" text-anchor="middle" class="t-xs">多会话并发</text>
+  <rect x="800" y="214" width="130" height="56" rx="5" class="n-agent"></rect>
+  <text x="865" y="238" text-anchor="middle" class="t-s t-b">AgentSession</text>
+  <text x="865" y="255" text-anchor="middle" class="t-xs">复用同一编排核</text>
+  <path d="M 770 85 L 848 85" class="edge" marker-end="url(#ars)"></path>
+  <path d="M 848 100 L 772 100" class="edge" marker-end="url(#ars)"></path>
+  <path d="M 858 138 L 858 178" class="edge" marker-end="url(#ars)"></path>
+  <text x="640" y="312" class="t-xs">CBOR 帧（4 字节长度前缀）· 快照权威 + 事件瞬态（详见 08 篇）</text>
+
+  <!-- 中间分隔 -->
+  <line x1="590" y1="30" x2="590" y2="310" class="edge edge-dash"></line>
+</svg>
+</div>
+<figcaption>图 1-3 · 两种远程/宿主集成形态。A 是 RPC 子进程（每会话一进程，JSONL over stdio）；B 是实验性 pi-server（常驻进程承载多会话，CBOR over Unix socket）。</figcaption>
+</figure>
+
+<p>形态 B 的角色分工：<code>packages/protocol</code> 定义 TypeBox schema（快照、命令、事件）与 CBOR 编解码；<code>packages/client</code> 是传输无关的客户端 SDK（只要求一个 <code>ByteTransport</code> 接口，自带 Unix socket 实现）；coding-agent 的 <code>src/server/create-harness.ts</code> 把 read/bash/edit/write 四个工具和 system prompt 打包成 <code>pi-agent-core</code> 的 <code>AgentHarness</code> 交给 server 托管。协议细节在<a href="./08-rpc.html">第 08 篇</a>展开。</p>
+
+<nav class="pagenav">
+  <a href="./index.html"><span class="dir">上一篇</span>← 总览</a>
+  <a class="next" href="./02-ai.html"><span class="dir">下一篇</span>02 · pi-ai 统一模型层 →</a>
+</nav>
+
+<footer class="colophon">Pi 源码深度剖析 · 基于 worktree 368e013de（v0.84.1）</footer>
+</main>
+<script src="./script.js"></script>
+</body>
+</html>

@@ -1,0 +1,261 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Vane 多模态 AI 管道：从视频帧到向量库",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      520
+    ],
+    "views": [
+      {
+        "id": "video-path",
+        "label": "视频路径",
+        "focus": [
+          "video_src",
+          "ds_scan",
+          "udf_op",
+          "providers",
+          "embed_out"
+        ],
+        "note": "decord 流式解码出 TENSOR 帧列，批 UDF 调 Provider 生成 embedding。"
+      },
+      {
+        "id": "native-vllm",
+        "label": "原生推理路径",
+        "focus": [
+          "files",
+          "vllm_op",
+          "models",
+          "resp"
+        ],
+        "note": "ai_prompt 在优化期降为 PhysicalVLLM 算子，由自托管引擎执行。"
+      },
+      {
+        "id": "sinks",
+        "label": "落地",
+        "focus": [
+          "embed_out",
+          "sink"
+        ],
+        "note": "embedding 列经 DataSink 分布式 upsert 进 Milvus / Qdrant。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "摄取"
+    },
+    {
+      "label": "引擎接入"
+    },
+    {
+      "label": "AI 算子"
+    },
+    {
+      "label": "推理后端"
+    },
+    {
+      "label": "产出"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "video_src",
+      "type": "frontend",
+      "label": "视频源",
+      "sublabel": "decord 解码",
+      "stage": 0,
+      "row": 0,
+      "tag": "DataSource"
+    },
+    {
+      "id": "files",
+      "type": "external",
+      "label": "文件",
+      "sublabel": "Parquet·BLOB",
+      "stage": 0,
+      "row": 2,
+      "tag": "S3/本地",
+      "yOffset": -7
+    },
+    {
+      "id": "ds_scan",
+      "type": "backend",
+      "label": "datasource_scan",
+      "sublabel": "Arrow 流扫描",
+      "stage": 1,
+      "row": 1,
+      "tag": "FILE/TENSOR 列"
+    },
+    {
+      "id": "udf_op",
+      "type": "backend",
+      "label": "批 UDF",
+      "sublabel": "map_batches",
+      "stage": 2,
+      "row": 0,
+      "tag": "STREAMING_UDF"
+    },
+    {
+      "id": "vllm_op",
+      "type": "backend",
+      "label": "原生 VLLM",
+      "sublabel": "prefix 分桶",
+      "stage": 2,
+      "row": 2,
+      "tag": "VLLM_PROJECT"
+    },
+    {
+      "id": "providers",
+      "type": "external",
+      "label": "AI Providers",
+      "sublabel": "OpenAI 等",
+      "stage": 3,
+      "row": 0,
+      "tag": "API"
+    },
+    {
+      "id": "models",
+      "type": "backend",
+      "label": "vLLM/SGLang",
+      "sublabel": "自托管推理",
+      "stage": 3,
+      "row": 2,
+      "tag": "GPU"
+    },
+    {
+      "id": "embed_out",
+      "type": "database",
+      "label": "embedding",
+      "sublabel": "FLOAT[dim]",
+      "stage": 4,
+      "row": 0
+    },
+    {
+      "id": "resp",
+      "type": "frontend",
+      "label": "response",
+      "sublabel": "结构化 JSON",
+      "stage": 4,
+      "row": 1
+    },
+    {
+      "id": "sink",
+      "type": "database",
+      "label": "向量库",
+      "sublabel": "Milvus·Qdrant",
+      "stage": 4,
+      "row": 2,
+      "tag": "DataSink"
+    }
+  ],
+  "flows": [
+    {
+      "id": "f_video",
+      "from": "video_src",
+      "to": "ds_scan",
+      "label": "帧批次",
+      "variant": "emphasis",
+      "classification": "约 10MiB 分区"
+    },
+    {
+      "id": "f_files",
+      "from": "files",
+      "to": "ds_scan",
+      "label": "列数据"
+    },
+    {
+      "id": "f_scan_udf",
+      "from": "ds_scan",
+      "to": "udf_op",
+      "label": "Arrow 批",
+      "variant": "emphasis"
+    },
+    {
+      "id": "f_files_vllm",
+      "from": "files",
+      "to": "vllm_op",
+      "label": "文本/图像列"
+    },
+    {
+      "id": "f_udf_prov",
+      "from": "udf_op",
+      "to": "providers",
+      "label": "embed_text",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "f_vllm_model",
+      "from": "vllm_op",
+      "to": "models",
+      "label": "Submit 批",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "f_prov_out",
+      "from": "providers",
+      "to": "embed_out",
+      "label": "向量",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "f_model_resp",
+      "from": "models",
+      "to": "resp",
+      "label": "生成文本"
+    },
+    {
+      "id": "f_embed_sink",
+      "from": "embed_out",
+      "to": "sink",
+      "label": "分布式 upsert",
+      "variant": "dashed",
+      "route": "vertical-channel",
+      "channelX": 1052,
+      "labelAt": [
+        1052,
+        271
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "多模态即列",
+      "items": [
+        "没有 IMAGE/VIDEO 类型：视频帧是 TENSOR(UTINYINT,[h,w,3]) 列",
+        "文件引用是 FILE 结构体（URL/MIME/大小/校验和），免凭证传输",
+        "decord 源带内存水位背压，约 10MiB 一个流式分区"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "两条推理路径",
+      "items": [
+        "API 路径：ai.embed/prompt → 批 UDF → Provider SDK（重试/分块/限流）",
+        "自托管路径：provider=vllm/sglang 降为原生算子，C++ 侧 prefix 分桶",
+        "批以 Arrow Table 过界，GPU actor 池常驻避免冷启动"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "工程化保障",
+      "items": [
+        "on_error=ignore 时坏行置 NULL，不中断整条管道",
+        "结构化输出按 JSON Schema 编译校验后再落列",
+        "embedding 经 DataSink upsert 进向量库，交付语义由 sink 定义"
+      ]
+    }
+  ]
+}

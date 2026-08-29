@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>08 · 控制面与服务 — Moonlink 源码深度解析</title>
+<style>
+:root{
+  --blue:#2563eb;--green:#16a34a;--orange:#ea580c;--purple:#7c3aed;--gray:#64748b;--red:#dc2626;
+  --ink:#1e293b;--muted:#64748b;--bg:#f6f8fa;--card:#fff;--line:#e2e8f0;--code-bg:#0d1117;--code-ink:#e6edf3;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.8}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.97);display:flex;flex-wrap:wrap;gap:2px;padding:8px 16px;font-size:13px}
+.topnav .brand{color:#fbbf24;font-weight:700;margin-right:10px;padding:4px 6px}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:4px 10px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav a.active{background:var(--blue);color:#fff}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 20px 80px}
+.page-head{background:linear-gradient(135deg,#0f172a,#334155);border-radius:14px;color:#f1f5f9;padding:30px 34px;margin-bottom:26px}
+.page-head h1{font-size:28px;margin-bottom:6px}
+.page-head p{color:#cbd5e1;font-size:14.5px}
+h2{font-size:23px;margin:40px 0 12px;padding-left:12px;border-left:5px solid var(--gray)}
+h3{font-size:18px;margin:24px 0 8px;color:#0f172a}
+p{margin:10px 0;color:#334155}
+.lead{font-size:15.5px;color:#475569}
+.figure{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin:20px 0}
+.fig-title{font-weight:700;font-size:14.5px;color:#0f172a;margin-bottom:4px}
+.fig-title .fno{color:var(--blue)}
+.fig-desc{font-size:13px;color:var(--muted);margin-bottom:10px}
+svg{width:100%;height:auto;display:block}
+code{background:#eef2f7;border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:.88em;color:#be185d}
+pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:16px 18px;overflow-x:auto;font-size:13px;line-height:1.6;margin:14px 0}
+pre code{background:none;border:none;color:inherit;padding:0}
+.k{color:#ff7b72}.t{color:#79c0ff}.s{color:#a5d6ff}.c{color:#8b949e;font-style:italic}.n{color:#ffa657}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px;background:var(--card)}
+th{background:#f1f5f9;text-align:left}
+th,td{border:1px solid var(--line);padding:8px 12px;vertical-align:top}
+tbody tr:nth-child(even){background:#fafbfc}
+.callout{border-left:4px solid var(--blue);background:#eff6ff;border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0;font-size:14px}
+.callout.warn{border-color:var(--orange);background:#fff7ed}
+.callout.good{border-color:var(--green);background:#f0fdf4}
+.callout b{color:#0f172a}
+.footer{display:flex;justify-content:space-between;margin-top:60px;padding-top:18px;border-top:1px solid var(--line);font-size:14px}
+.footer a{color:var(--blue);text-decoration:none;font-weight:600}
+ul,ol{margin:8px 0 8px 24px}
+li{margin:4px 0}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">🥮 Moonlink 源码解析</span>
+  <a href="index.html">总导航</a>
+  <a href="01-overview.html">01 总体架构</a>
+  <a href="02-ingestion.html">02 数据摄入</a>
+  <a href="03-core-engine.html">03 存储引擎</a>
+  <a href="04-index-dv.html">04 索引与 DV</a>
+  <a href="05-wal-recovery.html">05 WAL 与恢复</a>
+  <a href="06-iceberg.html">06 Iceberg 集成</a>
+  <a href="07-query.html">07 查询路径</a>
+  <a class="active" href="08-control-plane.html">08 控制面</a>
+  <a href="09-concurrency-lsn.html">09 并发模型</a>
+</nav>
+
+<div class="wrap">
+<div class="page-head">
+  <h1>Chapter 08 · 控制面：MoonlinkBackend、元数据仓与服务入口</h1>
+  <p>数据面是每表的 actor 世界，控制面则回答「有哪些表、从哪来、怎么恢复」。moonlink_backend 是所有入口（REST/RPC/OTEL）的唯一编排者。</p>
+</div>
+
+<h2>8.1 MoonlinkBackend：唯一的编排者</h2>
+<p class="lead">moonlink_service 启动时构造一个 <code>MoonlinkBackend</code>（src/moonlink_backend/src/lib.rs），此后 REST handler、RPC server、OTEL handler 全部只跟它对话。它持有三样东西：ReplicationManager（数据源连接）、metadata_store_accessor（表清单）、两个路径重映射闭包。</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 8-1</span> · MoonlinkBackend 组件图与请求路由</div>
+  <svg viewBox="0 0 1160 640" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="h11" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    </defs>
+    <!-- entries -->
+    <g font-size="12">
+      <rect x="30" y="50" width="220" height="70" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+      <text x="140" y="78" text-anchor="middle" font-weight="700" fill="#1e3a8a">REST（axum :3030）</text>
+      <text x="140" y="100" text-anchor="middle" font-size="10.5" fill="#3b5ba9">rest_api.rs：13 个端点</text>
+      <rect x="30" y="140" width="220" height="70" rx="10" fill="#ccfbf1" stroke="#0d9488"/>
+      <text x="140" y="168" text-anchor="middle" font-weight="700" fill="#115e59">RPC（:3031 / unix sock）</text>
+      <text x="140" y="190" text-anchor="middle" font-size="10.5" fill="#0f766e">rpc_server.rs：10 个方法</text>
+      <rect x="30" y="230" width="220" height="70" rx="10" fill="#f3e8ff" stroke="#7c3aed"/>
+      <text x="140" y="258" text-anchor="middle" font-weight="700" fill="#4c1d95">OTEL（:3435）</text>
+      <text x="140" y="280" text-anchor="middle" font-size="10.5" fill="#7c3aed">/v1/metrics（OTLP protobuf）</text>
+      <line x1="250" y1="85" x2="330" y2="130" stroke="#475569" stroke-width="1.6" marker-end="url(#h11)"/>
+      <line x1="250" y1="175" x2="330" y2="175" stroke="#475569" stroke-width="1.6" marker-end="url(#h11)"/>
+      <line x1="250" y1="265" x2="330" y2="220" stroke="#475569" stroke-width="1.6" marker-end="url(#h11)"/>
+    </g>
+    <!-- backend -->
+    <rect x="330" y="80" width="380" height="230" rx="14" fill="#f1f5f9" stroke="#64748b" stroke-width="2"/>
+    <text x="520" y="108" text-anchor="middle" font-weight="700" fill="#334155" font-size="14">MoonlinkBackend</text>
+    <g font-size="11.5">
+      <rect x="348" y="124" width="344" height="48" rx="8" fill="#fff" stroke="#cbd5e1"/>
+      <text x="520" y="144" text-anchor="middle" font-weight="600" fill="#334155">ReplicationManager</text>
+      <text x="520" y="162" text-anchor="middle" font-size="10.5" fill="#64748b">uri→复制连接 · 表路由 · 事件管理器出口</text>
+      <rect x="348" y="180" width="344" height="48" rx="8" fill="#fff" stroke="#cbd5e1"/>
+      <text x="520" y="200" text-anchor="middle" font-weight="600" fill="#334155">metadata_store_accessor: Box&lt;dyn MetadataStoreTrait&gt;</text>
+      <text x="520" y="218" text-anchor="middle" font-size="10.5" fill="#64748b">SQLite（默认，sqlx）/ PostgreSQL（tokio-postgres）</text>
+      <rect x="348" y="236" width="344" height="48" rx="8" fill="#fff" stroke="#cbd5e1"/>
+      <text x="520" y="256" text-anchor="middle" font-weight="600" fill="#334155">read_state / http 路径重映射闭包</text>
+      <text x="520" y="274" text-anchor="middle" font-size="10.5" fill="#64748b">data_server_uri：本地路径 → 数据服务器 URL（存算分离）</text>
+    </g>
+    <!-- outputs -->
+    <g font-size="12">
+      <rect x="790" y="60" width="340" height="100" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+      <text x="960" y="88" text-anchor="middle" font-weight="700" fill="#14532d">数据面（每表）</text>
+      <text x="960" y="112" text-anchor="middle" font-size="11" fill="#166534">create_table → build_table_components：</text>
+      <text x="960" y="132" text-anchor="middle" font-size="11" fill="#166534">WalManager → MooncakeTable → ReadStateManager</text>
+      <text x="960" y="152" text-anchor="middle" font-size="11" fill="#166534">→ TableStatusReader → TableHandler → TableEventManager</text>
+      <rect x="790" y="190" width="340" height="90" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+      <text x="960" y="218" text-anchor="middle" font-weight="700" fill="#1e3a8a">scan_table（读路径）</text>
+      <text x="960" y="242" text-anchor="middle" font-size="11" fill="#3b5ba9">get_table_reader → ReadStateManager::try_read</text>
+      <text x="960" y="262" text-anchor="middle" font-size="11" fill="#3b5ba9">+ 路径重映射 → ReadState（CH07）</text>
+      <line x1="710" y1="150" x2="790" y2="110" stroke="#475569" stroke-width="1.6" marker-end="url(#h11)"/>
+      <line x1="710" y1="210" x2="790" y2="235" stroke="#475569" stroke-width="1.6" marker-end="url(#h11)"/>
+      <line x1="710" y1="280" x2="790" y2="360" stroke="#475569" stroke-width="1.6" marker-end="url(#h11)"/>
+      <rect x="790" y="310" width="340" height="110" rx="10" fill="#e2e8f0" stroke="#64748b"/>
+      <text x="960" y="338" text-anchor="middle" font-weight="700" fill="#334155">元数据仓（恢复真源）</text>
+      <text x="960" y="362" text-anchor="middle" font-size="11" fill="#475569">create/drop_table 时写 tables 表；</text>
+      <text x="960" y="384" text-anchor="middle" font-size="11" fill="#475569">重启时 recover_all_tables() 读回</text>
+      <text x="960" y="404" text-anchor="middle" font-size="10.5" fill="#64748b">表级 config（Mooncake/Iceberg/WAL 三段 JSON）也存这里</text>
+    </g>
+    <!-- lifecycle ops -->
+    <rect x="30" y="360" width="680" height="250" rx="12" fill="#fff" stroke="#cbd5e1"/>
+    <text x="55" y="388" font-weight="700" fill="#334155">控制面 API 全集（backend 对外方法）</text>
+    <g font-size="11.5" fill="#475569">
+      <text x="55" y="416">create_table(database, table, src, src_uri, config)　—— 建 TableEvent 之外的整套组件 + 写元数据 + 注册复制</text>
+      <text x="55" y="442">drop_table —— 事件循环五步关停：shutdown(解pin) → drop_iceberg_table → drop_wal → drop_table → ack</text>
+      <text x="55" y="468">ingest_table_rows / batch_ingest(load_files)　—— REST 行摄取 / parquet 直装</text>
+      <text x="55" y="494">scan_table / get_table_schema / list_tables　—— 读路径与目录</text>
+      <text x="55" y="520">create_snapshot / optimize_table / wait_for_wal_flush　—— 维护与一致性等待</text>
+      <text x="55" y="546">recover_all_tables（recovery_utils.rs）　—— 启动时全量恢复（图 5-3 ⓪）</text>
+      <text x="55" y="580" font-size="10.5" fill="#94a3b8">drop_table 的五步是「先停写、再删外、再删内」的顺序设计：任何一步失败都可重试，不会留下半删状态。</text>
+    </g>
+  </svg>
+</div>
+
+<h2>8.2 端点全景：REST 与 RPC</h2>
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 8-2</span> · 全部对外端点（rest_api.rs create_router + moonlink_rpc rpcs! 宏，与源码逐条核对）</div>
+  <svg viewBox="0 0 1160 560" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <g font-size="12">
+      <rect x="30" y="40" width="550" height="480" rx="12" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+      <text x="305" y="68" text-anchor="middle" font-weight="700" fill="#1e3a8a" font-size="13.5">REST :3030（JSON · 30s 超时 · CORS）</text>
+      <g font-family="Menlo,monospace" font-size="11.5" fill="#1e293b">
+        <text x="50" y="96"><tspan fill="#16a34a" font-weight="700">GET　</tspan>/health</text>
+        <text x="50" y="122"><tspan fill="#16a34a" font-weight="700">GET　</tspan>/tables　<tspan fill="#64748b" font-family="-apple-system,sans-serif">→ list_tables（含 cardinality/LSN/warehouse 位置）</tspan></text>
+        <text x="50" y="148"><tspan fill="#ea580c" font-weight="700">POST　</tspan>/tables/{table}　<tspan fill="#64748b" font-family="-apple-system,sans-serif">（schema 或 avro_schema 建表）</tspan></text>
+        <text x="50" y="174"><tspan fill="#ea580c" font-weight="700">POST　</tspan>/tables/{table}/from_postgres　<tspan fill="#64748b" font-family="-apple-system,sans-serif">→ 触发 CDC 接入</tspan></text>
+        <text x="50" y="200"><tspan fill="#dc2626" font-weight="700">DEL　</tspan>/tables/{table}</text>
+        <text x="50" y="226"><tspan fill="#16a34a" font-weight="700">GET　</tspan>/schema/{database}/{table}　<tspan fill="#64748b" font-family="-apple-system,sans-serif">→ Arrow IPC schema</tspan></text>
+        <text x="50" y="252"><tspan fill="#ea580c" font-weight="700">POST　</tspan>/ingest/{table}　<tspan fill="#64748b" font-family="-apple-system,sans-serif">JSON 行（sync 可回 LSN）</tspan></text>
+        <text x="50" y="278"><tspan fill="#ea580c" font-weight="700">POST　</tspan>/ingestpb/{table}　<tspan fill="#64748b" font-family="-apple-system,sans-serif">Protobuf 行</tspan></text>
+        <text x="50" y="304"><tspan fill="#ea580c" font-weight="700">POST　</tspan>/kafka/{table}/schema　<tspan fill="#64748b" font-family="-apple-system,sans-serif">Avro schema 注册（schema_id 去重）</tspan></text>
+        <text x="50" y="330"><tspan fill="#ea580c" font-weight="700">POST　</tspan>/kafka/{table}/ingest　<tspan fill="#64748b" font-family="-apple-system,sans-serif">Avro 二进制</tspan></text>
+        <text x="50" y="356"><tspan fill="#ea580c" font-weight="700">POST　</tspan>/upload/{table}　<tspan fill="#64748b" font-family="-apple-system,sans-serif">parquet 直装（insert/upload）</tspan></text>
+        <text x="50" y="382"><tspan fill="#ea580c" font-weight="700">POST　</tspan>/tables/{table}/optimize　<tspan fill="#64748b" font-family="-apple-system,sans-serif">mode=data|index|full</tspan></text>
+        <text x="50" y="408"><tspan fill="#ea580c" font-weight="700">POST　</tspan>/tables/{table}/snapshot　<tspan fill="#64748b" font-family="-apple-system,sans-serif">强制 iceberg 快照</tspan></text>
+        <text x="50" y="434"><tspan fill="#ea580c" font-weight="700">POST　</tspan>/tables/{table}/flush　<tspan fill="#64748b" font-family="-apple-system,sans-serif">等 WAL flush LSN</tspan></text>
+      </g>
+      <text x="50" y="472" font-size="11" fill="#3b5ba9">错误映射：InvalidArgument→400 · Temporary→503 · Permanent→500</text>
+      <text x="50" y="498" font-size="11" fill="#3b5ba9">request_mode=sync|async 双模（CH02 图 2-5）</text>
+      <rect x="610" y="40" width="520" height="330" rx="12" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.4"/>
+      <text x="870" y="68" text-anchor="middle" font-weight="700" fill="#115e59" font-size="13.5">RPC :3031（length-prefixed bincode · TCP/unix sock）</text>
+      <g font-family="Menlo,monospace" font-size="11.5" fill="#115e59">
+        <text x="630" y="96">create_snapshot(database, table, lsn)</text>
+        <text x="630" y="122">create_table(database, table, src, src_uri, cfg)</text>
+        <text x="630" y="148">drop_table(database, table)</text>
+        <text x="630" y="174">get_parquet_metadatas(data_files) -&gt; Vec&lt;Vec&lt;u8&gt;&gt;</text>
+        <text x="630" y="200">get_table_schema(database, table) -&gt; Arrow IPC bytes</text>
+        <text x="630" y="226">list_tables() -&gt; Vec&lt;Table&gt;</text>
+        <text x="630" y="252">load_files(database, table, files)</text>
+        <text x="630" y="278">optimize_table(database, table, mode)</text>
+        <text x="630" y="304">scan_table_begin(database, table, lsn) -&gt; ReadState bytes</text>
+        <text x="630" y="330">scan_table_end(database, table)</text>
+      </g>
+      <text x="630" y="358" font-size="11" fill="#0f766e">协议帧：u32 native-endian 长度 + bincode payload（moonlink_rpc/src/lib.rs）</text>
+      <rect x="610" y="394" width="520" height="126" rx="12" fill="#f3e8ff" stroke="#7c3aed" stroke-width="1.4"/>
+      <text x="870" y="422" text-anchor="middle" font-weight="700" fill="#4c1d95" font-size="13.5">OTEL :3435　POST /v1/metrics（OTLP protobuf）</text>
+      <g font-size="11.5" fill="#6d28d9">
+        <text x="630" y="450">自吞设计：按 attribute moonlink.mooncake_table_id + service.name 路由 →</text>
+        <text x="630" y="474">自动建保留表 __reserved_moonlink_internal_metrics__（append-only）→</text>
+        <text x="630" y="498">转 protobuf MoonlinkRow → 回环调本机 /ingestpb 异步插入。</text>
+      </g>
+    </g>
+  </svg>
+</div>
+
+<div class="callout"><b>为什么同时要 REST 和 RPC 两套？</b>REST 面向「数据与运维」（人类友好、可 curl、K8s 探活），RPC 面向「查询引擎」（二进制高效、长连接、语义精确的 begin/end 配对）。OTEL 那个端点则是展示野心的一笔：moonlink 把自身的运行指标当数据流摄入自己的 Iceberg 表——用产品吃自己的狗粮。</div>
+
+<h2>8.3 元数据仓：唯一的一张表</h2>
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 8-3</span> · metadata store ER（sqlite/sql/create_tables.sql，PG 版同构）</div>
+  <svg viewBox="0 0 1160 300" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <g font-size="12">
+      <rect x="230" y="50" width="700" height="180" rx="10" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.5"/>
+      <text x="580" y="80" text-anchor="middle" font-weight="700" fill="#713f12" font-family="Menlo,monospace">tables</text>
+      <g font-family="Menlo,monospace" font-size="12" fill="#713f12">
+        <text x="580" y="108" text-anchor="middle">🔑 PRIMARY KEY ("database", "table")</text>
+        <text x="580" y="134" text-anchor="middle">database TEXT · table TEXT　—— 逻辑库名/表名</text>
+        <text x="580" y="160" text-anchor="middle">src_table_name TEXT NOT NULL · src_table_uri TEXT　—— PG 源（REST 表为 rest://api）</text>
+        <text x="580" y="186" text-anchor="middle">config TEXT　—— TableConfig{mooncake, iceberg, wal} 三段 JSON</text>
+      </g>
+      <text x="580" y="260" text-anchor="middle" font-size="12" fill="#475569">就一张表 —— 控制面元数据极简：其余「真源」分别交给了 Iceberg（数据状态）与 WAL（增量状态），避免三处对账。</text>
+    </g>
+  </svg>
+</div>
+
+<h2>8.4 存算分离：路径重映射</h2>
+<div class="callout good"><b>两个闭包</b>（moonlink_backend/lib.rs 构造时注入）：<code>read_state_filepath_remap</code> 把 ReadState 里的本地文件路径换成 data server URI；<code>http_filepath_remap</code> 用于 parquet metadata 查询。moonlink 进程仍管本地缓存与写入，但「数据的规范地址」可以指向独立的数据服务 —— moonlink_datafusion 连接远端 moonlink 时拿到的就是公网可取的 URL。这是部署在 K8s（deploy/）里多副本/远端查询形态的基础。</div>
+
+<div class="footer">
+  <a href="07-query.html">← 07 查询路径</a>
+  <a href="09-concurrency-lsn.html">下一章：09 并发模型 →</a>
+</div>
+</div>
+</body>
+</html>

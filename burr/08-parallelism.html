@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>08 · 并行执行 — Apache Burr 源码剖析</title>
+<style>
+:root{
+  --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --line:#e2e8f0;
+  --blue:#2563eb; --blue-bg:#eff6ff; --green:#16a34a; --green-bg:#f0fdf4;
+  --amber:#d97706; --amber-bg:#fffbeb; --purple:#9333ea; --purple-bg:#faf5ff;
+  --red:#dc2626; --red-bg:#fef2f2; --code-bg:#0f172a;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.75}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.94);backdrop-filter:blur(6px);color:#e2e8f0;display:flex;gap:12px;align-items:center;padding:10px 24px;font-size:13px;flex-wrap:wrap}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:3px 8px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav .brand{font-weight:700;color:#fff;font-size:14px;letter-spacing:.5px;margin-right:8px}
+.topnav .brand span{color:#60a5fa}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+.hero{background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:40px 0;margin-bottom:28px}
+.hero h1{margin:0 0 8px;font-size:28px}
+.hero p{margin:0;color:#cbd5e1;font-size:14.5px;max-width:880px}
+main{padding-bottom:64px}
+h2{font-size:23px;border-left:5px solid var(--blue);padding-left:12px;margin:42px 0 10px}
+h3{font-size:18px;margin:26px 0 6px;color:#1d4ed8}
+h4{font-size:15.5px;margin:18px 0 6px}
+p,li{color:#334155;font-size:14.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:16px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.grid{display:grid;gap:16px}
+.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:860px){.grid.c2,.grid.c3{grid-template-columns:1fr}}
+figure{margin:20px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;overflow-x:auto}
+figcaption{font-size:13px;color:var(--muted);text-align:center;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+figcaption b{color:#1d4ed8}
+pre{background:var(--code-bg);color:#e2e8f0;padding:16px 18px;border-radius:10px;overflow-x:auto;font-size:12.8px;line-height:1.65}
+code{font-family:"SF Mono",Menlo,Consolas,"Courier New",monospace}
+p code,li code,td code,h3 code,h4 code,figcaption code{background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:5px;font-size:.9em}
+pre code{background:none;color:inherit;padding:0}
+.c-key{color:#7dd3fc}.c-str{color:#fbbf24}.c-com{color:#94a3b8;font-style:italic}.c-fn{color:#a5b4fc}.c-num{color:#f472b6}.c-dec{color:#fde047}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:#fff}
+th{background:#1e293b;color:#fff;text-align:left;padding:8px 12px;font-weight:600}
+td{border:1px solid var(--line);padding:7px 12px;vertical-align:top}
+tr:nth-child(even) td{background:#f8fafc}
+.path{font-family:monospace;background:#f1f5f9;border:1px solid var(--line);padding:1px 7px;border-radius:5px;font-size:12.5px;color:#0f766e;word-break:break-all}
+.note{border-left:4px solid var(--amber);background:var(--amber-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.note b{color:#92400e}
+.tip{border-left:4px solid var(--green);background:var(--green-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.tip b{color:#166534}
+.warn{border-left:4px solid var(--red);background:var(--red-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.pager{display:flex;justify-content:space-between;margin:40px 0 8px}
+.pager a{background:#fff;border:1px solid var(--line);padding:10px 18px;border-radius:10px;text-decoration:none;color:var(--ink);font-size:14px}
+.pager a:hover{border-color:var(--blue);color:var(--blue)}
+footer.foot{text-align:center;color:#94a3b8;font-size:12.5px;padding:24px 0 40px}
+svg text{font-family:inherit}
+svg .t{fill:#1e293b;font-size:13px}
+svg .tb{fill:#fff;font-weight:700;font-size:13px}
+svg .ts{fill:#475569;font-size:11px}
+svg .tt{fill:#0f172a;font-weight:700;font-size:15px}
+svg .tc{fill:#64748b;font-size:11px;font-family:Menlo,monospace}
+svg .lbl{fill:#334155;font-size:11.5px}
+svg .ar{stroke:#64748b;stroke-width:1.5;fill:none}
+svg .ar-b{stroke:#2563eb;stroke-width:1.8;fill:none}
+svg .ar-dash{stroke:#94a3b8;stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+svg .zone{fill:#f8fafc;stroke:#cbd5e1;stroke-dasharray:6 4}
+svg .bx{stroke-width:1.5}
+svg .b-blue{fill:#eff6ff;stroke:#3b82f6}
+svg .b-blue-d{fill:#dbeafe;stroke:#2563eb}
+svg .b-green{fill:#f0fdf4;stroke:#22c55e}
+svg .b-green-d{fill:#dcfce7;stroke:#16a34a}
+svg .b-amber{fill:#fffbeb;stroke:#f59e0b}
+svg .b-purple{fill:#faf5ff;stroke:#a855f7}
+svg .b-red{fill:#fef2f2;stroke:#ef4444}
+svg .b-slate{fill:#f1f5f9;stroke:#94a3b8}
+svg .b-dark{fill:#1e293b;stroke:#0f172a}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">Apache&nbsp;Burr<span>·源码深度剖析</span></span>
+  <a href="index.html">总导航</a><a href="01-overview.html">项目全景</a>
+  <a href="02-core-state.html">State</a><a href="03-core-action.html">Action</a>
+  <a href="04-core-application.html">运行时</a><a href="05-graph-builder.html">Graph/Builder</a>
+  <a href="06-lifecycle-hooks.html">Hooks/Tracing</a><a href="07-persistence.html">持久化</a>
+  <a href="08-parallelism.html"><b>并行</b></a><a href="09-tracking.html">追踪系统</a>
+  <a href="10-ui-frontend.html">遥测 UI</a><a href="11-integrations.html">集成生态</a>
+  <a href="12-execution-flow.html">端到端全景</a>
+</nav>
+
+<header class="hero"><div class="wrap">
+  <h1>08 · 并行执行：把子状态机跑进线程池/事件循环/集群</h1>
+  <p>源码：<span class="path">burr/core/parallelism.py</span>（895 行）+ <span class="path">burr/integrations/ray.py</span>。Burr 的并行哲学：一个「并行动作」在内部生成 N 个<b>真正的子 Application</b>，交给执行器并发跑完，再 reduce 回主状态。</p>
+</div></header>
+
+<main class="wrap">
+
+<h2>8.1 核心抽象：任务化的并行动作</h2>
+<div class="card">
+<table>
+<tr><th>类/函数</th><th>角色</th><th>源码</th></tr>
+<tr><td><code>RunnableGraph</code></td><td>子任务的最小执行单元：graph + entrypoint + halt_after；<code>create()</code> 可把单个 action 包成一节点图</td><td><span class="path">parallelism.py:53-88</span></td></tr>
+<tr><td><code>SubGraphTask</code></td><td>一次子运行：惰性构建子 ApplicationBuilder（带 spawn 血缘 + 级联的 tracker/persister），<code>run()/arun()</code> 真正执行</td><td><span class="path">:90-183</span></td></tr>
+<tr><td><code>TaskBasedParallelAction</code></td><td>并行动作基类（SingleStepAction）：收集任务 → 执行器并发 → reduce 收敛</td><td><span class="path">:186-384</span></td></tr>
+<tr><td><code>MapActionsAndStates / MapActions / MapStates</code></td><td>三种现成的「map 策略」：笛卡尔积 / 只映射动作 / 只映射状态</td><td><span class="path">:386 / :593 / :690</span></td></tr>
+<tr><td><code>map_reduce_action</code></td><td>工厂函数：给 (子图/动作, 状态映射, reduce) 就造出一个并行动作</td><td><span class="path">:874</span></td></tr>
+</table>
+</div>
+
+<h2>8.2 map-reduce 执行架构</h2>
+<figure>
+<svg viewBox="0 0 1060 600" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<rect class="bx b-blue-d" x="330" y="20" width="400" height="110" rx="12" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="tt" x="350" y="48" style="fill:#1e3a8a">主应用 · 某一步是「并行动作」</text>
+<text class="tc" x="350" y="74">run_and_update(state, **inputs)  parallelism.py:254</text>
+<text class="ts" x="350" y="96">① wipe 掉 __ 私有键（子应用不许看到游标）</text>
+<text class="ts" x="350" y="116">② tasks = self.tasks(state, context, inputs) —— 生成器产出 SubGraphTask</text>
+<rect class="bx b-green" x="60" y="190" width="940" height="130" rx="12" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tt" x="80" y="218">③ 并发执行（:276-305）</text>
+<rect class="bx b-slate" x="90" y="240" width="270" height="60" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="tc" x="106" y="264">同步：with parallel_executor_factory()</text>
+<text class="tc" x="106" y="284">as ex: list(ex.map(task.run, tasks))</text>
+<rect class="bx b-slate" x="395" y="240" width="270" height="60" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="tc" x="411" y="264">异步：async_utils.arealize(</text>
+<text class="tc" x="411" y="284">  asyncio.gather(*[t.arun() ...]))</text>
+<rect class="bx b-slate" x="700" y="240" width="270" height="60" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="tc" x="716" y="264">分布式：RayExecutor（ray.py）</text>
+<text class="tc" x="716" y="284">实现了 Executor 协议即可替换</text>
+<rect class="bx b-purple" x="90" y="360" width="270" height="110" rx="10" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="t" x="106" y="386" font-weight="700">子应用 T1（真 Application）</text>
+<text class="ts" x="106" y="408">with_spawning_parent(主app, seq)</text>
+<text class="ts" x="106" y="428">级联 tracker/persister（copy 语义）</text>
+<text class="ts" x="106" y="448">run(halt_after=…, inputs=…)</text>
+<rect class="bx b-purple" x="395" y="360" width="270" height="110" rx="10" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="t" x="411" y="386" font-weight="700">子应用 T2</text>
+<text class="ts" x="411" y="408">独立 State（来自 map 出的状态切片）</text>
+<text class="ts" x="411" y="428">独立 app_id → UI 里是一棵应用树</text>
+<text class="ts" x="411" y="448">每个子应用自己也在跑完整状态机</text>
+<rect class="bx b-purple" x="700" y="360" width="270" height="110" rx="10" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="t" x="716" y="386" font-weight="700">子应用 T3 … TN</text>
+<text class="ts" x="716" y="408">MapActions / MapStates /</text>
+<text class="ts" x="716" y="426">MapActionsAndStates 决定 N 与切片</text>
+<text class="ts" x="716" y="446">（笛卡尔积 :386 · 只动作 :593 · 只状态 :690）</text>
+<rect class="bx b-amber" x="330" y="510" width="400" height="70" rx="12" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="tt" x="350" y="536">④ reduce(states) → 主 State（:342 调用）</text>
+<text class="ts" x="350" y="558">用户自定义收敛：投票 / 取最长 / 拼接 / merge …</text>
+<path class="ar-b" d="M530 130 L530 188" marker-end="url(#arr)"/>
+<path class="ar-b" d="M300 268 L300 358" marker-end="url(#arr)"/>
+<path class="ar-b" d="M530 300 L530 358" marker-end="url(#arr)"/>
+<path class="ar-b" d="M800 300 L810 358" marker-end="url(#arr)"/>
+<path class="ar-b" d="M530 470 L530 508" marker-end="url(#arr)"/>
+</svg>
+<figcaption><b>图 8-1 · map-reduce 并行架构</b> —— 并行动作的四个阶段：清私有键 → 产出任务 → 执行器并发跑真子应用 → reduce 回主状态。「并行单元不是协程函数而是完整子应用」，这让子任务自动获得追踪、持久化与血缘。</figcaption>
+</figure>
+
+<h2>8.3 并行执行面的物理视图</h2>
+<figure>
+<svg viewBox="0 0 1060 470" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#16a34a"/></marker></defs>
+<rect class="bx b-blue-d" x="40" y="40" width="220" height="110" rx="10" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="60" y="66" font-weight="700">主进程</text>
+<text class="ts" x="60" y="92">Application（主状态机）</text>
+<text class="ts" x="60" y="112">TaskBasedParallelAction</text>
+<text class="ts" x="60" y="132">parallel_executor_factory</text>
+<rect class="bx b-green" x="330" y="20" width="330" height="150" rx="12" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tt" x="350" y="48">默认：ThreadPoolExecutor（:831）</text>
+<rect class="bx b-slate" x="350" y="66" width="130" height="40" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="ts" x="362" y="84">线程 worker 1</text><text class="ts" x="362" y="100">子应用 T1</text>
+<rect class="bx b-slate" x="500" y="66" width="130" height="40" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="ts" x="512" y="84">线程 worker 2</text><text class="ts" x="512" y="100">子应用 T2</text>
+<text class="ts" x="350" y="130">适合 IO 密集（LLM 调用/检索）——</text>
+<text class="ts" x="350" y="148">GIL 在等待网络时释放，并行有效</text>
+<rect class="bx b-green" x="700" y="20" width="330" height="150" rx="12" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tt" x="720" y="48">async 应用：asyncio.gather</text>
+<text class="ts" x="720" y="74">同一事件循环里并发 N 个子应用；</text>
+<text class="ts" x="720" y="96">子动作须为 async（astep 路径）</text>
+<text class="ts" x="720" y="122">arealize 负责把协程物化为结果列表</text>
+<text class="ts" x="720" y="142">（async_utils，零第三方依赖）</text>
+<rect class="bx b-green" x="330" y="210" width="700" height="130" rx="12" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tt" x="350" y="238">分布式：RayExecutor（integrations/ray.py:23）</text>
+<text class="ts" x="350" y="264">concurrent.futures.Executor 的 Ray 适配 —— with_parallel_executor(RayExecutor)</text>
+<text class="ts" x="350" y="288">子 Application 序列化后分发到 Ray worker 节点执行；追踪数据仍回写本地/S3</text>
+<text class="ts" x="350" y="312">注意：任何满足 Executor 协议的实现（进程池、Dask 适配…）都可注入同一插槽</text>
+<rect class="bx b-amber" x="40" y="210" width="250" height="130" rx="12" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="60" y="238" font-weight="700">共享资源提醒</text>
+<text class="ts" x="60" y="264">线程/进程并行时 SQLite 连接</text>
+<text class="ts" x="60" y="284">不可跨线程共享 —— 所以</text>
+<text class="ts" x="60" y="304">SQLitePersister 实现 BaseCopyable，</text>
+<text class="ts" x="60" y="324">级联时 copy() 出独立连接(:361)</text>
+<rect class="bx b-purple" x="40" y="370" width="990" height="80" rx="12" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="t" x="60" y="396" font-weight="700">级联（_cascade_adapter，:361-383）</text>
+<text class="ts" x="60" y="420">主应用的 tracker → 子应用直接复用；主应用的 persister → 若支持 BaseCopyable 则 copy() 后给子应用；</text>
+<text class="ts" x="60" y="440">于是子任务的每一步也出现在 UI 与持久层，血缘由 spawn 指针串联 —— 并行不牺牲可观测性。</text>
+</svg>
+<figcaption><b>图 8-2 · 并行执行物理视图</b> —— 三种执行面（线程池 / 事件循环 / Ray 集群）共享同一个任务协议；级联机制保证子任务的观测与持久化不缺位。</figcaption>
+</figure>
+
+<h2>8.4 SubGraphTask 的构建细节</h2>
+<div class="grid c2">
+<div class="card">
+<h4>_create_app_builder（:106-142）</h4>
+<p>每个任务在<b>执行时</b>才构建子应用（惰性），关键注入：</p>
+<ul>
+<li><code>with_spawning_parent(context)</code> —— 记血缘；</li>
+<li>tracker 级联 / persister copy 级联；</li>
+<li><code>initialize_from(state_initializer)</code> 用任务自带的状态切片；</li>
+<li>entrypoint / halt 来自 <code>RunnableGraph</code>。</li>
+</ul>
+</div>
+<div class="card">
+<h4>为什么先 wipe 私有键</h4>
+<p>主 State 里的 <code>__PRIOR_STEP/__SEQUENCE_ID</code> 若流入子应用，会让子应用「以为」自己跑到某一步。并行动作在生成任务前统一 wipe（:254 的第一步），保证子应用从干净位置开始。</p>
+<div class="note"><b>对应地</b>，04 篇的 <code>_state_update</code> 也会剥离子应用带回的私有键——两边夹击，游标永不被污染。</div>
+</div>
+</div>
+
+<h2>8.5 使用范式</h2>
+<div class="card">
+<pre><code><span class="c-key">from</span> burr.core <span class="c-key">import</span> action, State
+<span class="c-key">from</span> burr.core.parallelism <span class="c-key">import</span> map_reduce_action, MapActions
+
+<span class="c-com"># 写法一：工厂函数（常用）</span>
+parallel_review = map_reduce_action(
+    readies=[<span class="c-str">"question"</span>], writes=[<span class="c-str">"reviews"</span>],     <span class="c-com"># 主 IO 契约</span>
+    action_to_map=review_action,                  <span class="c-com"># 要并发的动作</span>
+    num_actions=3,                                <span class="c-com"># 并发 N 份</span>
+    reduce=lambda state, states: state.append(    <span class="c-com"># 收敛</span>
+        reviews=[s[<span class="c-str">"review"</span>] <span class="c-key">for</span> s <span class="c-key">in</span> states]),
+)
+
+<span class="c-com"># 写法二：继承 TaskBasedParallelAction 自定义 tasks() 生成器</span>
+<span class="c-key">class</span> <span class="c-fn">MyFanOut</span>(TaskBasedParallelAction):
+    <span class="c-key">def</span> <span class="c-fn">tasks</span>(self, state, context, **inputs):
+        <span class="c-key">for</span> i <span class="c-key">in</span> range(state[<span class="c-str">"n"</span>]):
+            <span class="c-key">yield</span> SubGraphTask(RunnableGraph(my_subgraph, entrypoint=<span class="c-str">"a"</span>,
+                                 halt_after=[<span class="c-str">"done"</span>]),
+                               inputs={<span class="c-str">"k"</span>: i}, name=<span class="c-str">f"task-{i}"</span>)
+    <span class="c-key">def</span> <span class="c-fn">reduce</span>(self, state, states): ...</code></pre>
+</div>
+
+<div class="tip"><b>本篇要点：</b>① 并行的单位是「真子 Application」（SubGraphTask），不是裸函数——因此天然继承观测/持久化/血缘；② 执行插槽是 Executor 协议：默认线程池、async 走 gather、Ray 可插拔；③ 状态切片与 reduce 完全由用户定义，Map* 三兄弟覆盖常见形态；④ 私有键双向剥离保证游标安全；⑤ SQLite 这类不可共享资源靠 BaseCopyable.copy() 级联。</div>
+
+<div class="pager"><a href="07-persistence.html">← 07 持久化</a><a href="09-tracking.html">下一篇：09 追踪系统 →</a></div>
+</main>
+<footer class="foot">Apache Burr 源码学习笔记 · 08 并行执行 · 基于 v0.42.0</footer>
+</body>
+</html>

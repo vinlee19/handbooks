@@ -1,0 +1,277 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Vane 时序图：一条 Relation 在 Ray 集群上的分布式执行",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1560,
+      760
+    ],
+    "views": [
+      {
+        "id": "submit-plan",
+        "label": "提交与规划",
+        "focus": [
+          "user",
+          "runner",
+          "actor",
+          "planner"
+        ],
+        "note": "惰性计划携带连接快照上送 Driver Actor，在专用规划连接上定位。"
+      },
+      {
+        "id": "schedule-exec",
+        "label": "调度与执行",
+        "focus": [
+          "actor",
+          "worker",
+          "flight"
+        ],
+        "note": "FTE 准入后碎片在快照 DuckDB 内执行，shuffle 经磁盘 IPC + Flight DoGet。"
+      },
+      {
+        "id": "collect",
+        "label": "结果回流",
+        "focus": [
+          "worker",
+          "store",
+          "actor",
+          "runner",
+          "user"
+        ],
+        "note": "分区先 ray.put 进 Plasma，Driver 租约收集后以 PyArrow 表流回用户。"
+      }
+    ],
+    "column_fit": "spread"
+  },
+  "participants": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "用户"
+    },
+    {
+      "id": "runner",
+      "type": "backend",
+      "label": "RayRunner"
+    },
+    {
+      "id": "actor",
+      "type": "backend",
+      "label": "DriverActor"
+    },
+    {
+      "id": "planner",
+      "type": "backend",
+      "label": "C++ 规划器"
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "WorkerActor"
+    },
+    {
+      "id": "flight",
+      "type": "messagebus",
+      "label": "Flight 服务"
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "Plasma"
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 212,
+      "label": "提交"
+    },
+    {
+      "from": 232,
+      "to": 390,
+      "label": "规划与调度"
+    },
+    {
+      "from": 410,
+      "to": 545,
+      "label": "碎片执行与交换"
+    },
+    {
+      "from": 562,
+      "to": 672,
+      "label": "结果回流"
+    }
+  ],
+  "messages": [
+    {
+      "id": "m_exec",
+      "from": "user",
+      "to": "runner",
+      "y": 185,
+      "label": "rel.execute()",
+      "variant": "emphasis"
+    },
+    {
+      "id": "m_plan",
+      "from": "runner",
+      "to": "actor",
+      "y": 228,
+      "label": "run_plan：计划 + 连接快照",
+      "variant": "emphasis"
+    },
+    {
+      "id": "m_translate",
+      "from": "actor",
+      "to": "planner",
+      "y": 270,
+      "label": "物理计划 → PipelineNode 树"
+    },
+    {
+      "id": "m_tasks",
+      "from": "planner",
+      "to": "actor",
+      "y": 306,
+      "label": "WorkerTask 流（碎片 + splits）",
+      "variant": "return"
+    },
+    {
+      "id": "m_register",
+      "from": "actor",
+      "to": "worker",
+      "y": 348,
+      "label": "fte_create_task（碎片模板）",
+      "variant": "emphasis"
+    },
+    {
+      "id": "m_admit",
+      "from": "actor",
+      "to": "worker",
+      "y": 384,
+      "label": "准入窗口 + 租约"
+    },
+    {
+      "id": "m_sink",
+      "from": "worker",
+      "to": "flight",
+      "y": 426,
+      "label": "ExchangeSink 写 shuffle IPC"
+    },
+    {
+      "id": "m_get",
+      "from": "worker",
+      "to": "flight",
+      "y": 462,
+      "label": "DoGet 拉取上游分区",
+      "variant": "dashed"
+    },
+    {
+      "id": "m_put",
+      "from": "worker",
+      "to": "store",
+      "y": 504,
+      "label": "ray.put 结果分区"
+    },
+    {
+      "id": "m_done",
+      "from": "worker",
+      "to": "actor",
+      "y": 540,
+      "label": "任务完成 + handle",
+      "variant": "return"
+    },
+    {
+      "id": "m_lease",
+      "from": "actor",
+      "to": "store",
+      "y": 582,
+      "label": "get_next_partition 租约",
+      "variant": "emphasis"
+    },
+    {
+      "id": "m_yield",
+      "from": "actor",
+      "to": "runner",
+      "y": 622,
+      "label": "yield RayMaterializedResult",
+      "variant": "return"
+    },
+    {
+      "id": "m_back",
+      "from": "runner",
+      "to": "user",
+      "y": 660,
+      "label": "PyArrow 表流",
+      "variant": "return"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "runner",
+      "from": 180,
+      "to": 666,
+      "type": "backend"
+    },
+    {
+      "participant": "actor",
+      "from": 223,
+      "to": 628,
+      "type": "backend"
+    },
+    {
+      "participant": "planner",
+      "from": 265,
+      "to": 312,
+      "type": "backend"
+    },
+    {
+      "participant": "worker",
+      "from": 343,
+      "to": 546,
+      "type": "backend"
+    },
+    {
+      "participant": "flight",
+      "from": 421,
+      "to": 468,
+      "type": "messagebus"
+    },
+    {
+      "participant": "store",
+      "from": 499,
+      "to": 588,
+      "type": "database"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "控制流",
+      "items": [
+        "Driver Actor 是集群里唯一的调度大脑，FTE 自建准入/租约/压力记账",
+        "碎片模板先注册到 Worker，任务按窗口批量提交",
+        "连接快照让每个 Worker 重建出与 Driver 一致的 DuckDB 实例"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "数据流",
+      "items": [
+        "shuffle 先写节点本地磁盘 IPC 文件，再用 Flight DoGet 跨节点拉取",
+        "Join 按策略广播或哈希重分区；非等值/ASOF/cross 先收拢再执行",
+        "最终分区进 Plasma 对象存储，用户侧拿到零拷贝 PyArrow 表"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "容错",
+      "items": [
+        "任务失败按 attempt 重试，输入从 FteSplitQueue 重放",
+        "支持投机执行（speculative）与撤销（revocation）",
+        "Flight 服务带 server_epoch 围栏，陈旧 ticket 直接失效"
+      ]
+    }
+  ]
+}

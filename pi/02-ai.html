@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>02 · pi-ai 统一模型层 — Pi 源码深度剖析</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<nav class="topnav"><div class="topnav-inner">
+  <a class="brand" href="./index.html">pi deep-dive</a>
+  <a class="pg" href="./index.html">总览</a>
+  <a class="pg" href="./01-architecture.html">01 物理架构</a>
+  <a class="pg cur" href="./02-ai.html">02 pi-ai</a>
+  <a class="pg" href="./03-agent.html">03 agent-core</a>
+  <a class="pg" href="./04-coding-agent.html">04 coding-agent</a>
+  <a class="pg" href="./05-session-compaction.html">05 会话与压缩</a>
+  <a class="pg" href="./06-extensions.html">06 扩展系统</a>
+  <a class="pg" href="./07-tui.html">07 TUI</a>
+  <a class="pg" href="./08-rpc.html">08 RPC</a>
+  <a class="pg" href="./09-supply-chain.html">09 构建发布</a>
+</div></nav>
+
+<main>
+<div class="hero">
+  <div class="kicker">第 02 篇</div>
+  <h1>pi-ai：用一套类型抹平 40+ 家供应商</h1>
+  <div class="sub">22,666 行。它是整个仓库的地基：定义"模型调用"这件事的全部类型（Context、AssistantMessage、事件协议），并用 10 个协议适配器把 Anthropic / OpenAI / Google / Bedrock / Mistral 等完全不同的 wire 协议翻译成同一种事件流。上层的 Agent 循环对此毫无感知。</div>
+</div>
+
+<h2><span class="no">1</span>包定位：核心零副作用 + 按需加载</h2>
+<p><code>src/index.ts</code> 的文件头是一句设计宣言：<strong>"Core only, side-effect free"</strong>——入口只导出类型、工具函数和懒加载分发器，不引模型目录、不注册 provider 工厂、不含 OAuth 实现。39 个 provider 的模型目录和 11 个 API 适配器全部走子路径（<code>@earendil-works/pi-ai/providers/*</code>、<code>/compat</code>、<code>/bedrock-provider</code>）+ 动态 import。</p>
+<p>懒加载的实现本身就很能说明这个包的错误哲学。看 <code>lazyStream</code>：连"动态 import 失败"这种最早期、最不加掩饰的错误，也被转成流里的一个 error 事件，而不是抛给调用方：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/ai/src/api/lazy.ts</span><span class="cb-note">L46-61</span></div>
+<pre><code>export function lazyStream(
+  model: Model&lt;Api&gt;,
+  setup: () =&gt; Promise&lt;AsyncIterable&lt;AssistantMessageEvent&gt;&gt;,
+): AssistantMessageEventStream {
+  const outer = new AssistantMessageEventStream();
+
+  setup()
+    .then((inner) =&gt; forwardStream(outer, inner))
+    .catch((error) =&gt; {
+      const message = createSetupErrorMessage(model, error);
+      outer.push({ type: "error", reason: "error", error: message });  // 失败 = 一个事件
+      outer.end(message);
+    });
+
+  return outer;
+}</code></pre>
+</div>
+
+<div class="callout design">
+  <div class="co-title">设计决策 1：错误编码进流</div>
+  <p>这不是孤立技巧，而是全包的统一契约（见 第 2 节 的 <code>StreamFunction</code> 注释）。好处：调用方只需一种控制流（消费事件），重试、UI 提示、会话记录都挂在同一个位置；缺点是错误栈信息会被压平成 <code>errorMessage</code> 字符串。pi 认为这个交换值得——Agent 场景里"失败是常态"（限流、断网、坏 JSON），必须是一等公民。</p>
+</div>
+
+<h2><span class="no">2</span>统一接口与事件协议</h2>
+<p>整个包收敛在 <code>types.ts</code>（830 行）里。最核心的三个类型：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/ai/src/types.ts</span><span class="cb-note">L268-277 · API 模块的统一契约</span></div>
+<pre><code>export interface ProviderStreams {
+  stream(model: Model&lt;Api&gt;, context: Context, options?: StreamOptions): AssistantMessageEventStream;
+  streamSimple(model: Model&lt;Api&gt;, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream;
+  fetchDeferred?(model: Model&lt;Api&gt;, handle: DeferredHandle, options?: DeferredFetchOptions): AssistantMessageEventStream;
+  cancelDeferred?(model: Model&lt;Api&gt;, handle: DeferredHandle, options?: DeferredCancelOptions): Promise&lt;void&gt;;
+}</code></pre>
+</div>
+
+<p><code>Context</code> 是请求的全部输入——系统提示、消息历史、工具列表，仅此三样：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/ai/src/types.ts</span><span class="cb-note">L502-513</span></div>
+<pre><code>export interface Tool&lt;TParameters extends TSchema = TSchema&gt; {
+  name: string;
+  description: string;
+  parameters: TParameters;            // TypeBox schema —— 本身就是合法 JSON Schema
+  constrainedSampling?: false | ConstrainedSamplingConfig;
+}
+
+export interface Context {
+  systemPrompt?: string;
+  messages: Message[];                // UserMessage | AssistantMessage | ToolResultMessage
+  tools?: Tool[];
+}</code></pre>
+</div>
+
+<p>输出侧的事件协议是全仓库最重要的接口。每个事件的 <code>partial</code> 字段都携带<strong>累积到当前时刻的完整 AssistantMessage</strong>——消费者不需要自己拼装增量，永远可以整块读取当前状态：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/ai/src/types.ts</span><span class="cb-note">L515-539 · 事件协议</span></div>
+<pre><code>/**
+ * Event protocol for AssistantMessageEventStream.
+ *
+ * Streams should emit `start` before partial updates, then terminate with either:
+ * - `done` carrying the final successful AssistantMessage, or
+ * - `error` carrying the final AssistantMessage with stopReason "error" or "aborted"
+ */
+export type AssistantMessageEvent =
+  | { type: "start"; partial: AssistantMessage }
+  | { type: "text_start"; contentIndex: number; partial: AssistantMessage }
+  | { type: "text_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
+  | { type: "text_end"; contentIndex: number; content: string; partial: AssistantMessage }
+  | { type: "thinking_start"; contentIndex: number; partial: AssistantMessage }
+  | { type: "thinking_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
+  | { type: "thinking_end"; contentIndex: number; content: string; partial: AssistantMessage }
+  | { type: "toolcall_start"; contentIndex: number; partial: AssistantMessage }
+  | { type: "toolcall_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
+  | { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall; partial: AssistantMessage }
+  | { type: "done"; reason: "stop" | "length" | "toolUse" | "deferred"; message: AssistantMessage }
+  | { type: "error"; reason: "aborted" | "error"; error: AssistantMessage };</code></pre>
+</div>
+
+<p>注意 <code>error</code> 事件的 payload 也是一条完整的 <code>AssistantMessage</code>（<code>stopReason</code> 为 <code>"error"</code>/<code>"aborted"</code>，带 <code>errorMessage</code>）。也就是说<strong>失败的那一轮对话也是一条合法的历史消息</strong>，可以直接进会话记录——这就是"错误编码进流"的完整含义。</p>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 400" width="980" role="img" aria-label="事件流生命周期">
+  <defs>
+    <marker id="ar-ai1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <rect x="380" y="20" width="220" height="44" rx="22" class="n-hl"></rect>
+  <text x="490" y="47" text-anchor="middle" class="t t-b">start（partial 初始化）</text>
+
+  <line x1="490" y1="64" x2="490" y2="96" class="edge" marker-end="url(#ar-ai1)"></line>
+
+  <!-- 三条并行通道 -->
+  <rect x="60" y="98" width="260" height="34" rx="6" class="n-ai"></rect>
+  <text x="190" y="120" text-anchor="middle" class="t-s t-b">thinking_start / _delta / _end</text>
+  <rect x="360" y="98" width="260" height="34" rx="6" class="n-ai"></rect>
+  <text x="490" y="120" text-anchor="middle" class="t-s t-b">text_start / _delta / _end</text>
+  <rect x="660" y="98" width="260" height="34" rx="6" class="n-ai"></rect>
+  <text x="790" y="120" text-anchor="middle" class="t-s t-b">toolcall_start / _delta / _end</text>
+
+  <text x="190" y="152" text-anchor="middle" class="t-xs">思考块（含加密签名）</text>
+  <text x="490" y="152" text-anchor="middle" class="t-xs">正文文本</text>
+  <text x="790" y="152" text-anchor="middle" class="t-xs">参数 JSON 增量 → 增量解析</text>
+
+  <line x1="490" y1="88" x2="200" y2="96" class="edge" marker-end="url(#ar-ai1)"></line>
+  <line x1="490" y1="88" x2="486" y2="96" class="edge" marker-end="url(#ar-ai1)"></line>
+  <line x1="490" y1="88" x2="780" y2="96" class="edge" marker-end="url(#ar-ai1)"></line>
+
+  <text x="490" y="188" text-anchor="middle" class="t-xs">同一消息内块可交错出现（contentIndex 区分）；
+  delta 的同时 partial 始终携带完整累积状态</text>
+
+  <line x1="490" y1="196" x2="490" y2="228" class="edge" marker-end="url(#ar-ai1)"></line>
+
+  <!-- 终止 -->
+  <rect x="240" y="230" width="220" height="64" rx="8" class="n-ok"></rect>
+  <text x="350" y="256" text-anchor="middle" class="t-s t-b">done</text>
+  <text x="350" y="276" text-anchor="middle" class="t-xs">reason: stop | length | toolUse | deferred</text>
+
+  <rect x="520" y="230" width="220" height="64" rx="8" class="n-warn"></rect>
+  <text x="630" y="256" text-anchor="middle" class="t-s t-b">error</text>
+  <text x="630" y="276" text-anchor="middle" class="t-xs">reason: aborted | error（payload 也是 AssistantMessage）</text>
+
+  <line x1="452" y1="210" x2="365" y2="228" class="edge" marker-end="url(#ar-ai1)"></line>
+  <line x1="528" y1="210" x2="615" y2="228" class="edge" marker-end="url(#ar-ai1)"></line>
+
+  <!-- stopReason 语义 -->
+  <rect x="60" y="316" width="860" height="66" rx="8" fill="#fbfbf9" stroke="#c9cdd4" stroke-dasharray="5 4"></rect>
+  <text x="76" y="340" class="t-s t-b">stopReason 语义（上层循环据此决定下一步）</text>
+  <text x="76" y="362" class="t-xs">stop=正常结束 · toolUse=模型请求工具（→ 执行后回灌再请求）· length=输出截断（→ 上层拒绝执行半截工具调用）· deferred=挂起待取</text>
+</svg>
+</div>
+<figcaption>图 2-1 · AssistantMessageEvent 生命周期。三种内容块通道可交错；终止事件二选一，且两者都携带最终消息。</figcaption>
+</figure>
+
+<p>承载这些事件的容器是 <code>EventStream</code>（<code>utils/event-stream.ts</code>，88 行）——一个极简的异步迭代器：生产者 <code>push()</code>，消费者用 <code>for await</code> 拉；没人等就进队列，没数据就挂起等待。它还提供 <code>result(): Promise&lt;AssistantMessage&gt;</code>，让"只要最终结果不要过程"的调用方（比如 completeSimple）绕过逐事件消费：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/ai/src/utils/event-stream.ts</span><span class="cb-note">L21-36 · push 与完成判定</span></div>
+<pre><code>push(event: T): void {
+  if (this.done) return;
+
+  if (this.isComplete(event)) {                    // done 或 error 事件
+    this.done = true;
+    this.resolveFinalResult(this.extractResult(event));
+  }
+
+  // Deliver to waiting consumer or queue it
+  const waiter = this.waiting.shift();
+  if (waiter) {
+    waiter({ value: event, done: false });
+  } else {
+    this.queue.push(event);
+  }
+}</code></pre>
+</div>
+
+<h2><span class="no">3</span>适配器矩阵</h2>
+<p><code>src/api/</code> 下每个模块实现同一条 <code>ProviderStreams</code> 契约。选择"用官方 SDK 还是自己写 HTTP"因 provider 而异——判断标准是：SDK 的流式解析是否够透明、是否需要非标准传输（WebSocket、AWS SigV4）：</p>
+
+<table class="tbl">
+<thead><tr><th>适配器</th><th>行数</th><th>底层传输</th><th>备注</th></tr></thead>
+<tbody>
+<tr><td class="mono">anthropic-messages.ts</td><td>1,351</td><td class="mono">@anthropic-ai/sdk + 手写 SSE 解析</td><td>beta header：interleaved-thinking、fine-grained-tool-streaming</td></tr>
+<tr><td class="mono">openai-completions.ts</td><td>1,575</td><td class="mono">openai SDK</td><td>兼容层最厚：11 种 thinkingFormat、URL 自动探测 compat</td></tr>
+<tr><td class="mono">openai-responses.ts (+shared)</td><td>372+790</td><td class="mono">openai SDK</td><td>reasoning_details 回放、延迟工具加载</td></tr>
+<tr><td class="mono">openai-codex-responses.ts</td><td>1,662</td><td class="mono">fetch + WebSocket</td><td>Codex 订阅通道</td></tr>
+<tr><td class="mono">google-generative-ai / vertex (+shared)</td><td>517+592+414</td><td class="mono">@google/genai</td><td>thoughtSignature 跨模型剥离</td></tr>
+<tr><td class="mono">bedrock-converse-stream.ts</td><td>1,173</td><td class="mono">@aws-sdk/client-bedrock-runtime</td><td>Smithy middleware 注入自定义 header</td></tr>
+<tr><td class="mono">mistral-conversations.ts</td><td>931</td><td class="mono">原生 fetch</td><td>0.84.2 起弃用官方 SDK，消除生成式客户端开销</td></tr>
+<tr><td class="mono">pi-messages.ts</td><td>433</td><td class="mono">fetch</td><td>pi 自有 API</td></tr>
+</tbody>
+</table>
+
+<h2><span class="no">4</span>一次流式请求的完整调用链</h2>
+<p>以 Anthropic 为例（其余适配器同构）。调用链上的每一环都只有一个职责：</p>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 470" width="980" role="img" aria-label="调用链时序图">
+  <defs>
+    <marker id="ar-ai2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <!-- 生命线 -->
+  <rect x="40" y="16" width="150" height="40" rx="6" class="n-agent"></rect>
+  <text x="115" y="41" text-anchor="middle" class="t-s t-b">调用方（agent 包）</text>
+  <rect x="250" y="16" width="160" height="40" rx="6" class="n-ai"></rect>
+  <text x="330" y="41" text-anchor="middle" class="t-s t-b">Models / Provider</text>
+  <rect x="470" y="16" width="130" height="40" rx="6" class="n-ai"></rect>
+  <text x="535" y="41" text-anchor="middle" class="t-s t-b">lazyApi 包装</text>
+  <rect x="660" y="16" width="170" height="40" rx="6" class="n-ai"></rect>
+  <text x="745" y="41" text-anchor="middle" class="t-s t-b">anthropic-messages.ts</text>
+  <rect x="880" y="16" width="90" height="40" rx="6" class="n-cloud"></rect>
+  <text x="925" y="41" text-anchor="middle" class="t-s t-b">Anthropic 云</text>
+
+  <line x1="115" y1="56" x2="115" y2="420" class="edge edge-dash"></line>
+  <line x1="330" y1="56" x2="330" y2="420" class="edge edge-dash"></line>
+  <line x1="535" y1="56" x2="535" y2="420" class="edge edge-dash"></line>
+  <line x1="745" y1="56" x2="745" y2="420" class="edge edge-dash"></line>
+  <line x1="925" y1="56" x2="925" y2="420" class="edge edge-dash"></line>
+
+  <line x1="115" y1="86" x2="328" y2="86" class="edge" marker-end="url(#ar-ai2)"></line>
+  <text x="126" y="80" class="t-xs">streamSimple(model, context)</text>
+
+  <line x1="330" y1="116" x2="533" y2="116" class="edge" marker-end="url(#ar-ai2)"></line>
+  <text x="342" y="110" class="t-xs">dispatch 到 owner provider</text>
+
+  <line x1="535" y1="146" x2="535" y2="168" class="edge"></line>
+  <text x="545" y="162" class="t-xs">首次调用动态 import 适配器模块</text>
+
+  <line x1="533" y1="186" x2="743" y2="186" class="edge" marker-end="url(#ar-ai2)"></line>
+  <text x="548" y="180" class="t-xs">streamSimple → stream</text>
+
+  <rect x="670" y="204" width="150" height="76" rx="5" class="n"></rect>
+  <text x="745" y="222" text-anchor="middle" class="t-xs">① createClient</text>
+  <text x="745" y="238" text-anchor="middle" class="t-xs">② buildParams:</text>
+  <text x="745" y="254" text-anchor="middle" class="t-xs">消毒+转换消息/工具</text>
+  <text x="745" y="270" text-anchor="middle" class="t-xs">③ retryProviderRequest</text>
+
+  <line x1="822" y1="242" x2="923" y2="242" class="edge" marker-end="url(#ar-ai2)"></line>
+  <text x="828" y="236" class="t-xs">HTTPS POST (stream)</text>
+
+  <path d="M 923 280 C 870 300 820 300 792 290" class="edge edge-dash" marker-end="url(#ar-ai2)"></path>
+  <text x="800" y="316" class="t-xs">SSE 字节块（多条/帧）</text>
+
+  <rect x="620" y="330" width="250" height="56" rx="5" class="n"></rect>
+  <text x="745" y="350" text-anchor="middle" class="t-xs">④ iterateSseMessages → 解析帧</text>
+  <text x="745" y="368" text-anchor="middle" class="t-xs">⑤ 块累积（text/thinking/toolCall+partialJson）</text>
+
+  <path d="M 620 358 C 450 400 250 390 120 352" class="edge edge-dash" marker-end="url(#ar-ai2)"></path>
+  <text x="236" y="398" class="t-xs">⑥ push 事件：start → text_delta … → done/error</text>
+  <text x="150" y="440" class="t-xs" style="fill:var(--c-warn)">任何一环失败（含 import/建连/解析）都转成 error 事件，绝不 throw</text>
+</svg>
+</div>
+<figcaption>图 2-2 · streamSimple 调用链。adapter 内部的三个准备步骤全部在"流已创建"之后进行，因此失败天然可以写进流。</figcaption>
+</figure>
+
+<p>适配器内部维护一个 <code>Block[]</code> 数组：Anthropic 的 <code>content_block_start/delta/stop</code> 三种事件分别对应建块、追增、封块。toolCall 块的参数是逐字符到达的不完整 JSON，适配器用 <code>parseStreamingJson</code> 做<strong>增量解析</strong>，让上层在参数还没到齐时就能渲染出"正在写文件 …"。终止时按 <code>stop_reason</code> 映射出 <code>stop/toolUse/length</code>，并用 <code>calculateCost</code> 按 <code>Model.cost</code>（含阶梯计价 tiers）算出本次调用花了多少钱——usage 和 cost 在这里就绑定了，上层不再碰单价。</p>
+
+<h2><span class="no">5</span>手写 SSE 解析器</h2>
+<p>Anthropic 适配器没有用 SDK 内建的流解析，而是自己写了 120 行 SSE 帧解析（<code>iterateSseMessages</code>）。原因是控制力：需要在字节层面检测"流被截断"（收到 message_start 却没有 message_stop）、需要保留原始行用于错误诊断、需要响应 abort 信号：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/ai/src/api/anthropic-messages.ts</span><span class="cb-note">L332-356 · 行→帧状态机</span></div>
+<pre><code>function decodeSseLine(line: string, state: SseDecoderState): ServerSentEvent | null {
+  if (line === "") {
+    return flushSseEvent(state);          // 空行 = 一帧结束，冲刷缓冲
+  }
+
+  state.raw.push(line);                   // 保留原始行，出错时附在异常信息里
+  if (line.startsWith(":")) {
+    return null;                          // SSE 注释行，忽略
+  }
+
+  const delimiterIndex = line.indexOf(":");
+  const fieldName = delimiterIndex === -1 ? line : line.slice(0, delimiterIndex);
+  let value = delimiterIndex === -1 ? "" : line.slice(delimiterIndex + 1);
+  if (value.startsWith(" ")) {
+    value = value.slice(1);               // 规范：冒号后的单个空格不属于值
+  }
+
+  if (fieldName === "event") {
+    state.event = value;
+  } else if (fieldName === "data") {
+    state.data.push(value);               // data 可多行，join("\n")
+  }
+
+  return null;
+}</code></pre>
+</div>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 300" width="980" role="img" aria-label="SSE 解析管线">
+  <defs>
+    <marker id="ar-ai3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <rect x="20" y="30" width="130" height="52" rx="6" class="n-cloud"></rect>
+  <text x="85" y="52" text-anchor="middle" class="t-xs t-b">TCP 字节块</text>
+  <text x="85" y="68" text-anchor="middle" class="t-xs">可能任意切分</text>
+
+  <rect x="185" y="30" width="120" height="52" rx="6" class="n"></rect>
+  <text x="245" y="52" text-anchor="middle" class="t-xs t-b">TextDecoder</text>
+  <text x="245" y="68" text-anchor="middle" class="t-xs">stream:true 跨块解码</text>
+
+  <rect x="340" y="30" width="120" height="52" rx="6" class="n"></rect>
+  <text x="400" y="52" text-anchor="middle" class="t-xs t-b">字符串缓冲</text>
+  <text x="400" y="68" text-anchor="middle" class="t-xs">残留半行留待下块</text>
+
+  <rect x="495" y="30" width="120" height="52" rx="6" class="n"></rect>
+  <text x="555" y="52" text-anchor="middle" class="t-xs t-b">consumeLine</text>
+  <text x="555" y="68" text-anchor="middle" class="t-xs">拆行 · 处理 \r\n</text>
+
+  <rect x="650" y="30" width="120" height="52" rx="6" class="n"></rect>
+  <text x="710" y="52" text-anchor="middle" class="t-xs t-b">decodeSseLine</text>
+  <text x="710" y="68" text-anchor="middle" class="t-xs">event/data 字段归集</text>
+
+  <rect x="805" y="30" width="155" height="52" rx="6" class="n"></rect>
+  <text x="882" y="52" text-anchor="middle" class="t-xs t-b">flushSseEvent</text>
+  <text x="882" y="68" text-anchor="middle" class="t-xs">空行触发 → 产出完整帧</text>
+
+  <line x1="150" y1="56" x2="183" y2="56" class="edge" marker-end="url(#ar-ai3)"></line>
+  <line x1="305" y1="56" x2="338" y2="56" class="edge" marker-end="url(#ar-ai3)"></line>
+  <line x1="460" y1="56" x2="493" y2="56" class="edge" marker-end="url(#ar-ai3)"></line>
+  <line x1="615" y1="56" x2="648" y2="56" class="edge" marker-end="url(#ar-ai3)"></line>
+  <line x1="770" y1="56" x2="803" y2="56" class="edge" marker-end="url(#ar-ai3)"></line>
+
+  <!-- 第二行 -->
+  <rect x="650" y="140" width="150" height="52" rx="6" class="n"></rect>
+  <text x="725" y="162" text-anchor="middle" class="t-xs t-b">parseJsonWithRepair</text>
+  <text x="725" y="178" text-anchor="middle" class="t-xs">容错修复坏 JSON</text>
+
+  <rect x="440" y="140" width="170" height="52" rx="6" class="n-ai"></rect>
+  <text x="525" y="162" text-anchor="middle" class="t-xs t-b">事件白名单过滤</text>
+  <text x="525" y="178" text-anchor="middle" class="t-xs">6 种 message 事件</text>
+
+  <rect x="220" y="140" width="180" height="52" rx="6" class="n-agent"></rect>
+  <text x="310" y="162" text-anchor="middle" class="t-xs t-b">yield RawMessageStreamEvent</text>
+  <text x="310" y="178" text-anchor="middle" class="t-xs">交给块累积状态机</text>
+
+  <line x1="805" y1="82" x2="740" y2="138" class="edge" marker-end="url(#ar-ai3)"></line>
+  <line x1="648" y1="166" x2="612" y2="166" class="edge" marker-end="url(#ar-ai3)"></line>
+  <line x1="438" y1="166" x2="402" y2="166" class="edge" marker-end="url(#ar-ai3)"></line>
+
+  <!-- 防御 -->
+  <rect x="220" y="222" width="440" height="60" rx="7" class="n-warn"></rect>
+  <text x="440" y="244" text-anchor="middle" class="t-xs t-b">两道截断防御</text>
+  <text x="440" y="264" text-anchor="middle" class="t-xs">sse.event === "error" → 直接抛出 ｜ 收到 message_start 却无 message_stop → 判定流被截断</text>
+
+  <line x1="310" y1="192" x2="360" y2="220" class="edge edge-dash" marker-end="url(#ar-ai3)"></line>
+</svg>
+</div>
+<figcaption>图 2-3 · SSE 解析管线：字节 → 行 → 帧 → JSON → 白名单事件。"流被截断"是一等错误：半截响应绝不会被当成完整回答。</figcaption>
+</figure>
+
+<h2><span class="no">6</span>跨 provider 历史消毒：transform-messages</h2>
+<p>Agent 的会话历史里可能混杂着"上一个模型"的产物：你上半场用 Claude（thinking 块带 Anthropic 签名），<code>/model</code> 切到 Gemini 后继续问——历史必须先被"消毒"成当前模型能接受的形式，否则 API 直接报 400。这个职责集中在 <code>api/transform-messages.ts</code>（223 行），<strong>所有适配器共享</strong>这一个入口：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/ai/src/api/transform-messages.ts</span><span class="cb-note">L59-77 + L100-109</span></div>
+<pre><code>/**
+ * Normalize tool call ID for cross-provider compatibility.
+ * OpenAI Responses API generates IDs that are 450+ chars with special characters like `|`.
+ * Anthropic APIs require IDs matching ^[a-zA-Z0-9_-]+$ (max 64 chars).
+ */
+export function transformMessages&lt;TApi extends Api&gt;(
+  messages: Message[],
+  model: Model&lt;TApi&gt;,
+  normalizeToolCallId?: (id: string, model: Model&lt;TApi&gt;, source: AssistantMessage) =&gt; string,
+): Message[] {
+  ...
+  const transformedContent = assistantMsg.content.flatMap((block) =&gt; {
+    if (block.type === "thinking") {
+      // Redacted thinking is opaque encrypted content, only valid for the same model.
+      if (block.redacted) {
+        return isSameModel ? block : [];         // 跨模型：整块丢弃
+      }
+      // For same model: keep thinking blocks with signatures (needed for replay)
+      if (isSameModel &amp;&amp; block.thinkingSignature) return block;</code></pre>
+</div>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 440" width="980" role="img" aria-label="消毒层前后对照">
+  <defs>
+    <marker id="ar-ai4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <text x="40" y="30" class="zone-label">会话里的历史（现实，可能很脏）</text>
+  <text x="700" y="30" class="zone-label">发给 provider 的请求（干净）</text>
+
+  <rect x="30" y="44" width="380" height="360" rx="8" class="zone"></rect>
+  <rect x="570" y="44" width="380" height="360" rx="8" class="zone"></rect>
+
+  <rect x="50" y="60" width="340" height="44" rx="5" class="n-warn"></rect>
+  <text x="220" y="78" text-anchor="middle" class="t-xs">thinking 块带旧模型的加密签名</text>
+  <text x="220" y="94" text-anchor="middle" class="t-xs">（换模型后签名必然无效）</text>
+  <rect x="590" y="60" width="340" height="44" rx="5" class="n-ok"></rect>
+  <text x="760" y="87" text-anchor="middle" class="t-xs">同模型保留签名回放；跨模型降级/丢弃</text>
+
+  <rect x="50" y="114" width="340" height="44" rx="5" class="n-warn"></rect>
+  <text x="220" y="132" text-anchor="middle" class="t-xs">redacted 思考块（不透明加密负载）</text>
+  <text x="220" y="148" text-anchor="middle" class="t-xs">跨模型无法解密</text>
+  <rect x="590" y="114" width="340" height="44" rx="5" class="n-ok"></rect>
+  <text x="760" y="141" text-anchor="middle" class="t-xs">跨模型整块剔除，同模型原样回传</text>
+
+  <rect x="50" y="168" width="340" height="44" rx="5" class="n-warn"></rect>
+  <text x="220" y="186" text-anchor="middle" class="t-xs">toolCall ID：450+ 字符含 |</text>
+  <text x="220" y="202" text-anchor="middle" class="t-xs">（OpenAI Responses 风格）</text>
+  <rect x="590" y="168" width="340" height="44" rx="5" class="n-ok"></rect>
+  <text x="760" y="195" text-anchor="middle" class="t-xs">统一归一化为 ^[a-zA-Z0-9_-]{1,64}$，</text>
+
+  <rect x="50" y="222" width="340" height="44" rx="5" class="n-warn"></rect>
+  <text x="220" y="240" text-anchor="middle" class="t-xs">孤儿 toolCall（结果丢失/被截断）</text>
+  <rect x="590" y="222" width="340" height="44" rx="5" class="n-ok"></rect>
+  <text x="760" y="249" text-anchor="middle" class="t-xs">合成 error toolResult 补齐配对</text>
+
+  <rect x="50" y="276" width="340" height="44" rx="5" class="n-warn"></rect>
+  <text x="220" y="294" text-anchor="middle" class="t-xs">stopReason=error/aborted 的 assistant 轮</text>
+  <rect x="590" y="276" width="340" height="44" rx="5" class="n-ok"></rect>
+  <text x="760" y="303" text-anchor="middle" class="t-xs">整条跳过（半截回答不回放）</text>
+
+  <rect x="50" y="330" width="340" height="58" rx="5" class="n-warn"></rect>
+  <text x="220" y="352" text-anchor="middle" class="t-xs">用户/工具结果里的图片</text>
+  <text x="220" y="370" text-anchor="middle" class="t-xs">但目标模型不支持视觉</text>
+  <rect x="590" y="330" width="340" height="58" rx="5" class="n-ok"></rect>
+  <text x="760" y="352" text-anchor="middle" class="t-xs">替换为占位文本</text>
+  <text x="760" y="370" text-anchor="middle" class="t-xs">（downgradeUnsupportedImages）</text>
+
+  <rect x="428" y="180" width="124" height="80" rx="8" class="n-ai"></rect>
+  <text x="490" y="212" text-anchor="middle" class="t-s t-b">transform</text>
+  <text x="490" y="230" text-anchor="middle" class="t-s t-b">Messages()</text>
+  <text x="490" y="248" text-anchor="middle" class="t-xs">所有适配器共用</text>
+
+  <line x1="372" y1="150" x2="426" y2="200" class="edge" marker-end="url(#ar-ai4)"></line>
+  <line x1="554" y1="220" x2="588" y2="220" class="edge" marker-end="url(#ar-ai4)"></line>
+</svg>
+</div>
+<figcaption>图 2-4 · transform-messages 六条消毒规则。这是"切换模型不炸"的关键：脏历史在请求边界被集中清洗，会话文件本身保持原样（永不改写历史）。</figcaption>
+</figure>
+
+<div class="callout design">
+  <div class="co-title">为什么集中在一次转换里</div>
+  <p>把消毒散落到各适配器意味着六条规则 × 8 个适配器 = 48 处实现。pi 的选择是：<code>convertMessages</code> 只做"格式翻译"（消息结构 → provider wire 格式），而"语义清洗"全部前置到 <code>transformMessages</code>。修复一条规则只需改一处，130 个测试文件里有专门的一组针对它。</p>
+</div>
+
+<h2><span class="no">7</span>双层重试</h2>
+<p>重试被拆成职责不同的两层，互不重叠：</p>
+<ul class="clean">
+  <li><strong>传输层</strong> <code>utils/provider-retry.ts</code>（125 行）：只管 HTTP 语义——429/5xx、<code>retry-after</code> 头、指数退避 + 抖动。sleep 可被 AbortSignal 打断（用户按 Esc 立即停止等待）。SDK 的 maxRetries 被置 0，退避策略完全接管，并且设了 <code>maxRetryDelayMs</code> 上限：超过就直接抛错交给上层，避免传输层无限耗时间。</li>
+  <li><strong>语义层</strong> <code>utils/retry.ts</code>（228 行）：<code>retryAssistantCall</code> 消费一条 <code>RetryPolicy{enabled, maxRetries, baseDelayMs}</code>（由 coding-agent 的 settings.retry 映射而来），用两个大正则给错误分类——可重试（网络波动、超时、5xx）与不可重试（配额、账单、鉴权）——只重试前者，并暴露 onRetryScheduled 等回调供 UI 显示"将在 4s 后重试"。</li>
+</ul>
+<p>包内<strong>没有</strong>跨 provider 的自动 fallback：Anthropic 挂了自动换 OpenAI 这种事由上层（coding-agent 的 provider 组合层）决定。pi-ai 只把 OpenRouter 的路由语义（<code>OpenRouterRouting</code>）建模为类型。</p>
+
+<h2><span class="no">8</span>模型目录：生成即代码</h2>
+<p>40+ provider、上千个模型的元数据（价格、上下文窗口、thinking 能力映射）不手写在仓库里，而是构建期从 <a href="https://models.dev">models.dev</a> 拉取生成：</p>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 340" width="980" role="img" aria-label="模型目录生成流水线">
+  <defs>
+    <marker id="ar-ai5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <rect x="20" y="120" width="150" height="60" rx="6" class="n-cloud"></rect>
+  <text x="95" y="144" text-anchor="middle" class="t-s t-b">models.dev</text>
+  <text x="95" y="162" text-anchor="middle" class="t-xs">社区模型目录 API</text>
+
+  <rect x="230" y="106" width="200" height="88" rx="8" class="n-ai"></rect>
+  <text x="330" y="134" text-anchor="middle" class="t-s t-b">scripts/generate-models.ts</text>
+  <text x="330" y="154" text-anchor="middle" class="t-s">2,932 行生成器</text>
+  <text x="330" y="172" text-anchor="middle" class="t-s">映射 cost/limit/thinkingLevelMap</text>
+
+  <rect x="500" y="20" width="220" height="66" rx="6" class="n-ai"></rect>
+  <text x="610" y="44" text-anchor="middle" class="t-xs t-b">src/providers/*.models.ts ×39</text>
+  <text x="610" y="62" text-anchor="middle" class="t-xs">每个 8 行，仅含该 provider 数据</text>
+  <rect x="500" y="118" width="220" height="66" rx="6" class="n-ai"></rect>
+  <text x="610" y="142" text-anchor="middle" class="t-xs t-b">src/models.generated.ts</text>
+  <text x="610" y="160" text-anchor="middle" class="t-xs">聚合为强类型 MODELS 常量</text>
+  <rect x="500" y="216" width="220" height="66" rx="6" class="n-ai"></rect>
+  <text x="610" y="240" text-anchor="middle" class="t-xs t-b">dist/providers/data + manifest</text>
+  <text x="610" y="258" text-anchor="middle" class="t-xs">运行时数据 + 一致性校验</text>
+
+  <rect x="790" y="118" width="170" height="66" rx="6" class="n-agent"></rect>
+  <text x="875" y="142" text-anchor="middle" class="t-s t-b">providers/all.ts</text>
+  <text x="875" y="162" text-anchor="middle" class="t-s">registerBuiltinProviders</text>
+
+  <line x1="170" y1="150" x2="228" y2="150" class="edge" marker-end="url(#ar-ai5)"></line>
+  <line x1="430" y1="130" x2="498" y2="60" class="edge" marker-end="url(#ar-ai5)"></line>
+  <line x1="430" y1="150" x2="498" y2="150" class="edge" marker-end="url(#ar-ai5)"></line>
+  <line x1="430" y1="170" x2="498" y2="240" class="edge" marker-end="url(#ar-ai5)"></line>
+  <line x1="720" y1="150" x2="788" y2="150" class="edge" marker-end="url(#ar-ai5)"></line>
+
+  <rect x="500" y="300" width="460" height="34" rx="6" class="n-warn"></rect>
+  <text x="730" y="321" text-anchor="middle" class="t-xs t-b">models.generated.ts 禁止手改 —— 改 scripts/generate-models.ts 后重新生成</text>
+</svg>
+</div>
+<figcaption>图 2-5 · 模型目录流水线。生成器带 --strict 模式校验 id 集合；check-model-data 在离线构建时校验数据与 manifest 一致。</figcaption>
+</figure>
+
+<p>这个设计直接回应了"模型目录是最高频的腐化点"：模型停产、降价、新增能力每周都在发生，人工维护必然滞后。生成器把腐化点收敛到一个脚本 + 一个上游数据源，changelog 里大量 "refresh generated image model catalog" 类提交就是这条流水线的日常运转。</p>
+
+<nav class="pagenav">
+  <a href="./01-architecture.html"><span class="dir">上一篇</span>← 01 · 物理架构与运行形态</a>
+  <a class="next" href="./03-agent.html"><span class="dir">下一篇</span>03 · pi-agent-core →</a>
+</nav>
+
+<footer class="colophon">Pi 源码深度剖析 · 基于 worktree 368e013de（v0.84.1）</footer>
+</main>
+<script src="./script.js"></script>
+</body>
+</html>

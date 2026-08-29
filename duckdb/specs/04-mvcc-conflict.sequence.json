@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "DuckDB 时序图：乐观 MVCC 下的并发更新与冲突",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1560, 760],
+    "column_fit": "spread",
+    "views": [
+      { "id": "begin", "label": "快照建立", "focus": ["t1", "t2", "tmgr"], "note": "每个事务拿 start_time 作读快照，无锁纯乐观。" },
+      { "id": "conflict", "label": "冲突爆发", "focus": ["t2", "storage"], "note": "T2 更新同一行时撞上 T1 的版本链，立刻抛冲突。" },
+      { "id": "commit", "label": "提交与回滚", "focus": ["t1", "tmgr", "undo", "wal"], "note": "T1 提交：undo 版本号改写为 commit_id 并落 WAL；T2 回滚。" }
+    ]
+  },
+  "participants": [
+    { "id": "t1", "type": "external", "label": "事务 T1" },
+    { "id": "t2", "type": "external", "label": "事务 T2" },
+    { "id": "tmgr", "type": "backend", "label": "事务管理器" },
+    { "id": "storage", "type": "database", "label": "表存储 · 版本链" },
+    { "id": "undo", "type": "database", "label": "UndoBuffer" },
+    { "id": "wal", "type": "database", "label": "WAL" }
+  ],
+  "segments": [
+    { "from": 150, "to": 232, "label": "开启" },
+    { "from": 252, "to": 432, "label": "并发更新" },
+    { "from": 452, "to": 545, "label": "回滚" },
+    { "from": 562, "to": 672, "label": "提交" }
+  ],
+  "messages": [
+    { "id": "m_b1", "from": "t1", "to": "tmgr", "y": 185, "label": "BEGIN：start_time=101", "variant": "emphasis" },
+    { "id": "m_b2", "from": "t2", "to": "tmgr", "y": 222, "label": "BEGIN：start_time=102" },
+    { "id": "m_u1", "from": "t1", "to": "storage", "y": 268, "label": "UPDATE 行 X：写新版本" },
+    { "id": "m_undo1", "from": "storage", "to": "undo", "y": 303, "label": "压入旧值（版本=101）" },
+    { "id": "m_u2", "from": "t2", "to": "storage", "y": 348, "label": "UPDATE 同一行 X", "variant": "emphasis" },
+    { "id": "m_conflict", "from": "storage", "to": "t2", "y": 384, "label": "冲突！TransactionException", "variant": "security" },
+    { "id": "m_rb", "from": "t2", "to": "tmgr", "y": 428, "label": "ROLLBACK" },
+    { "id": "m_undo2", "from": "tmgr", "to": "undo", "y": 463, "label": "逆序回放撤销", "variant": "dashed" },
+    { "id": "m_c1", "from": "t1", "to": "tmgr", "y": 508, "label": "COMMIT", "variant": "emphasis" },
+    { "id": "m_ver", "from": "tmgr", "to": "storage", "y": 543, "label": "版本号 101 → commit_id" },
+    { "id": "m_wal", "from": "tmgr", "to": "wal", "y": 578, "label": "WAL 追加 + fsync", "variant": "security" },
+    { "id": "m_ack", "from": "wal", "to": "tmgr", "y": 613, "label": "落盘确认", "variant": "return" },
+    { "id": "m_ok", "from": "tmgr", "to": "t1", "y": 648, "label": "提交成功", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "tmgr", "from": 180, "to": 653, "type": "backend" },
+    { "participant": "storage", "from": 263, "to": 548, "type": "database" },
+    { "participant": "undo", "from": 298, "to": 468, "type": "database" },
+    { "participant": "wal", "from": 573, "to": 618, "type": "database" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "无锁读", "items": [
+      "读操作拿 start_time 当快照，按版本链判断可见性",
+      "没有任何读锁：OLAP 查询之间永远不互相阻塞",
+      "catalog 也走同一套版本链（CatalogSet 时间戳）"
+    ] },
+    { "dot": "rose", "title": "乐观写冲突", "items": [
+      "同一行的第二个更新者在 UpdateSegment::CheckForConflicts 处爆炸",
+      "删除冲突同理：ChunkVectorInfo::Delete 抛 tuple deletion 冲突",
+      "冲突即时报错，由应用层决定重试策略"
+    ] },
+    { "dot": "emerald", "title": "提交协议", "items": [
+      "提交 = 遍历 undo，把版本号从 transaction_id 改写成 commit_id",
+      "WAL 先落盘再返回；崩溃后靠 WAL 重放恢复已提交事务",
+      "undo 空间由 BufferPool 管理，链长了也能卸到磁盘"
+    ] }
+  ]
+}

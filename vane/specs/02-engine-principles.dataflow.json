@@ -1,0 +1,277 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Vane 核心原理：一条查询从 API 到结果的完整流水线",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      540
+    ],
+    "views": [
+      {
+        "id": "lazy-path",
+        "label": "惰性主路径",
+        "focus": [
+          "py_api",
+          "binding",
+          "planner",
+          "native_exec",
+          "arrow_out"
+        ],
+        "note": "Relation 树只构建不执行，fetch 时才走 Binder → Planner → 向量化执行。"
+      },
+      {
+        "id": "ai-lowering",
+        "label": "AI 调用降级",
+        "focus": [
+          "expr",
+          "binding",
+          "rewriter",
+          "native_exec"
+        ],
+        "note": "map_batches / embed / prompt 在优化期被重写为一等逻辑算子。"
+      },
+      {
+        "id": "runner-fork",
+        "label": "执行后端分叉",
+        "focus": [
+          "planner",
+          "native_exec",
+          "local_runner",
+          "ray_runner"
+        ],
+        "note": "VANE_RUNNER 决定本地向量化、单机 FTE 还是 Ray 分布式。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "API 层（惰性构建）"
+    },
+    {
+      "label": "pybind11 绑定层"
+    },
+    {
+      "label": "引擎规划（Vane 定制）"
+    },
+    {
+      "label": "执行后端分叉"
+    },
+    {
+      "label": "结果面"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "py_api",
+      "type": "frontend",
+      "label": "用户 API",
+      "stage": 0,
+      "row": 0
+    },
+    {
+      "id": "expr",
+      "type": "frontend",
+      "label": "Expression",
+      "sublabel": "col / lit / UDF",
+      "stage": 0,
+      "row": 2,
+      "tag": "可组合"
+    },
+    {
+      "id": "binding",
+      "type": "backend",
+      "label": "vane._native",
+      "sublabel": "原生绑定类",
+      "stage": 1,
+      "row": 1,
+      "tag": "C++"
+    },
+    {
+      "id": "planner",
+      "type": "backend",
+      "label": "查询规划管线",
+      "sublabel": "上游 DuckDB 管线",
+      "stage": 2,
+      "row": 0,
+      "tag": "vendored"
+    },
+    {
+      "id": "rewriter",
+      "type": "backend",
+      "label": "AI 算子重写器",
+      "sublabel": "优化器内重写",
+      "stage": 2,
+      "row": 2,
+      "tag": "Vane 定制",
+      "yOffset": -25
+    },
+    {
+      "id": "native_exec",
+      "type": "backend",
+      "label": "本地向量化执行",
+      "sublabel": "morsel 并行",
+      "stage": 3,
+      "row": 0,
+      "tag": "默认"
+    },
+    {
+      "id": "local_runner",
+      "type": "backend",
+      "label": "LocalRunner",
+      "sublabel": "单机 FTE",
+      "stage": 3,
+      "row": 2,
+      "tag": "VANE_RUNNER=local-fast",
+      "yOffset": -25
+    },
+    {
+      "id": "ray_runner",
+      "type": "backend",
+      "label": "RayRunner",
+      "sublabel": "分布式执行",
+      "stage": 3,
+      "row": 4,
+      "tag": "VANE_RUNNER=ray",
+      "yOffset": -177
+    },
+    {
+      "id": "arrow_out",
+      "type": "database",
+      "label": "Arrow 输出",
+      "sublabel": "PyArrow / pandas",
+      "stage": 4,
+      "row": 2,
+      "yOffset": -25
+    }
+  ],
+  "flows": [
+    {
+      "id": "f_api_bind",
+      "from": "py_api",
+      "to": "binding",
+      "label": "惰性 Relation 树",
+      "variant": "emphasis",
+      "classification": "仅构建"
+    },
+    {
+      "id": "f_expr_bind",
+      "from": "expr",
+      "to": "binding",
+      "label": "表达式树"
+    },
+    {
+      "id": "f_bind_plan",
+      "from": "binding",
+      "to": "planner",
+      "label": "QueryNode",
+      "variant": "emphasis",
+      "classification": "fetch 触发"
+    },
+    {
+      "id": "f_plan_exec",
+      "from": "planner",
+      "to": "native_exec",
+      "label": "物理计划",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "f_rewrite_exec",
+      "from": "rewriter",
+      "to": "native_exec",
+      "label": "UDF/VLLM 算子",
+      "route": "vertical-channel",
+      "channelX": 668,
+      "labelAt": [
+        700,
+        258
+      ]
+    },
+    {
+      "id": "f_plan_ray",
+      "from": "planner",
+      "to": "ray_runner",
+      "label": "导出分布式计划",
+      "variant": "dashed",
+      "labelAt": [
+        420,
+        380
+      ],
+      "fromSide": "bottom",
+      "toSide": "left",
+      "via": [
+        [
+          530,
+          250
+        ],
+        [
+          440,
+          250
+        ],
+        [
+          440,
+          436
+        ]
+      ]
+    },
+    {
+      "id": "f_exec_out",
+      "from": "native_exec",
+      "to": "arrow_out",
+      "label": "RecordBatch",
+      "variant": "emphasis"
+    },
+    {
+      "id": "f_local_out",
+      "from": "local_runner",
+      "to": "arrow_out",
+      "label": "物化表",
+      "variant": "dashed",
+      "labelAt": [
+        960,
+        428
+      ]
+    },
+    {
+      "id": "f_ray_out",
+      "from": "ray_runner",
+      "to": "arrow_out",
+      "label": "分区流",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "主路径不变式",
+      "items": [
+        "Relation 操作只追加代数树节点，任何 fetch 才触发执行",
+        "SELECT 且无参数时 sql() 返回惰性 QueryRelation，否则物化",
+        "结果一律以 Arrow C 数据接口过界，供 PyArrow / pandas / torch 消费"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Vane 对引擎的定制点",
+      "items": [
+        "优化器里挂入 UDF / VLLM Project Rewriter，把 AI 调用变成计划算子",
+        "新增物理算子：STREAMING_UDF · VLLM_PROJECT · REPARTITION · LOCAL_EXCHANGE",
+        "类型系统新增 FILE（URL/校验和结构体）与 TENSOR（定形张量）"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "一次编写，三种执行",
+      "items": [
+        "VANE_RUNNER 环境变量在 C++ 侧分叉，Relation 代码零改动",
+        "Runner 按 DatabaseInstance 缓存，连接关闭时通知清理",
+        "本地 FTE 与 Ray 跑的是同一份定位后的分布式物理计划"
+      ]
+    }
+  ]
+}

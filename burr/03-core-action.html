@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>03 · Action 体系 — Apache Burr 源码剖析</title>
+<style>
+:root{
+  --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --line:#e2e8f0;
+  --blue:#2563eb; --blue-bg:#eff6ff; --green:#16a34a; --green-bg:#f0fdf4;
+  --amber:#d97706; --amber-bg:#fffbeb; --purple:#9333ea; --purple-bg:#faf5ff;
+  --red:#dc2626; --red-bg:#fef2f2; --code-bg:#0f172a;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.75}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.94);backdrop-filter:blur(6px);color:#e2e8f0;display:flex;gap:12px;align-items:center;padding:10px 24px;font-size:13px;flex-wrap:wrap}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:3px 8px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav .brand{font-weight:700;color:#fff;font-size:14px;letter-spacing:.5px;margin-right:8px}
+.topnav .brand span{color:#60a5fa}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+.hero{background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:40px 0;margin-bottom:28px}
+.hero h1{margin:0 0 8px;font-size:28px}
+.hero p{margin:0;color:#cbd5e1;font-size:14.5px;max-width:860px}
+main{padding-bottom:64px}
+h2{font-size:23px;border-left:5px solid var(--blue);padding-left:12px;margin:42px 0 10px}
+h3{font-size:18px;margin:26px 0 6px;color:#1d4ed8}
+h4{font-size:15.5px;margin:18px 0 6px}
+p,li{color:#334155;font-size:14.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:16px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.grid{display:grid;gap:16px}
+.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:860px){.grid.c2,.grid.c3{grid-template-columns:1fr}}
+figure{margin:20px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;overflow-x:auto}
+figcaption{font-size:13px;color:var(--muted);text-align:center;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+figcaption b{color:#1d4ed8}
+pre{background:var(--code-bg);color:#e2e8f0;padding:16px 18px;border-radius:10px;overflow-x:auto;font-size:12.8px;line-height:1.65}
+code{font-family:"SF Mono",Menlo,Consolas,"Courier New",monospace}
+p code,li code,td code,h3 code,h4 code,figcaption code{background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:5px;font-size:.9em}
+pre code{background:none;color:inherit;padding:0}
+.c-key{color:#7dd3fc}.c-str{color:#fbbf24}.c-com{color:#94a3b8;font-style:italic}.c-fn{color:#a5b4fc}.c-num{color:#f472b6}.c-dec{color:#fde047}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:#fff}
+th{background:#1e293b;color:#fff;text-align:left;padding:8px 12px;font-weight:600}
+td{border:1px solid var(--line);padding:7px 12px;vertical-align:top}
+tr:nth-child(even) td{background:#f8fafc}
+.path{font-family:monospace;background:#f1f5f9;border:1px solid var(--line);padding:1px 7px;border-radius:5px;font-size:12.5px;color:#0f766e;word-break:break-all}
+.note{border-left:4px solid var(--amber);background:var(--amber-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.note b{color:#92400e}
+.tip{border-left:4px solid var(--green);background:var(--green-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.tip b{color:#166534}
+.warn{border-left:4px solid var(--red);background:var(--red-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.pager{display:flex;justify-content:space-between;margin:40px 0 8px}
+.pager a{background:#fff;border:1px solid var(--line);padding:10px 18px;border-radius:10px;text-decoration:none;color:var(--ink);font-size:14px}
+.pager a:hover{border-color:var(--blue);color:var(--blue)}
+footer.foot{text-align:center;color:#94a3b8;font-size:12.5px;padding:24px 0 40px}
+svg text{font-family:inherit}
+svg .t{fill:#1e293b;font-size:13px}
+svg .tb{fill:#fff;font-weight:700;font-size:13px}
+svg .ts{fill:#475569;font-size:11px}
+svg .tt{fill:#0f172a;font-weight:700;font-size:15px}
+svg .tc{fill:#64748b;font-size:11px;font-family:Menlo,monospace}
+svg .lbl{fill:#334155;font-size:11.5px}
+svg .ar{stroke:#64748b;stroke-width:1.5;fill:none}
+svg .ar-b{stroke:#2563eb;stroke-width:1.8;fill:none}
+svg .ar-dash{stroke:#94a3b8;stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+svg .zone{fill:#f8fafc;stroke:#cbd5e1;stroke-dasharray:6 4}
+svg .bx{stroke-width:1.5}
+svg .b-blue{fill:#eff6ff;stroke:#3b82f6}
+svg .b-blue-d{fill:#dbeafe;stroke:#2563eb}
+svg .b-green{fill:#f0fdf4;stroke:#22c55e}
+svg .b-green-d{fill:#dcfce7;stroke:#16a34a}
+svg .b-amber{fill:#fffbeb;stroke:#f59e0b}
+svg .b-purple{fill:#faf5ff;stroke:#a855f7}
+svg .b-red{fill:#fef2f2;stroke:#ef4444}
+svg .b-slate{fill:#f1f5f9;stroke:#94a3b8}
+svg .b-dark{fill:#1e293b;stroke:#0f172a}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">Apache&nbsp;Burr<span>·源码深度剖析</span></span>
+  <a href="index.html">总导航</a><a href="01-overview.html">项目全景</a>
+  <a href="02-core-state.html">State</a><a href="03-core-action.html"><b>Action</b></a>
+  <a href="04-core-application.html">运行时</a><a href="05-graph-builder.html">Graph/Builder</a>
+  <a href="06-lifecycle-hooks.html">Hooks/Tracing</a><a href="07-persistence.html">持久化</a>
+  <a href="08-parallelism.html">并行</a><a href="09-tracking.html">追踪系统</a>
+  <a href="10-ui-frontend.html">遥测 UI</a><a href="11-integrations.html">集成生态</a>
+  <a href="12-execution-flow.html">端到端全景</a>
+</nav>
+
+<header class="hero"><div class="wrap">
+  <h1>03 · Action 体系：Function/Reducer 二分与流式协议</h1>
+  <p>源码：<span class="path">burr/core/action.py</span>（2021 行）。这一篇讲透：动作的二分模型、装饰器的低.magic 实现、绑定参数 bind、四个条件构造器、safe_expr 的安全 AST 解释器，以及流式动作的生成器协议。</p>
+</div></header>
+
+<main class="wrap">
+
+<h2>3.1 二分模型：Function（算）+ Reducer（写）</h2>
+<div class="card">
+<p>Burr 把一个图节点拆成两个正交职责（这正是 reducer 模式）：</p>
+<table>
+<tr><th>接口</th><th>职责</th><th>核心成员</th><th>源码</th></tr>
+<tr><td><code>Function</code></td><td>计算：从 state 读 → 产出结果</td><td><code>reads</code> / <code>run(state,**kw)→dict</code> / <code>inputs</code> / <code>is_async()</code></td><td><span class="path">action.py:184</span></td></tr>
+<tr><td><code>Reducer</code></td><td>写入：结果 + 旧 state → 新 state</td><td><code>writes</code> / <code>update(result,state)→State</code></td><td><span class="path">action.py:262</span></td></tr>
+<tr><td><code>Action</code></td><td>二者合一 + 图节点身份</td><td><code>name/with_name/single_step/streaming/tags/schema/get_source()</code></td><td><span class="path">action.py:306</span></td></tr>
+</table>
+<p><code>Action</code> 的几个细节值得注意：</p>
+<ul>
+<li><b>命名后置</b>：动作实例创建时没有名字，<code>with_name()</code> 通过 <code>copy.copy</code> 返回带名副本（<span class="path">action.py:313-333</span>）——这样同一个动作对象可以在不同应用里挂不同名字，也解释了为什么 <code>with_actions(counter=counter)</code> 用 kwargs 传名。</li>
+<li><b>两个能力开关</b>：<code>single_step</code>（计算与写入合一）和 <code>streaming</code>（可流式）两个 bool 属性（<span class="path">action.py:341-347</span>），引擎据此选择四条执行路径之一（04 篇）。</li>
+<li><b>get_source()</b>：用 <code>inspect.getsource</code> 抓取类源码（<span class="path">action.py:353</span>），这就是遥测 UI 能直接显示动作源码的原因。</li>
+<li><b>tags</b>：动作别名，<code>halt_after=["@tag:iteration"]</code> 可以按 tag 停（<span class="path">action.py:374-380</span>）。</li>
+</ul>
+</div>
+
+<h2>3.2 类层次全景</h2>
+<figure>
+<svg viewBox="0 0 1060 620" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#64748b"/></marker></defs>
+<rect class="bx b-dark" x="30" y="30" width="230" height="130" rx="10" style="fill:#1e293b" style="stroke:#0f172a"/>
+<text class="tb" x="50" y="56" style="fill:#fff">«interface» Function</text>
+<text class="tc" x="50" y="80" style="fill:#cbd5e1">reads · inputs</text>
+<text class="tc" x="50" y="98" style="fill:#cbd5e1">run(state,**kw) → dict</text>
+<text class="tc" x="50" y="116" style="fill:#cbd5e1">validate_inputs · is_async</text>
+<text class="tc" x="50" y="140" style="fill:#94a3b8">「算」：state → 结果字典</text>
+<rect class="bx b-dark" x="800" y="30" width="230" height="130" rx="10" style="fill:#1e293b" style="stroke:#0f172a"/>
+<text class="tb" x="820" y="56" style="fill:#fff">«interface» Reducer</text>
+<text class="tc" x="820" y="80" style="fill:#cbd5e1">writes</text>
+<text class="tc" x="820" y="98" style="fill:#cbd5e1">update(result, state) → State</text>
+<text class="tc" x="820" y="122" style="fill:#94a3b8">「写」：结果 → 新状态</text>
+<rect class="bx b-blue-d" x="415" y="210" width="230" height="120" rx="10" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="tt" x="435" y="238" style="fill:#1e3a8a">Action（抽象基类）</text>
+<text class="tc" x="435" y="262">name/with_name · tags · schema</text>
+<text class="tc" x="435" y="280">single_step=False streaming=False</text>
+<text class="tc" x="435" y="304">get_source() → UI 展示源码</text>
+<path class="ar" d="M260 95 L470 208" marker-end="url(#arr)"/>
+<path class="ar" d="M800 95 L590 208" marker-end="url(#arr)"/>
+<rect class="bx b-green" x="30" y="390" width="310" height="180" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="50" y="416" font-weight="700">SingleStepAction（合一式）</text>
+<text class="tc" x="50" y="440">run_and_update(state,**kw)</text>
+<text class="tc" x="50" y="458">        → (dict, State)</text>
+<text class="tc" x="50" y="482">└ FunctionBasedAction（@action）</text>
+<text class="ts" x="62" y="500">run_and_update = self._fn(state, ...)</text>
+<text class="ts" x="62" y="516">（action.py:1294 —— 就一行转发）</text>
+<text class="tc" x="50" y="546">single_step=True</text>
+<rect class="bx b-purple" x="370" y="390" width="320" height="180" rx="10" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="t" x="390" y="416" font-weight="700">流式家族（streaming=True）</text>
+<text class="tc" x="390" y="440">StreamingAction（多步式）</text>
+<text class="ts" x="402" y="458">stream_run() 逐步产出，run/update 收尾</text>
+<text class="tc" x="390" y="482">SingleStepStreamingAction（函数式）</text>
+<text class="ts" x="402" y="500">stream_run_and_update() 生成器：</text>
+<text class="ts" x="402" y="516">yield (dict, None) … 最终 (dict, State)</text>
+<text class="tc" x="390" y="546">└ FunctionBasedStreamingAction（@streaming_action）</text>
+<rect class="bx b-amber" x="720" y="390" width="310" height="180" rx="10" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="740" y="416" font-weight="700">内置动作 / 条件</text>
+<text class="tc" x="740" y="440">Result(*fields)  读字段进结果（:1069）</text>
+<text class="tc" x="740" y="460">Input(**kw)      入参写入 state（:1095）</text>
+<text class="tc" x="740" y="480">default          恒真 Condition（:1059）</text>
+<text class="tc" x="740" y="500">Condition(Function)  「读状态的函数」（:697）</text>
+<text class="ts" x="740" y="524">注意：Condition 只继承 Function——</text>
+<text class="ts" x="740" y="540">它只「算」不「写」，是图上的边而非节点</text>
+<path class="ar" d="M185 388 L470 332" marker-end="url(#arr)"/>
+<path class="ar" d="M530 388 L530 332" marker-end="url(#arr)"/>
+<text class="ts" x="30" y="606">引擎按 (single_step × streaming) 两个布尔位选择四条执行路径之一：普通合一式 / 两步式 / 流式合一 / 流式多步（04 篇时序图）。</text>
+</svg>
+<figcaption><b>图 3-1 · Action 类层次</b> —— Function×Reducer 合成 Action；single_step 与 streaming 两个开关派生出实现家族；Condition 是只读的 Function 特例（用于边的判断）。</figcaption>
+</figure>
+
+<h2>3.3 @action 装饰器的「零魔法」实现</h2>
+<p>装饰器没有用任何黑科技：它只是把一个 <code>FunctionBasedAction</code> 实例<b>作为属性挂在函数对象上</b>，再补一个 <code>bind</code> 方法（<span class="path">action.py:1905-1912</span>）：</p>
+<pre><code><span class="c-key">def</span> <span class="c-fn">__call__</span>(self, fn):
+    setattr(fn, FunctionBasedAction.ACTION_FUNCTION,   <span class="c-com"># 属性名 = "action_function"</span>
+            FunctionBasedAction(fn, self.reads, self.writes, tags=self.tags))
+    setattr(fn, <span class="c-str">"bind"</span>, types.MethodType(bind, fn))     <span class="c-com"># 注入 bind 方法</span>
+    <span class="c-key">return</span> fn                                          <span class="c-com"># 原函数原样返回，仍可正常调用</span></code></pre>
+<p>被装饰的函数<b>依然是一个普通函数</b>——可以单测、可以不带框架直接调用。Builder 侧的 <code>create_action</code>（<span class="path">action.py:2007</span>）负责把属性取出来并 <code>with_name</code>。</p>
+<div class="grid c2">
+<div class="card">
+<h3>参数如何变 inputs</h3>
+<p><code>FunctionBasedAction</code> 用 <code>derive_inputs_from_fn</code>（<span class="path">action.py:1184</span>）读取函数签名：</p>
+<ul>
+<li>无默认值的参数 → <b>required inputs</b>（运行时必须传）</li>
+<li>有默认值的参数 → <b>optional inputs</b>（可用 bind 预绑定）</li>
+<li><code>state</code> 与 <code>__</code> 开头的参数被识别为特殊注入位</li>
+</ul>
+</div>
+<div class="card">
+<h3>bind：部分应用</h3>
+<pre><code>chat_response = (chat_response
+  .bind(prepend_prompt=<span class="c-str">"Context: "</span>))
+<span class="c-com"># bind = copy_func + with_params(**kw)</span>
+<span class="c-com"># action.py:1828-1847</span></code></pre>
+<p>绑定后参数不再出现在 inputs 里，Runner 调用时解包 <code>_bound_params</code>。这是构建「同一动作多角色」的惯用法（12 篇 chatbot 实例）。</p>
+</div>
+</div>
+
+<h2>3.4 一个动作的一次执行：数据流</h2>
+<figure>
+<svg viewBox="0 0 1060 440" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<rect class="bx b-blue-d" x="30" y="60" width="200" height="150" rx="10" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="50" y="86" font-weight="700">State（全量）</text>
+<text class="tc" x="50" y="112">counter=5</text>
+<text class="tc" x="50" y="132">prompt="hi"</text>
+<text class="tc" x="50" y="152">history=[...]</text>
+<text class="ts" x="50" y="182">引擎: state.subset(*reads)</text>
+<rect class="bx b-green" x="330" y="60" width="240" height="150" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="350" y="86" font-weight="700">Function.run</text>
+<text class="ts" x="350" y="108">只看到 reads 声明的键</text>
+<text class="ts" x="350" y="130">+ validate_inputs 校验入参</text>
+<text class="ts" x="350" y="156">+ __context/__tracer 按需注入</text>
+<text class="ts" x="350" y="176">（application.py:161-184）</text>
+<rect class="bx b-amber" x="670" y="60" width="180" height="150" rx="10" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="690" y="86" font-weight="700">result: dict</text>
+<text class="tc" x="690" y="112">{"counter": 6}</text>
+<text class="ts" x="690" y="140">_validate_result</text>
+<text class="ts" x="690" y="158">必须为 dict（schema 可换）</text>
+<rect class="bx b-purple" x="850" y="60" width="180" height="150" rx="10" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="t" x="870" y="86" font-weight="700">Reducer.update</text>
+<text class="ts" x="870" y="112">result + 旧 state → 新 state</text>
+<text class="ts" x="870" y="138">校验1: 不得写未声明键</text>
+<text class="ts" x="870" y="158">校验2: 声明的 writes 必须都写</text>
+<text class="ts" x="870" y="178">（application.py:243-263）</text>
+<rect class="bx b-blue" x="330" y="290" width="700" height="110" rx="10" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="t" x="350" y="318" font-weight="700">@action(reads=["counter"], writes=["counter"])</text>
+<text class="tc" x="350" y="344">def counter(state: State) -&gt; State:</text>
+<text class="tc" x="350" y="364">    return state.update(counter=state["counter"] + 1)   # hello-world-counter/application.py:30-34</text>
+<text class="ts" x="350" y="386">函数式动作把 Function 和 Reducer 揉在一个函数体里：返回的 State 就是「写入」本身</text>
+<path class="ar-b" d="M230 135 L328 135" marker-end="url(#arr2)"/>
+<path class="ar-b" d="M570 135 L668 135" marker-end="url(#arr2)"/>
+<path class="ar-b" d="M850 135 L848 135" marker-end="url(#arr2)"/>
+</svg>
+<figcaption><b>图 3-2 · 两步式动作的数据流</b> —— 最小权限（只给 reads）、结果校验、双重写入校验。每一步失败都会抛出带完整状态/入参快照的错误（<code>_format_BASE_ERROR_MESSAGE</code>，application.py:289）。</figcaption>
+</figure>
+
+<h2>3.5 Conditions：边的判断逻辑</h2>
+<p>条件转移的本质是一个只读函数：<code>Condition(Function)</code>（<span class="path">action.py:697</span>）持有键列表和一个 <code>resolver(state)→bool</code>，<code>run()</code> 返回 <code>{"PROCEED": bool}</code>（KEY 常量，<span class="path">action.py:698</span>）。图遍历时按声明顺序取第一个为真的边（05 篇）。</p>
+<figure>
+<svg viewBox="0 0 1060 480" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#64748b"/></marker></defs>
+<rect class="bx b-amber" x="30" y="40" width="480" height="390" rx="12" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="tt" x="50" y="68">四个构造器（action.py:726-936）</text>
+<rect class="bx b-slate" x="50" y="86" width="440" height="60" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="tc" x="66" y="110">when(counter=0, mode__in=["a","b"])  等值+__后缀算子</text>
+<text class="ts" x="66" y="130">__gt/__gte/__lt/__lte/__ne/__in/__notin/__contains …（AND 连接）</text>
+<rect class="bx b-slate" x="50" y="156" width="440" height="60" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="tc" x="66" y="180">expr("counter &lt; 10")</text>
+<text class="ts" x="66" y="200">全文 Python eval —— 只能用于开发者手写的表达式（见下方警告）</text>
+<rect class="bx b-slate" x="50" y="226" width="440" height="60" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="tc" x="66" y="250">safe_expr("counter &lt; 10")</text>
+<text class="ts" x="66" y="270">白名单 AST 校验 + 直接解释执行，无 eval —— 可用于不可信输入</text>
+<rect class="bx b-slate" x="50" y="296" width="440" height="60" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="tc" x="66" y="320">lmda(lambda state: state["x"] &gt; 3)</text>
+<text class="ts" x="66" y="340">任意 Python 回调，最强表达力，name 显示为 "&lt;lambda&gt;"</text>
+<text class="tc" x="66" y="384">default = Condition([], lambda _: True, name="default")</text>
+<text class="ts" x="66" y="404">恒真兜底；同源节点只允许一条 default（graph.py:72-78）</text>
+<rect class="bx b-purple" x="540" y="40" width="490" height="170" rx="12" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="tt" x="560" y="68">组合算子（返回新 Condition）</text>
+<text class="tc" x="560" y="96">a | b  → OR（:1007）   a &amp; b → AND（:1028）</text>
+<text class="tc" x="560" y="116">~a     → 取反（:1055）</text>
+<text class="ts" x="560" y="142">reads 取两侧并集，name 形如 "(a | b)"；</text>
+<text class="ts" x="560" y="160">从而可以用 when(...) | when(...) 拼出复杂路由，</text>
+<text class="ts" x="560" y="178">而图引擎对组合一无所知——它只认 PROCEED 布尔。</text>
+<rect class="bx b-green" x="540" y="230" width="490" height="200" rx="12" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tt" x="560" y="258">运行时求值路径</text>
+<text class="tc" x="560" y="286">Graph.get_next_node(prior_step, state, entrypoint)</text>
+<text class="tc" x="572" y="308">for (next_action, condition) in adjacency[prior]:</text>
+<text class="tc" x="572" y="326">    if condition.run(state)[Condition.KEY]: return …</text>
+<text class="ts" x="560" y="354">顺序 = with_transitions 的声明顺序，first-match-wins；</text>
+<text class="ts" x="560" y="372">全不满足 → 返回 None → 视为终点（应用停止）；</text>
+<text class="ts" x="560" y="396">条件里访问不存在的键会直接 KeyError ——</text>
+<text class="ts" x="560" y="414">所以 expr/when 的变量名必须由上游 writes 或初始 state 提供。</text>
+</svg>
+<figcaption><b>图 3-3 · Conditions 体系</b> —— 四种构造器 × 三种组合算子，产出统一为「读若干键 → 布尔」的 Condition；图引擎只按声明顺序做短路判断。</figcaption>
+</figure>
+
+<div class="warn"><b>expr() 的安全边界（源码 docstring 原文强调，action.py:737-753）：</b><code>expr</code> 内部是 <code>eval(compile(tree,...), None, state.get_all())</code>。传给 eval 的 <code>globals=None</code> <b>不是沙箱</b>——CPython 会自动注入 <code>__builtins__</code>，攻击者可控的表达式字符串等价于任意代码执行（如 <code>__import__("os").system(...)</code>）。接收用户/外部来源的表达式必须用 <code>safe_expr</code>。</div>
+
+<h2>3.6 safe_expr：白名单 AST 解释器</h2>
+<figure>
+<svg viewBox="0 0 1060 540" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker><marker id="arr4r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#dc2626"/></marker></defs>
+<rect class="bx b-blue-d" x="40" y="40" width="240" height="90" rx="10" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="60" y="66" font-weight="700">表达式字符串</text>
+<text class="tc" x="60" y="92">"counter &lt; 10 and"</text>
+<text class="tc" x="60" y="110">" mode in ['a','b']"</text>
+<rect class="bx b-green" x="40" y="180" width="240" height="120" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="60" y="206" font-weight="700">① ast.parse(mode="eval")</text>
+<text class="ts" x="60" y="230">先解析成 AST ——</text>
+<text class="ts" x="60" y="250">语法不合法在此即报错</text>
+<text class="tc" x="60" y="278">（safe_expr :787-830）</text>
+<rect class="bx b-amber" x="360" y="140" width="330" height="300" rx="12" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="tt" x="380" y="168">② _SafeExprValidator（:435-541）</text>
+<text class="ts" x="380" y="190">NodeVisitor 全节点白名单检查：</text>
+<text class="tc" x="380" y="216">✔ 常量: int/float/str/bool/None</text>
+<text class="tc" x="380" y="236">✔ Name(只读) / Attribute / Subscript / Slice</text>
+<text class="tc" x="380" y="256">✔ Compare == != &lt; &gt; &lt;= &gt;= in is</text>
+<text class="tc" x="380" y="276">✔ BoolOp and/or · Unary not,-,+</text>
+<text class="tc" x="380" y="296">✔ BinOp + - * / // % **</text>
+<text class="tc" x="380" y="316">✔ 字面量 tuple/list/set/dict</text>
+<text class="tc" x="380" y="340">✔ Call 仅限裸名白名单: len abs min max</text>
+<text class="tc" x="380" y="358">   sum all any str int float bool</text>
+<text class="tc" x="380" y="384">✘ dunder 属性 → 拒（堵 __class__ 逃逸）</text>
+<text class="tc" x="380" y="404">✘ 间接调用/花式调用 → 拒</text>
+<text class="tc" x="380" y="424">✘ generic_visit 未列节点 → 一律拒</text>
+<rect class="bx b-green" x="770" y="180" width="260" height="140" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="790" y="206" font-weight="700">③ _SafeExprInterpreter</text>
+<text class="ts" x="790" y="230">直接递归解释 AST（:544-570+）</text>
+<text class="ts" x="790" y="252">eval() 全程未被调用；</text>
+<text class="ts" x="790" y="272">Name 先查白名单内建，</text>
+<text class="ts" x="790" y="292">否则查 state.get_all()</text>
+<rect class="bx b-red" x="770" y="360" width="260" height="100" rx="10" style="fill:#fef2f2" style="stroke:#ef4444"/>
+<text class="t" x="790" y="386" font-weight="700" style="fill:#7f1d1d">被拒绝的例子</text>
+<text class="tc" x="790" y="410">().__class__.__bases__  ✘ dunder</text>
+<text class="tc" x="790" y="430">open("/etc/passwd")     ✘ 非白名单函数</text>
+<text class="tc" x="790" y="450">[x for x in y]          ✘ 节点未列（推导式）</text>
+<path class="ar-b" d="M160 130 L160 178" marker-end="url(#arr4)"/>
+<path class="ar-b" d="M280 240 L358 240" marker-end="url(#arr4)"/>
+<path class="ar-b" d="M690 240 L768 240" marker-end="url(#arr4)"/>
+<path class="ar" d="M690 330 L768 395" marker-end="url(#arr4r)" style="stroke:#dc2626"/>
+<text class="lbl" x="640" y="368" style="fill:#dc2626">任一违规 → 构造期即 ValueError</text>
+</svg>
+<figcaption><b>图 3-4 · safe_expr 两段式安全管线</b> —— 校验发生在 <code>safe_expr()</code> 调用时（构建期），被拒的表达式永远进不了运行时；解释器只处理校验通过的节点子集，全程无 eval。</figcaption>
+</figure>
+
+<h2>3.7 流式动作与 StreamingResultContainer</h2>
+<p>流式的核心是一个极简的<b>生成器协议</b>：中间产物 <code>yield (dict, None)</code>，最终产物带状态更新 <code>yield (dict, State)</code>。引擎收到 <code>state is None</code> 就继续流出；收到非 None 就认为该步结束并提交状态。</p>
+<div class="grid c2">
+<div class="card">
+<h3>@streaming_action 的目标形态</h3>
+<pre><code><span class="c-dec">@streaming_action</span>(reads=[<span class="c-str">"prompt"</span>], writes=[<span class="c-str">"response"</span>])
+<span class="c-key">def</span> <span class="c-fn">streaming_response</span>(state, **kw):
+    resp = client.chat.completions.create(..., stream=<span class="c-key">True</span>)
+    buffer = []
+    <span class="c-key">for</span> chunk <span class="c-key">in</span> resp:
+        delta = chunk.choices[0].delta.content
+        buffer.append(delta)
+        <span class="c-key">yield</span> {<span class="c-str">"response"</span>: delta}   <span class="c-com"># 中间：裸 dict 会被</span>
+                                       <span class="c-com"># 规范化为 (dict, None)</span>
+    full = <span class="c-str">""</span>.join(buffer)
+    <span class="c-key">return</span> {<span class="c-str">"response"</span>: full}, \
+           state.update(response=full) <span class="c-com"># 终态：带 State</span></code></pre>
+<p style="font-size:12.5px;color:var(--muted)">若生成器直到结束都没有产出带 State 的终态，引擎会报错（application.py:323-460 的校验逻辑）。</p>
+</div>
+<div class="card">
+<h3>容器的两个职责</h3>
+<p><code>StreamingResultContainer</code>（<span class="path">action.py:1420</span>）：</p>
+<ol>
+<li><b>迭代</b>：<code>__next__</code> 转发内部生成器；一旦某个 item 的 state 非 None，立即用 <code>process_result</code>（引擎注入的闭包：盖 <code>__PRIOR_STEP</code> 时间戳、提交 <code>_set_state</code>）缓存终值并 <code>StopIteration</code>。</li>
+<li><b>保证回调恰好一次</b>：<code>__iter__</code> 的 <code>finally</code>（<span class="path">action.py:1506-1512</span>）无论正常耗尽、提前 break 还是中途异常，都保证执行一次 <code>callback</code>——它负责触发 <code>post_run_step</code>、<code>post_end_stream</code> 钩子。这就是「流式中断也不丢状态、不漏钩子」的机制保证。</li>
+</ol>
+<p><code>.get()</code> = 排空迭代器后返回缓存的 <code>(result, state)</code>。</p>
+</div>
+</div>
+<figure>
+<svg viewBox="0 0 1060 420" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<text class="tt" x="40" y="40">时间线：一次 stream_result 的产出序列</text>
+<rect class="bx b-slate" x="40" y="70" width="130" height="50" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="ts" x="52" y="92">pre_run_step 钩子</text><text class="ts" x="52" y="108">(stream 前触发)</text>
+<rect class="bx b-purple" x="200" y="70" width="120" height="50" rx="8" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="ts" x="212" y="92">pre_start_stream</text><text class="ts" x="212" y="108">钩子</text>
+<rect class="bx b-green" x="350" y="70" width="90" height="50" rx="8" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="ts" x="360" y="92">yieldchunk1</text><text class="ts" x="360" y="108">(dict,None)</text>
+<rect class="bx b-green" x="450" y="70" width="90" height="50" rx="8" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="ts" x="460" y="92">yieldchunk2</text><text class="ts" x="460" y="108">(dict,None)</text>
+<rect class="bx b-green" x="550" y="70" width="90" height="50" rx="8" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="ts" x="560" y="92">post_stream_item 钩子 ×N（首块必发，client.py 只记首个）</text>
+<rect class="bx b-amber" x="660" y="70" width="130" height="50" rx="8" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="ts" x="672" y="92">yield (dict, State)</text><text class="ts" x="672" y="108">→ process_result 提交</text>
+<rect class="bx b-red" x="820" y="70" width="200" height="50" rx="8" style="fill:#fef2f2" style="stroke:#ef4444"/>
+<text class="ts" x="832" y="92">finally：post_run_step + post_end_stream 钩子</text><text class="ts" x="832" y="108">（异常/中断也保证执行一次）</text>
+<path class="ar" d="M170 95 L198 95" marker-end="url(#arr5)"/><path class="ar" d="M320 95 L348 95" marker-end="url(#arr5)"/>
+<path class="ar" d="M440 95 L448 95" marker-end="url(#arr5)"/><path class="ar" d="M540 95 L548 95" marker-end="url(#arr5)"/>
+<path class="ar" d="M640 95 L658 95" marker-end="url(#arr5)"/><path class="ar" d="M790 95 L818 95" marker-end="url(#arr5)"/>
+<rect class="bx b-blue" x="40" y="170" width="480" height="200" rx="10" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="t" x="60" y="198" font-weight="700">用户侧代码（同步版）</text>
+<text class="tc" x="60" y="226">action, sres = app.stream_result(halt_after=[<span class="c-str">"respond"</span>])</text>
+<text class="tc" x="60" y="250"><span class="c-key">for</span> item <span class="c-key">in</span> sres:            <span class="c-com"># 逐块流出</span></text>
+<text class="tc" x="72" y="270">print(item[<span class="c-str">"response"</span>], end=<span class="c-str">""</span>)</text>
+<text class="tc" x="60" y="296">result, state = sres.get()   <span class="c-com"># 排空并取终值+终态</span></text>
+<text class="ts" x="60" y="330">halt_before 命中时返回 pass_through 空容器</text>
+<text class="ts" x="60" y="348">（application.py:1524——统一流式/非流式 API）</text>
+<rect class="bx b-blue" x="540" y="170" width="480" height="200" rx="10" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="t" x="560" y="198" font-weight="700">fast-forward 语义</text>
+<text class="ts" x="560" y="226">若下一个 action 不是 halt_after 目标，</text>
+<text class="ts" x="560" y="244">stream_result 内部先 run(halt_before=...) 快进，</text>
+<text class="ts" x="560" y="262">抵达目标后再流（application.py:1512-1526）。</text>
+<text class="ts" x="560" y="290">目标 action 不是流式动作？走 _step 一次 + </text>
+<text class="ts" x="560" y="308">pass_through 包装（:1573-1591），API 保持一致。</text>
+</svg>
+<figcaption><b>图 3-5 · 流式执行时间线与容器契约</b> —— 钩子穿插在每个阶段；容器的 <code>finally</code> 兜底保证「终态提交 + 结束钩子」的恰好一次语义。</figcaption>
+</figure>
+
+<div class="tip"><b>本篇要点：</b>① Action = Function（reads/run）+ Reducer（writes/update）；② 装饰器零魔法——动作属性挂在原函数上，bind 做部分应用；③ 条件是只读 Function，返回 PROCEED 布尔，expr 有任意执行风险、不可信输入用 safe_expr；④ 流式协议 = 「(dict, None)…(dict, State)」生成器，容器保证状态提交与钩子的恰好一次。</div>
+
+<div class="pager"><a href="02-core-state.html">← 02 State</a><a href="04-core-application.html">下一篇：04 运行时核心 →</a></div>
+</main>
+<footer class="foot">Apache Burr 源码学习笔记 · 03 Action 体系 · 基于 v0.42.0</footer>
+</body>
+</html>

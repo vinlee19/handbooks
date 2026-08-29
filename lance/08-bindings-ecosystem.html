@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>08 · 多语言绑定与生态系统</title>
+<style>
+  :root{--bg:#f7f8fb;--card:#fff;--ink:#1a2233;--muted:#5b6472;--accent:#3b5bdb;--accent2:#7048e8;--teal:#0ca678;--orange:#e8590c;--red:#e03131;--line:#dde3ee;--code-bg:#f1f3f9}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.78}
+  header{background:linear-gradient(135deg,#5c3c92,#9c36b5 55%,#d6336c);color:#fff;padding:44px 8% 36px}
+  header h1{font-size:28px}header p{opacity:.95;font-size:15px;max-width:920px;margin-top:8px}
+  nav.top{background:#101832;padding:10px 8%;font-size:13.5px}
+  nav.top a{color:#9db8ff;text-decoration:none;margin-right:18px}
+  nav.top a.cur{color:#fff;font-weight:700}
+  main{max-width:1150px;margin:0 auto;padding:34px 4% 90px}
+  h2{font-size:23px;margin:42px 0 14px;padding-left:14px;border-left:5px solid #9c36b5}
+  h3{font-size:18px;margin:26px 0 10px;color:#862e9c}
+  p{margin:10px 0}.lead{color:var(--muted);font-size:15.5px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px 26px;margin:16px 0;box-shadow:0 1px 3px rgba(30,42,90,.05)}
+  code{font-family:"SF Mono",Menlo,Consolas,monospace;background:var(--code-bg);border-radius:5px;padding:1px 7px;font-size:.92em;color:#0b3a8f}
+  pre{background:#0f1730;color:#dbe4ff;border-radius:10px;padding:16px 20px;overflow-x:auto;font-size:13px;line-height:1.6;margin:14px 0}
+  pre .c{color:#7d8bb0}.k{color:#82aaff}.s{color:#c3e88d}.t2{color:#ffcb6b}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th{background:#f8f0fc;color:#862e9c;text-align:left;padding:8px 12px;border:1px solid var(--line)}
+  td{padding:7px 12px;border:1px solid var(--line);vertical-align:top}
+  .svgwrap{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin:20px 0;overflow-x:auto}
+  .svgwrap .cap{text-align:center;color:var(--muted);font-size:13px;margin-top:8px}
+  .note{border-left:4px solid var(--orange);background:#fff4ec;border-radius:0 8px 8px 0;padding:11px 16px;margin:13px 0;font-size:14px}
+  .tip{border-left:4px solid var(--teal);background:#e9faf3;border-radius:0 8px 8px 0;padding:11px 16px;margin:13px 0;font-size:14px}
+  svg text{font-family:-apple-system,PingFang SC,sans-serif}
+</style>
+</head>
+<body>
+<header>
+  <h1>08 · 多语言绑定与生态系统</h1>
+  <p>Rust 内核之上：Python（PyO3/maturin，pandas/NumPy/Polars/Delta 互操作）、Java（JNI）、DataFusion SQL、Namespace/Catalog、对象存储 provider 矩阵、Session 缓存体系。理解"内核如何被世界使用"。</p>
+</header>
+<nav class="top">
+  <a href="index.html">总览</a><a href="01-physical-layout.html">01 物理布局</a><a href="02-encoding.html">02 编码体系</a><a href="03-read-path.html">03 读路径</a><a href="04-write-path.html">04 写路径与提交</a><a href="05-vector-index.html">05 向量索引</a><a href="06-scalar-index.html">06 标量索引/FTS</a><a href="07-linalg-simd.html">07 SIMD</a><a class="cur" href="08-bindings-ecosystem.html">08 生态</a>
+</nav>
+<main>
+
+<h2>1. 绑定栈的物理架构</h2>
+<div class="svgwrap">
+<svg viewBox="0 0 1080 480" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 8-1 · Python / Java 绑定物理架构</text>
+  <g font-size="12">
+    <rect x="40" y="50" width="480" height="120" rx="10" fill="#eef2ff" stroke="#3b5bdb"/>
+    <text x="280" y="76" text-anchor="middle" font-weight="700" fill="#243b8a">用户层（Python）</text>
+    <text x="60" y="102">import lance  →  python/python/lance/dataset.py 等纯 Python 门面</text>
+    <text x="60" y="126" font-size="11.5" fill="#5b6472">pandas / NumPy / Polars / HuggingFace / pyarrow 适配层（arrow.py 等）</text>
+    <text x="60" y="152" font-size="11.5" fill="#5b6472">AsyncDataset（asyncio 桥）· ML 生态集成（HF datasets / ray）</text>
+
+    <rect x="560" y="50" width="480" height="120" rx="10" fill="#f3ecff" stroke="#7048e8"/>
+    <text x="800" y="76" text-anchor="middle" font-weight="700" fill="#4c1d95">用户层（Java）</text>
+    <text x="580" y="102">java/ 下 Maven 工程：公开 API + spotless 规范</text>
+    <text x="580" y="126" font-size="11.5" fill="#5b6472">JNI → rust/core/lance-jni（workspace 外独立编译）</text>
+    <text x="580" y="152" font-size="11.5" fill="#5b6472">Spark/Flink 连接器构建其上（企业生态）</text>
+
+    <rect x="40" y="210" width="480" height="150" rx="10" fill="#fff4ec" stroke="#e8590c"/>
+    <text x="280" y="236" text-anchor="middle" font-weight="700" fill="#a34700">FFI 边界：python/src/*.rs（PyO3）</text>
+    <text x="60" y="262" font-size="11.5" font-family="Menlo,monospace">lib.rs → 注册：dataset.rs / scanner.rs / fragment.rs</text>
+    <text x="60" y="286" font-size="11.5" font-family="Menlo,monospace">indices.rs / fts.rs / blob.rs / reader.rs / file.rs</text>
+    <text x="60" y="310" font-size="11.5" fill="#5b6472"># [pyclass] DatasetBase / MergeInsertBuilder / Scanner…</text>
+    <text x="60" y="332" font-size="11.5" fill="#5b6472">GIL 释放点：耗时的 Rust future 用 pyo3_asyncio 回调</text>
+    <text x="60" y="352" font-size="11.5" fill="#c92a2a">Arrow 经 FFI（ArrowArrayStream ABI）零拷贝过界</text>
+
+    <rect x="560" y="210" width="480" height="150" rx="10" fill="#e7f7f1" stroke="#0ca678"/>
+    <text x="800" y="236" text-anchor="middle" font-weight="700" fill="#087f5b">内核（rust workspace，前面 7 篇的全部内容）</text>
+    <text x="580" y="264" font-family="Menlo,monospace" font-size="11.5">lance::Dataset → lance-table → lance-file → lance-encoding</text>
+    <text x="580" y="288" font-family="Menlo,monospace" font-size="11.5">→ lance-io → object_store（S3/Azure/GCS/OSS/TOS…）</text>
+    <text x="580" y="316" font-size="11.5" fill="#5b6472">Session 级缓存跨语言共享（index_cache/metadata_cache）</text>
+    <text x="580" y="340" font-size="11.5" fill="#5b6472">tokio 运行时由 rust 侧持有；绑定只提交 future</text>
+
+    <line x1="280" y1="170" x2="280" y2="206" stroke="#5b6472" stroke-width="1.8"/>
+    <line x1="800" y1="170" x2="800" y2="206" stroke="#5b6472" stroke-width="1.8"/>
+  </g>
+</svg>
+<div class="cap">图 8-1 · 绑定架构。设计原则：Python/Java 侧尽量薄——复杂逻辑（merge insert 的执行策略、扫描计划）全部在 Rust，绑定只做类型转换与生命周期桥接。</div>
+</div>
+
+<div class="card">
+<h3 style="margin-top:0">PyO3 边界的关键设计</h3>
+<table>
+<tr><th>机制</th><th>说明</th></tr>
+<tr><td>Arrow FFI（C 数据接口）</td><td>RecordBatch 通过 <code>ArrowArrayStream</code> ABI 直通，Python 侧 <code>pyarrow.record_batch()</code> 零拷贝包装——没有逐行/逐列转换</td></tr>
+<tr><td><code># [pyclass]</code> 薄包装</td><td><code>DatasetBase</code> 直接持有 <code>Arc&lt;lance::Dataset&gt;</code>；Scanner/Fragment/MergeInsertBuilder 同理。Rust 生命周期由 pyo3 引用计数托管</td></tr>
+<tr><td>async 桥接</td><td>AsyncDataset 把 tokio future 包装为 Python awaitable；同步版内部 <code>block_on</code>。执行线程池在 Rust 侧，避免 GIL 干扰</td></tr>
+<tr><td>构建</td><td><code>maturin develop --release</code>（Cargo.toml 在 python/，被 workspace exclude，独立 versioning）</td></tr>
+</table>
+</div>
+
+<h2>2. DataFusion 集成：把 Lance 当作原生表源</h2>
+<div class="svgwrap">
+<svg viewBox="0 0 1080 300" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 8-2 · SQL 语句的旅程（DataFusion + Lance 优化器协同）</text>
+  <g font-size="12">
+    <rect x="60" y="52" width="220" height="60" rx="8" fill="#eef2ff" stroke="#3b5bdb"/>
+    <text x="170" y="78" text-anchor="middle" font-weight="700" fill="#243b8a">SQL → 逻辑计划</text>
+    <text x="75" y="100" font-size="11.5" fill="#5b6472">datafusion DataFusion::sql</text>
+    <rect x="340" y="52" width="220" height="60" rx="8" fill="#f3ecff" stroke="#7048e8"/>
+    <text x="450" y="78" text-anchor="middle" font-weight="700" fill="#4c1d95">Lance 优化规则</text>
+    <text x="355" y="100" font-size="11.5" fill="#5b6472">io/exec/optimizer.rs</text>
+    <rect x="620" y="52" width="220" height="60" rx="8" fill="#e7f7f1" stroke="#0ca678"/>
+    <text x="730" y="78" text-anchor="middle" font-weight="700" fill="#087f5b">物理计划</text>
+    <text x="635" y="100" font-size="11.5" fill="#5b6472">LanceScanExec/ANN*/Filter…</text>
+    <rect x="900" y="52" width="140" height="60" rx="8" fill="#fff4ec" stroke="#e8590c"/>
+    <text x="970" y="78" text-anchor="middle" font-weight="700" fill="#a34700">执行</text>
+    <text x="915" y="100" font-size="11.5" fill="#5b6472">03 篇流水线</text>
+    <line x1="280" y1="82" x2="336" y2="82" stroke="#5b6472" stroke-width="1.6"/>
+    <line x1="560" y1="82" x2="616" y2="82" stroke="#5b6472" stroke-width="1.6"/>
+    <line x1="840" y1="82" x2="896" y2="82" stroke="#5b6472" stroke-width="1.6"/>
+
+    <rect x="60" y="150" width="980" height="110" rx="8" fill="#0f1730"/>
+    <text x="80" y="176" fill="#9db8ff" font-weight="700" font-size="12.5">Lance 注入的自定义规则示例（含 UDF 桥 lance-datafusion/src/udf）</text>
+    <text x="80" y="202" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">· scan 级谓词/投影下推 · 索引替换(Filter→ScalarIndexExec+掩码) · count(*) → CountFromMaskExec</text>
+    <text x="80" y="228" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">· limit 下推 · ANN 算子重写(order by vec↔query → KNN) · FTS match() 表值函数</text>
+    <text x="80" y="250" fill="#7d8bb0" font-size="11">另外：lance-namespace-datafusion 提供"目录即 schema"的 catalog provider，SQL 里直接查到注册在 Namespace 的表。</text>
+  </g>
+</svg>
+<div class="cap">图 8-2 · DataFusion 集成。Python 的 <code>dataset.to_lance(df)</code> / <code>Scanner.to_df()</code> 都走这条路。</div>
+</div>
+
+<h2>3. Session 与缓存体系</h2>
+<div class="card">
+<p>跨查询共享的运行时状态集中在 <code>lance::Session</code>（session.rs）：</p>
+<table>
+<tr><th>缓存</th><th>内容</th><th>默认策略</th></tr>
+<tr><td>index cache</td><td>IVF 质心、HNSW 图页、标量索引页</td><td>条目数或字节上限（<code>index_cache_size_bytes</code>）</td></tr>
+<tr><td>metadata cache</td><td>manifest、文件 footer、列元数据</td><td><code>metadata_cache_size_bytes</code></td></tr>
+<tr><td>fragment/file session</td><td>FragmentSession（dataset/fragment/session.rs）绑定 open 文件句柄与 footer 缓存</td><td>随 Dataset 生命周期</td></tr>
+<tr><td>I/O scheduler 池</td><td>每 ObjectStore 一个 ScanScheduler（03 篇）</td><td>io_parallelism 深度</td></tr>
+</table>
+<p style="font-size:13px;color:#5b6472">Python 侧 <code>lance.Session(index_cache_size_bytes=…)</code> 可注入多个 Dataset 共享——多表 RAG 场景的关键调优点。缓存按 ObjectStore 维度隔离，避免跨 bucket 污染。</p>
+</div>
+
+<h2>4. 对象存储 provider 矩阵与 Namespace/Catalog</h2>
+<div class="svgwrap">
+<svg viewBox="0 0 1080 320" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 8-3 · 存储与目录生态</text>
+  <g font-size="12">
+    <rect x="50" y="50" width="480" height="240" rx="10" fill="#e7f7f1" stroke="#0ca678"/>
+    <text x="290" y="76" text-anchor="middle" font-weight="700" fill="#087f5b">lance-io/src/object_store/providers/</text>
+    <g font-size="11.5">
+      <rect x="70" y="92" width="90" height="28" rx="6" fill="#fff" stroke="#0ca678"/><text x="115" y="110" text-anchor="middle">aws (S3)</text>
+      <rect x="170" y="92" width="90" height="28" rx="6" fill="#fff" stroke="#0ca678"/><text x="215" y="110" text-anchor="middle">azure</text>
+      <rect x="270" y="92" width="90" height="28" rx="6" fill="#fff" stroke="#0ca678"/><text x="315" y="110" text-anchor="middle">gcp</text>
+      <rect x="370" y="92" width="80" height="28" rx="6" fill="#fff" stroke="#0ca678"/><text x="410" y="110" text-anchor="middle">oss</text>
+      <rect x="70" y="130" width="90" height="28" rx="6" fill="#fff" stroke="#0ca678"/><text x="115" y="148" text-anchor="middle">tos</text>
+      <rect x="170" y="130" width="90" height="28" rx="6" fill="#fff" stroke="#0ca678"/><text x="215" y="148" text-anchor="middle">tencent</text>
+      <rect x="270" y="130" width="90" height="28" rx="6" fill="#fff" stroke="#0ca678"/><text x="315" y="148" text-anchor="middle">huggingface</text>
+      <rect x="370" y="130" width="80" height="28" rx="6" fill="#fff" stroke="#0ca678"/><text x="410" y="148" text-anchor="middle">goosefs</text>
+      <rect x="70" y="168" width="90" height="28" rx="6" fill="#fff" stroke="#0ca678"/><text x="115" y="186" text-anchor="middle">local</text>
+      <rect x="170" y="168" width="90" height="28" rx="6" fill="#fff" stroke="#0ca678"/><text x="215" y="186" text-anchor="middle">memory</text>
+      <rect x="270" y="168" width="180" height="28" rx="6" fill="#fff" stroke="#0ca678"/><text x="360" y="186" text-anchor="middle">shared_memory (测试)</text>
+    </g>
+    <text x="70" y="228" font-size="11.5" fill="#087f5b">· StorageOptions 键名规范化（LanceConfigKey）</text>
+    <text x="70" y="250" font-size="11.5" fill="#087f5b">· WrappingObjectStore：审计/限流/重试的装饰器钩子</text>
+    <text x="70" y="272" font-size="11.5" fill="#087f5b">· io_uring 支持本地直读（src/uring/）</text>
+
+    <rect x="570" y="50" width="470" height="240" rx="10" fill="#f3ecff" stroke="#7048e8"/>
+    <text x="805" y="76" text-anchor="middle" font-weight="700" fill="#4c1d95">Namespace / Catalog（表发现层）</text>
+    <text x="590" y="104">lance-namespace：trait 定义（tables 注册/定位）</text>
+    <text x="590" y="130" font-size="11.5" fill="#5b6472">lance-namespace-impls：Dir / REST 实现</text>
+    <text x="590" y="156" font-size="11.5" fill="#5b6472">REST 客户端走 reqwest（可对接企业 catalog 服务）</text>
+    <text x="590" y="186">ExternalManifestStore（DynamoDB）：</text>
+    <text x="605" y="208" font-size="11.5" fill="#5b6472">把"最新版本指针"外置 ⇒ 强一致提交（04 篇图 4-3）</text>
+    <text x="590" y="238" font-size="11.5" fill="#087f5b">标记文件：.lance-reserved / .lance-deregistered</text>
+    <text x="605" y="258" font-size="11.5" fill="#8a93a6">（dataset.rs:4189，防止并发注册/注销竞态）</text>
+  </g>
+</svg>
+<div class="cap">图 8-3 · provider 与目录。所有 provider 实现 object_store crate 的统一 trait ⇒ 上层代码零感知。</div>
+</div>
+
+<h2>5. 测试与质量基建（学习源码的第二条路径）</h2>
+<div class="card">
+<table>
+<tr><th>设施</th><th>位置</th><th>作用</th></tr>
+<tr><td>test_data/ 数据集</td><td>仓库根，配 datagen.py</td><td>老版本写的数据集入库，保证向后兼容读取（CLAUDE.md 的规定流程）</td></tr>
+<tr><td>lance-testing / lance-test-macros</td><td>rust/</td><td>公共测试工具、参数化宏</td></tr>
+<tr><td>integration tests</td><td>python/tests/test_s3_ddb.py + docker-compose</td><td>MinIO(S3)+DynamoDB 仿真，跑真实对象存储提交路径</td></tr>
+<tr><td>benchmarks/</td><td>python/benchmarks</td><td>KNN/扫描端到端基准（test_knn.py 等）</td></tr>
+<tr><td>memtest/</td><td>仓库根</td><td>内存占用回归</td></tr>
+<tr><td>testing.rs（各 crate）</td><td>如 lance-encoding/src/testing.rs（1572 行）</td><td>随机数据+随机读取模式，编码器/解码器 fuzz 式互验</td></tr>
+</table>
+<div class="tip" style="margin-top:14px"><b>给学习者的建议路线：</b>① 读 <code>protos/</code> 全部 proto（格式规范）→ ② 读 <code>docs/src/format/</code>（官方规范文档，比源码注释更系统）→ ③ 沿 03/04 篇的调用栈打 Rust 断点 → ④ 用 <code>lance-encoding/src/testing.rs</code> 的随机框架做实验 → ⑤ 改一行编码选择逻辑，diff 文件字节观察变化。这一套走完，你对 Lance 的理解会超过绝大多数贡献者。</div>
+</div>
+
+<h2>6. 全系列回顾：一张图收束所有知识</h2>
+<div class="svgwrap">
+<svg viewBox="0 0 1080 420" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="18" font-weight="700">图 8-4 · Lance 全景知识地图（九篇文档的索引）</text>
+  <g font-size="12">
+    <rect x="60" y="50" width="220" height="70" rx="9" fill="#eef2ff" stroke="#3b5bdb"/>
+    <text x="170" y="78" text-anchor="middle" font-weight="700" fill="#243b8a">00 总览（分层架构）</text>
+    <text x="170" y="100" text-anchor="middle" font-size="11" fill="#5b6472">26 crates · 依赖图 · 生命周期</text>
+    <rect x="60" y="140" width="220" height="70" rx="9" fill="#fff4ec" stroke="#e8590c"/>
+    <text x="170" y="168" text-anchor="middle" font-weight="700" fill="#a34700">01 物理布局</text>
+    <text x="170" y="190" text-anchor="middle" font-size="11" fill="#5b6472">目录树 · 40B footer · Manifest ER</text>
+    <rect x="60" y="230" width="220" height="70" rx="9" fill="#fff4ec" stroke="#e8590c"/>
+    <text x="170" y="258" text-anchor="middle" font-weight="700" fill="#a34700">02 编码体系</text>
+    <text x="170" y="280" text-anchor="middle" font-size="11" fill="#5b6472">MiniBlock/FullZip/Sparse × 12 压缩</text>
+    <rect x="330" y="140" width="220" height="70" rx="9" fill="#e7f7f1" stroke="#0ca678"/>
+    <text x="440" y="168" text-anchor="middle" font-weight="700" fill="#087f5b">03 读路径</text>
+    <text x="440" y="190" text-anchor="middle" font-size="11" fill="#5b6472">Scanner → 执行计划 → 调度 → 解码</text>
+    <rect x="330" y="230" width="220" height="70" rx="9" fill="#f3ecff" stroke="#7048e8"/>
+    <text x="440" y="258" text-anchor="middle" font-weight="700" fill="#4c1d95">04 写路径与提交</text>
+    <text x="440" y="280" text-anchor="middle" font-size="11" fill="#5b6472">Transaction · 乐观并发 · 冲突矩阵</text>
+    <rect x="330" y="50" width="220" height="70" rx="9" fill="#e6fbf2" stroke="#0ca678"/>
+    <text x="440" y="78" text-anchor="middle" font-weight="700" fill="#087f5b">05 向量索引</text>
+    <text x="440" y="100" text-anchor="middle" font-size="11" fill="#5b6472">IVF/PQ/SQ/HNSW · 三级复合</text>
+    <rect x="600" y="50" width="220" height="70" rx="9" fill="#e6fbf2" stroke="#0ca678"/>
+    <text x="710" y="78" text-anchor="middle" font-weight="700" fill="#087f5b">06 标量索引/FTS</text>
+    <text x="710" y="100" text-anchor="middle" font-size="11" fill="#5b6472">BTree/Bitmap/ZoneMap/BM25/WAND</text>
+    <rect x="600" y="140" width="220" height="70" rx="9" fill="#e9ecff" stroke="#4c6ef5"/>
+    <text x="710" y="168" text-anchor="middle" font-weight="700" fill="#364fc7">07 SIMD 内核</text>
+    <text x="710" y="190" text-anchor="middle" font-size="11" fill="#5b6472">AVX2/512 · LUT · AMX · 残差修正</text>
+    <rect x="600" y="230" width="220" height="70" rx="9" fill="#f8f0fc" stroke="#9c36b5"/>
+    <text x="710" y="258" text-anchor="middle" font-weight="700" fill="#862e9c">08 绑定与生态</text>
+    <text x="710" y="280" text-anchor="middle" font-size="11" fill="#5b6472">PyO3/JNI · DataFusion · Session</text>
+    <rect x="880" y="140" width="160" height="160" rx="12" fill="#0f1730"/>
+    <text x="960" y="180" text-anchor="middle" fill="#9db8ff" font-weight="700" font-size="13">核心不变式</text>
+    <text x="960" y="206" text-anchor="middle" fill="#dbe4ff" font-size="10.5">数据文件不可变</text>
+    <text x="960" y="226" text-anchor="middle" fill="#dbe4ff" font-size="10.5">Manifest=唯一真相</text>
+    <text x="960" y="246" text-anchor="middle" fill="#dbe4ff" font-size="10.5">一切皆 Arrow</text>
+    <text x="960" y="266" text-anchor="middle" fill="#dbe4ff" font-size="10.5">row_addr 统一地址</text>
+    <line x1="280" y1="85" x2="326" y2="80" stroke="#5b6472" stroke-width="1.2"/>
+    <line x1="280" y1="175" x2="326" y2="175" stroke="#5b6472" stroke-width="1.2"/>
+    <line x1="280" y1="265" x2="326" y2="265" stroke="#5b6472" stroke-width="1.2"/>
+    <line x1="550" y1="85" x2="596" y2="85" stroke="#5b6472" stroke-width="1.2"/>
+    <line x1="550" y1="175" x2="596" y2="175" stroke="#5b6472" stroke-width="1.2"/>
+    <line x1="550" y1="265" x2="596" y2="265" stroke="#5b6472" stroke-width="1.2"/>
+    <line x1="820" y1="175" x2="876" y2="200" stroke="#5b6472" stroke-width="1.2" stroke-dasharray="4 3"/>
+    <line x1="820" y1="265" x2="876" y2="240" stroke="#5b6472" stroke-width="1.2" stroke-dasharray="4 3"/>
+  </g>
+</svg>
+<div class="cap">图 8-4 · 知识地图。四条不变式（右侧）是所有设计决策的公理。</div>
+</div>
+
+</main>
+<nav class="top" style="text-align:center">
+  <a href="07-linalg-simd.html">« 07 SIMD</a> · <a href="index.html">返回总览 »</a>
+</nav>
+</body>
+</html>

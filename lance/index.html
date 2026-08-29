@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lance 深度源码解析 · 00 总览与导航</title>
+<style>
+  :root{
+    --bg:#f7f8fb; --card:#ffffff; --ink:#1a2233; --muted:#5b6472;
+    --accent:#3b5bdb; --accent2:#7048e8; --teal:#0ca678; --orange:#e8590c; --red:#e03131;
+    --line:#dde3ee; --code-bg:#f1f3f9; --tag:#eef2ff;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.75}
+  header{background:linear-gradient(135deg,#1e2a5a 0%,#3b5bdb 55%,#7048e8 100%);color:#fff;padding:56px 8% 48px}
+  header h1{font-size:34px;letter-spacing:.5px;margin-bottom:10px}
+  header p{opacity:.92;font-size:16px;max-width:860px}
+  header .meta{margin-top:18px;font-size:13px;opacity:.85}
+  header .meta span{display:inline-block;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.25);border-radius:6px;padding:2px 10px;margin-right:8px}
+  main{max-width:1200px;margin:0 auto;padding:36px 4% 80px}
+  h2{font-size:24px;margin:44px 0 16px;padding-left:14px;border-left:5px solid var(--accent)}
+  h3{font-size:19px;margin:28px 0 12px;color:#243b8a}
+  p{margin:10px 0}
+  .lead{font-size:16px;color:var(--muted)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:24px 28px;margin:18px 0;box-shadow:0 1px 3px rgba(30,42,90,.06)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin:18px 0}
+  .stat{text-align:center;padding:18px 10px}
+  .stat .num{font-size:32px;font-weight:700;color:var(--accent)}
+  .stat .lab{font-size:13px;color:var(--muted)}
+  a.toc-card{display:block;background:var(--card);border:1px solid var(--line);border-left:6px solid var(--accent);border-radius:10px;padding:18px 22px;margin:14px 0;text-decoration:none;color:var(--ink);transition:.15s}
+  a.toc-card:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(59,91,219,.14)}
+  a.toc-card .no{display:inline-block;background:var(--tag);color:var(--accent);font-weight:700;border-radius:6px;padding:0 10px;margin-right:10px}
+  a.toc-card .t{font-size:18px;font-weight:700}
+  a.toc-card .d{color:var(--muted);font-size:14px;margin-top:6px}
+  code{font-family:"SF Mono",Menlo,Consolas,monospace;background:var(--code-bg);border-radius:5px;padding:1px 7px;font-size:.92em;color:#0b3a8f}
+  pre{background:#0f1730;color:#dbe4ff;border-radius:10px;padding:18px 22px;overflow-x:auto;font-size:13.5px;line-height:1.6;margin:14px 0}
+  pre code{background:none;color:inherit;padding:0}
+  .k{color:#82aaff}.s{color:#c3e88d}.c{color:#7d8bb0;font-style:italic}.t2{color:#ffcb6b}.f{color:#f78c6c}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th{background:#eef2ff;color:#243b8a;text-align:left;padding:9px 12px;border:1px solid var(--line)}
+  td{padding:8px 12px;border:1px solid var(--line);vertical-align:top}
+  .svgwrap{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;margin:20px 0;overflow-x:auto}
+  .svgwrap .cap{text-align:center;color:var(--muted);font-size:13.5px;margin-top:10px}
+  .note{border-left:4px solid var(--orange);background:#fff4ec;border-radius:0 8px 8px 0;padding:12px 18px;margin:14px 0;font-size:14.5px}
+  .tip{border-left:4px solid var(--teal);background:#e9faf3;border-radius:0 8px 8px 0;padding:12px 18px;margin:14px 0;font-size:14.5px}
+  .warn{border-left:4px solid var(--red);background:#fdeeee;border-radius:0 8px 8px 0;padding:12px 18px;margin:14px 0;font-size:14.5px}
+  .pill{display:inline-block;font-size:12px;border-radius:20px;padding:1px 12px;margin:2px 4px 2px 0;background:var(--tag);color:var(--accent);border:1px solid #c9d6ff}
+  footer{text-align:center;color:var(--muted);font-size:13px;padding:30px;border-top:1px solid var(--line)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Lance 深度源码解析 · 从 0 到 1 完全读懂</h1>
+  <p>基于 upstream/main（commit <code style="background:rgba(255,255,255,.15);color:#fff">108f78e92</code>，v12.0.0-beta.4）对 Lance 整个 Rust 工作区共 780 个源文件、约 71 万行代码的全量深读分析。本系列覆盖：物理存储格式、编码体系、读写路径、表格式与事务、向量/标量索引、SIMD 计算、多语言绑定。</p>
+  <div class="meta">
+    <span>Rust Workspace · 26 crates</span><span>Edition 2024</span><span>Async-first（tokio）</span><span>Arrow-native</span><span>DataFusion 集成</span>
+  </div>
+</header>
+<main>
+
+<h2>一、Lance 是什么：一句话与三张图</h2>
+<p class="lead">Lance 是一个为 <b>机器学习 / AI 工作负载</b>设计的开放湖仓格式（lakehouse format）：列式存储 + 零拷贝版本管理 + 原生向量/全文索引。它解决的核心矛盾是——传统格式（Parquet）为吞吐优化、行存数据库为点查优化，而 ML 场景<b>同时需要海量扫描、十亿级向量 ANN 检索、毫秒级随机访问、频繁追加与模式演进</b>。</p>
+
+<div class="card">
+<h3 style="margin-top:0">官方分层（docs/src/format/index.md 的架构观）</h3>
+<p>Lance 官方把格式定义为一组<b>互相解耦的规范层</b>，而不是单一文件格式。这是理解整个仓库的第一把钥匙：</p>
+<table>
+<tr><th>层</th><th>职责</th><th>主要源码位置</th></tr>
+<tr><td><b>File Format</b> 文件格式</td><td>列数据落盘：大 Page、无 RowGroup、结构化编码、随机访问优先</td><td><code>rust/lance-file</code>、<code>rust/lance-encoding</code></td></tr>
+<tr><td><b>Table Format</b> 表格式</td><td>Manifest/Fragment/删除文件、快照版本、ACID 提交、分支/标签</td><td><code>rust/lance-table</code>、<code>rust/lance/src/dataset</code></td></tr>
+<tr><td><b>Index Formats</b> 索引格式</td><td>向量（IVF/PQ/HNSW）、标量（BTree/Bitmap/Inverted）、系统索引</td><td><code>rust/lance-index</code>、<code>rust/lance-index-core</code></td></tr>
+<tr><td><b>Catalog / Namespace</b></td><td>目录型/REST 型目录服务，表发现与注册</td><td><code>rust/lance-namespace*</code></td></tr>
+</table>
+</div>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1060 560" font-family="-apple-system,PingFang SC,sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="none" stroke="#5b6472" stroke-width="1.4"/></marker>
+    <marker id="arrB" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="none" stroke="#3b5bdb" stroke-width="1.6"/></marker>
+  </defs>
+  <text x="530" y="30" text-anchor="middle" font-size="19" font-weight="700" fill="#1a2233">图 1 · Lance 存储栈物理架构总览（从用户 API 到磁盘字节）</text>
+
+  <!-- API layer -->
+  <rect x="60" y="55" width="940" height="74" rx="10" fill="#eef2ff" stroke="#3b5bdb"/>
+  <text x="80" y="83" font-size="13" fill="#3b5bdb" font-weight="700">API / 绑定层</text>
+  <rect x="80" y="92" width="130" height="26" rx="13" fill="#3b5bdb"/><text x="145" y="110" text-anchor="middle" font-size="12.5" fill="#fff">Rust lance crate</text>
+  <rect x="230" y="92" width="130" height="26" rx="13" fill="#7048e8"/><text x="295" y="110" text-anchor="middle" font-size="12.5" fill="#fff">Python (PyO3)</text>
+  <rect x="380" y="92" width="130" height="26" rx="13" fill="#7048e8"/><text x="445" y="110" text-anchor="middle" font-size="12.5" fill="#fff">Java (JNI)</text>
+  <rect x="530" y="92" width="200" height="26" rx="13" fill="#fff" stroke="#3b5bdb"/><text x="630" y="110" text-anchor="middle" font-size="12.5" fill="#3b5bdb">DataFusion SQL / DataFrame</text>
+  <rect x="750" y="92" width="230" height="26" rx="13" fill="#fff" stroke="#3b5bdb"/><text x="865" y="110" text-anchor="middle" font-size="12.5" fill="#3b5bdb">Namespace / Catalog (REST, Dir)</text>
+
+  <line x1="530" y1="129" x2="530" y2="158" stroke="#5b6472" stroke-width="1.6" marker-end="url(#arr)"/>
+
+  <!-- Engine layer -->
+  <rect x="60" y="160" width="940" height="150" rx="10" fill="#fff" stroke="#7048e8" stroke-width="1.6"/>
+  <text x="80" y="188" font-size="13" fill="#7048e8" font-weight="700">引擎层（rust/lance 主 crate）</text>
+  <rect x="80" y="198" width="205" height="92" rx="8" fill="#f3ecff" stroke="#7048e8"/>
+  <text x="182" y="222" text-anchor="middle" font-size="13.5" font-weight="700" fill="#4c1d95">dataset.rs / scanner.rs</text>
+  <text x="182" y="243" text-anchor="middle" font-size="12" fill="#5b6472">Dataset·Fragment·Scanner</text>
+  <text x="182" y="262" text-anchor="middle" font-size="12" fill="#5b6472">事务·版本·分支/标签</text>
+  <text x="182" y="281" text-anchor="middle" font-size="12" fill="#5b6472">Scanner≈16k 行（查询大脑）</text>
+  <rect x="305" y="198" width="205" height="92" rx="8" fill="#f3ecff" stroke="#7048e8"/>
+  <text x="407" y="222" text-anchor="middle" font-size="13.5" font-weight="700" fill="#4c1d95">dataset/write/*</text>
+  <text x="407" y="243" text-anchor="middle" font-size="12" fill="#5b6472">Insert / Delete / Update</text>
+  <text x="407" y="262" text-anchor="middle" font-size="12" fill="#5b6472">MergeInsert(14.5k 行)</text>
+  <text x="407" y="281" text-anchor="middle" font-size="12" fill="#5b6472">乐观并发提交</text>
+  <rect x="530" y="198" width="205" height="92" rx="8" fill="#f3ecff" stroke="#7048e8"/>
+  <text x="632" y="222" text-anchor="middle" font-size="13.5" font-weight="700" fill="#4c1d95">io/exec/*（执行计划）</text>
+  <text x="632" y="243" text-anchor="middle" font-size="12" fill="#5b6472">scan / take / filter</text>
+  <text x="632" y="262" text-anchor="middle" font-size="12" fill="#5b6472">knn（ANN 物理算子）</text>
+  <text x="632" y="281" text-anchor="middle" font-size="12" fill="#5b6472">scalar index pushdown</text>
+  <rect x="755" y="198" width="225" height="92" rx="8" fill="#f3ecff" stroke="#7048e8"/>
+  <text x="867" y="222" text-anchor="middle" font-size="13.5" font-weight="700" fill="#4c1d95">dataset/index·optimize</text>
+  <text x="867" y="243" text-anchor="middle" font-size="12" fill="#5b6472">索引生命周期·Compaction</text>
+  <text x="867" y="262" text-anchor="middle" font-size="12" fill="#5b6472">optimize.rs≈9.9k 行</text>
+  <text x="867" y="281" text-anchor="middle" font-size="12" fill="#5b6472">索引行地址重映射</text>
+
+  <line x1="530" y1="310" x2="530" y2="336" stroke="#5b6472" stroke-width="1.6" marker-end="url(#arr)"/>
+
+  <!-- Format layer -->
+  <rect x="60" y="338" width="940" height="120" rx="10" fill="#0f1730"/>
+  <text x="80" y="366" font-size="13" fill="#9db8ff" font-weight="700">格式层（self-describing，规范+实现）</text>
+  <rect x="80" y="378" width="290" height="62" rx="8" fill="#1c2a52" stroke="#3b5bdb"/>
+  <text x="225" y="401" text-anchor="middle" font-size="13" font-weight="700" fill="#dbe4ff">lance-table：表格式</text>
+  <text x="225" y="422" text-anchor="middle" font-size="11.5" fill="#9db8ff">Manifest·Fragment·Transaction·rowids</text>
+  <rect x="390" y="378" width="290" height="62" rx="8" fill="#1c2a52" stroke="#3b5bdb"/>
+  <text x="535" y="401" text-anchor="middle" font-size="13" font-weight="700" fill="#dbe4ff">lance-file：文件容器</text>
+  <text x="535" y="422" text-anchor="middle" font-size="11.5" fill="#9db8ff">v2.0/2.1/2.2/2.3 footer·structural reader/writer</text>
+  <rect x="700" y="378" width="280" height="62" rx="8" fill="#1c2a52" stroke="#3b5bdb"/>
+  <text x="840" y="401" text-anchor="middle" font-size="13" font-weight="700" fill="#dbe4ff">lance-encoding：列编码</text>
+  <text x="840" y="422" text-anchor="middle" font-size="11.5" fill="#9db8ff">MiniBlock/FullZip/Sparse·BitPack/FSST/RLE</text>
+
+  <line x1="530" y1="458" x2="530" y2="482" stroke="#5b6472" stroke-width="1.6" marker-end="url(#arr)"/>
+
+  <!-- Storage layer -->
+  <rect x="60" y="484" width="940" height="62" rx="10" fill="#e7f7f1" stroke="#0ca678"/>
+  <text x="80" y="510" font-size="13" fill="#0b7a5c" font-weight="700">存储抽象层 lance-io（统一 object_store）</text>
+  <rect x="430" y="494" width="120" height="30" rx="15" fill="#0ca678"/><text x="490" y="514" text-anchor="middle" font-size="12" fill="#fff">I/O 调度器</text>
+  <rect x="570" y="494" width="100" height="30" rx="6" fill="#fff" stroke="#0ca678"/><text x="620" y="514" text-anchor="middle" font-size="12" fill="#0b7a5c">S3</text>
+  <rect x="685" y="494" width="100" height="30" rx="6" fill="#fff" stroke="#0ca678"/><text x="735" y="514" text-anchor="middle" font-size="12" fill="#0b7a5c">Azure/GCS</text>
+  <rect x="800" y="494" width="90" height="30" rx="6" fill="#fff" stroke="#0ca678"/><text x="845" y="514" text-anchor="middle" font-size="12" fill="#0b7a5c">OSS/TOS</text>
+  <rect x="905" y="494" width="80" height="30" rx="6" fill="#fff" stroke="#0ca678"/><text x="945" y="514" text-anchor="middle" font-size="12" fill="#0b7a5c">本地</text>
+</svg>
+<div class="cap">图 1 · 四层物理架构：API 绑定层 → 引擎层 → 格式层 → 存储抽象层。上层只依赖下层的 trait 抽象。</div>
+</div>
+
+<h2>二、工作区物理结构：26 个 crate 的依赖全景</h2>
+<p>仓库是单一 Cargo workspace（<code>Cargo.toml</code>，版本统一 <code>12.0.0-beta.4</code>，edition 2024，MSRV 1.91）。Python（<code>python/</code>）与 Java（<code>java/lance-jni</code>）被 <code>exclude</code> 出 workspace、由 maturin/JNI 单独构建。核心 crate 的规模（本文实测）：</p>
+
+<table>
+<tr><th>crate</th><th>职责</th><th>关键文件（行数）</th></tr>
+<tr><td><code>lance-core</code></td><td>基础类型：Schema/Field、错误、缓存、容器、布隆过滤器</td><td><code>datatypes/field.rs</code>(2045)、<code>datatypes/schema.rs</code>(3163)</td></tr>
+<tr><td><code>lance-io</code></td><td>对象存储统一封装 + 异步 I/O 调度器（io_uring）</td><td><code>scheduler.rs</code>、<code>object_store/</code>（11 个 provider）</td></tr>
+<tr><td><code>lance-encoding</code></td><td>列编码框架（结构与压缩彻底解耦）</td><td><code>decoder.rs</code>(3571)、<code>repdef.rs</code>(3901)、<code>compression.rs</code>(2800)、<code>data.rs</code>(2898)</td></tr>
+<tr><td><code>lance-file</code></td><td>文件容器：v2.0–v2.3 footer、structural 读写器</td><td><code>versions/v2_0/writer.rs</code>(960)、<code>reader/structural.rs</code></td></tr>
+<tr><td><code>lance-table</code></td><td>表格式：Manifest、Fragment、Transaction、commit 协议</td><td><code>format/manifest.rs</code>(1751)、<code>format/fragment.rs</code>(1021)</td></tr>
+<tr><td><code>lance-index</code></td><td>全部索引实现（向量+标量+FTS）</td><td><code>vector/</code>（ivf·pq·hnsw·sq·bq·flat·graph·v3）</td></tr>
+<tr><td><code>lance-linalg</code></td><td>SIMD 向量运算（AVX2/AVX-512/NEON/AMX）</td><td><code>distance/l2.rs</code>、<code>simd/f32.rs</code>(1100+)</td></tr>
+<tr><td><code>lance</code></td><td>主 crate：Dataset/Scanner/执行计划/优化器胶水</td><td><code>dataset/scanner.rs</code>(16344)、<code>write/merge_insert.rs</code>(14537)、<code>optimize.rs</code>(9921)</td></tr>
+<tr><td><code>lance-datafusion</code></td><td>DataFusion 集成工具与 UDF</td><td><code>udf/</code>、<code>utils/</code></td></tr>
+<tr><td><code>compression/fsst</code> · <code>bitpacking</code></td><td>字符串 FSST 压缩、位打包（C 内核+Rust 封装）</td><td>C 源码内核，FFI 调用</td></tr>
+</table>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1100 640" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="550" y="28" text-anchor="middle" font-size="18" font-weight="700">图 2 · Crate 物理依赖图（箭头 = "依赖"），颜色 = 分层</text>
+  <defs>
+    <marker id="d" markerWidth="9" markerHeight="9" refX="7" refY="2.6" orient="auto"><path d="M0,0 L7,2.6 L0,5.2" fill="none" stroke="#8a93a6" stroke-width="1.3"/></marker>
+  </defs>
+  <!-- legend -->
+  <rect x="20" y="46" width="14" height="14" fill="#1e2a5a"/><text x="40" y="58" font-size="12">基础层</text>
+  <rect x="110" y="46" width="14" height="14" fill="#0b7285"/><text x="130" y="58" font-size="12">I/O 层</text>
+  <rect x="200" y="46" width="14" height="14" fill="#e8590c"/><text x="220" y="58" font-size="12">格式层</text>
+  <rect x="290" y="46" width="14" height="14" fill="#7048e8"/><text x="310" y="58" font-size="12">索引/计算层</text>
+  <rect x="420" y="46" width="14" height="14" fill="#c92a2a"/><text x="440" y="58" font-size="12">主 crate</text>
+
+  <!-- base -->
+  <rect x="30" y="540" width="180" height="46" rx="8" fill="#1e2a5a"/><text x="120" y="568" text-anchor="middle" fill="#fff" font-size="13.5" font-weight="700">lance-core</text>
+  <rect x="30" y="480" width="180" height="40" rx="8" fill="#fff" stroke="#1e2a5a" stroke-dasharray="4 3"/><text x="120" y="505" text-anchor="middle" font-size="12.5" fill="#1e2a5a">lance-derive（宏）</text>
+  <rect x="230" y="540" width="160" height="46" rx="8" fill="#1e2a5a" opacity=".8"/><text x="310" y="568" text-anchor="middle" fill="#fff" font-size="13">arrow（外部）</text>
+  <rect x="410" y="540" width="170" height="46" rx="8" fill="#1e2a5a" opacity=".8"/><text x="495" y="568" text-anchor="middle" fill="#fff" font-size="13">datafusion（外部）</text>
+  <rect x="600" y="540" width="150" height="46" rx="8" fill="#1e2a5a" opacity=".8"/><text x="675" y="568" text-anchor="middle" fill="#fff" font-size="13">tokio（外部）</text>
+
+  <!-- io -->
+  <rect x="30" y="410" width="180" height="46" rx="8" fill="#0b7285"/><text x="120" y="438" text-anchor="middle" fill="#fff" font-size="13.5" font-weight="700">lance-io</text>
+  <rect x="230" y="410" width="160" height="46" rx="8" fill="#fff" stroke="#0b7285"/><text x="310" y="438" text-anchor="middle" font-size="12.5" fill="#0b7285">lance-arrow</text>
+
+  <!-- format -->
+  <rect x="30" y="280" width="180" height="46" rx="8" fill="#e8590c"/><text x="120" y="308" text-anchor="middle" fill="#fff" font-size="13.5" font-weight="700">lance-table</text>
+  <rect x="230" y="280" width="160" height="46" rx="8" fill="#e8590c"/><text x="310" y="308" text-anchor="middle" fill="#fff" font-size="13.5" font-weight="700">lance-encoding</text>
+  <rect x="410" y="280" width="170" height="46" rx="8" fill="#e8590c"/><text x="495" y="308" text-anchor="middle" fill="#fff" font-size="13.5" font-weight="700">lance-file</text>
+  <rect x="600" y="280" width="150" height="46" rx="8" fill="#fff" stroke="#e8590c"/><text x="675" y="308" text-anchor="middle" font-size="12.5" fill="#e8590c">fsst / bitpacking</text>
+
+  <!-- index -->
+  <rect x="30" y="150" width="180" height="46" rx="8" fill="#7048e8"/><text x="120" y="178" text-anchor="middle" fill="#fff" font-size="13.5" font-weight="700">lance-index-core</text>
+  <rect x="230" y="150" width="160" height="46" rx="8" fill="#7048e8"/><text x="310" y="178" text-anchor="middle" fill="#fff" font-size="13.5" font-weight="700">lance-index</text>
+  <rect x="410" y="150" width="170" height="46" rx="8" fill="#7048e8" opacity=".85"/><text x="495" y="178" text-anchor="middle" fill="#fff" font-size="13">lance-linalg</text>
+  <rect x="600" y="150" width="150" height="46" rx="8" fill="#fff" stroke="#7048e8"/><text x="675" y="178" text-anchor="middle" font-size="12.5" fill="#7048e8">lance-tokenizer</text>
+  <rect x="770" y="150" width="140" height="46" rx="8" fill="#fff" stroke="#7048e8"/><text x="840" y="178" text-anchor="middle" font-size="12.5" fill="#7048e8">lance-select</text>
+
+  <!-- main -->
+  <rect x="150" y="30" width="240" height="56" rx="10" fill="#c92a2a"/><text x="270" y="54" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">lance（主 crate）</text>
+  <text x="270" y="74" text-anchor="middle" fill="#ffd9d9" font-size="11.5">Dataset · Scanner · 执行计划 · 事务提交</text>
+  <rect x="420" y="30" width="170" height="56" rx="10" fill="#fff" stroke="#c92a2a"/><text x="505" y="53" text-anchor="middle" font-size="13" fill="#c92a2a" font-weight="700">lance-datafusion</text>
+  <text x="505" y="72" text-anchor="middle" font-size="11.5" fill="#c92a2a">SQL/UDF 桥</text>
+  <rect x="620" y="30" width="180" height="56" rx="10" fill="#fff" stroke="#c92a2a" stroke-dasharray="5 3"/><text x="710" y="53" text-anchor="middle" font-size="13" fill="#c92a2a" font-weight="700">python / java-jni</text>
+  <text x="710" y="72" text-anchor="middle" font-size="11.5" fill="#c92a2a">workspace 外，FFI</text>
+
+  <!-- edges -->
+  <line x1="120" y1="480" x2="120" y2="536" stroke="#8a93a6" stroke-width="1.4" marker-end="url(#d)"/>
+  <line x1="120" y1="410" x2="120" y2="456" stroke="#8a93a6" stroke-width="1.4" marker-end="url(#d)"/>
+  <line x1="310" y1="410" x2="310" y2="536" stroke="#8a93a6" stroke-width="1.4" marker-end="url(#d)"/>
+  <line x1="120" y1="326" x2="120" y2="406" stroke="#8a93a6" stroke-width="1.4" marker-end="url(#d)"/>
+  <line x1="310" y1="326" x2="310" y2="406" stroke="#8a93a6" stroke-width="1.4" marker-end="url(#d)"/>
+  <line x1="450" y1="326" x2="330" y2="406" stroke="#8a93a6" stroke-width="1.4" marker-end="url(#d)"/>
+  <line x1="475" y1="280" x2="150" y2="545" stroke="#8a93a6" stroke-width="1.1" stroke-dasharray="3 3" marker-end="url(#d)"/>
+  <line x1="675" y1="280" x2="560" y2="326" stroke="#8a93a6" stroke-width="1.4" marker-end="url(#d)"/>
+  <line x1="120" y1="196" x2="120" y2="276" stroke="#8a93a6" stroke-width="1.4" marker-end="url(#d)"/>
+  <line x1="290" y1="196" x2="190" y2="276" stroke="#8a93a6" stroke-width="1.4" marker-end="url(#d)"/>
+  <line x1="460" y1="196" x2="340" y2="276" stroke="#8a93a6" stroke-width="1.4" marker-end="url(#d)"/>
+  <line x1="675" y1="196" x2="400" y2="196" stroke="#8a93a6" stroke-width="1.4" marker-end="url(#d)" transform="translate(0,0)"/>
+  <line x1="270" y1="86" x2="270" y2="146" stroke="#c92a2a" stroke-width="1.4" marker-end="url(#d)"/>
+  <line x1="320" y1="86" x2="700" y2="276" stroke="#c92a2a" stroke-width="1.2" opacity=".7"/>
+  <line x1="360" y1="86" x2="520" y2="146" stroke="#c92a2a" stroke-width="1.4" marker-end="url(#d)"/>
+  <line x1="270" y1="86" x2="110" y2="276" stroke="#c92a2a" stroke-width="1.4" marker-end="url(#d)"/>
+  <line x1="505" y1="86" x2="505" y2="146" stroke="#c92a2a" stroke-width="1.2" opacity=".6"/>
+  <text x="700" y="188" font-size="11" fill="#8a93a6">→ lance-index（FTS）</text>
+</svg>
+<div class="cap">图 2 · 依赖方向严格自上而下，无循环。lance 主 crate 是唯一直接依赖"全家桶"的地方；<code>lance-file</code> 反向依赖 <code>lance-encoding</code>（编码协议在 encoding crate 中定义）。</div>
+</div>
+
+<div class="note"><b>阅读本系列前必须建立的 3 个心智模型：</b><br>
+① <b>一切皆 Arrow</b>：数据在内存中永远是 <code>RecordBatch</code>，落盘格式只是 Arrow 的一种"物理投影"，读写都是 Arrow↔字节的零拷贝转换。<br>
+② <b>元数据三层</b>：文件内元数据（footer）→ 表元数据（Manifest）→ 事务记录（Transaction），三者用 proto 定义于 <code>protos/</code>。<br>
+③ <b>异步分层</b>：I/O 线程池（object store 请求）与 CPU 线程池（解码，<code>spawn_blocking</code>）严格分离，由 <code>lance-io::scheduler</code> 编排。</div>
+
+<h2>三、数据生命周期：一次 Append 的全景之旅</h2>
+<p>先给你一张"鸟瞰图"，后面每篇文档把它放大到代码级：</p>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1080 480" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="18" font-weight="700">图 3 · 写入→提交→读取 全链路（鸟瞰）</text>
+  <defs><marker id="f" markerWidth="9" markerHeight="9" refX="7" refY="2.6" orient="auto"><path d="M0,0 L7,2.6 L0,5.2" fill="none" stroke="#3b5bdb" stroke-width="1.5"/></marker></defs>
+
+  <rect x="30" y="60" width="200" height="150" rx="10" fill="#eef2ff" stroke="#3b5bdb"/>
+  <text x="130" y="86" text-anchor="middle" font-size="13.5" font-weight="700" fill="#243b8a">① 用户调用</text>
+  <text x="130" y="112" text-anchor="middle" font-size="12" fill="#5b6472">Dataset.write / insert</text>
+  <text x="130" y="134" text-anchor="middle" font-size="12" fill="#5b6472">Scanner · search · take</text>
+  <text x="130" y="156" text-anchor="middle" font-size="12" fill="#5b6472">create_index / optimize</text>
+  <text x="130" y="184" text-anchor="middle" font-size="11" fill="#8a93a6">rust/lance/src/dataset*</text>
+
+  <rect x="280" y="60" width="220" height="150" rx="10" fill="#fff4ec" stroke="#e8590c"/>
+  <text x="390" y="86" text-anchor="middle" font-size="13.5" font-weight="700" fill="#a34700">② 编码（lance-encoding）</text>
+  <text x="390" y="112" text-anchor="middle" font-size="12" fill="#5b6472">BatchEncoder 逐列编码</text>
+  <text x="390" y="134" text-anchor="middle" font-size="12" fill="#5b6472">结构(MiniBlock/FullZip)</text>
+  <text x="390" y="156" text-anchor="middle" font-size="12" fill="#5b6472">+ 压缩(BitPack/FSST/…)</text>
+  <text x="390" y="184" text-anchor="middle" font-size="11" fill="#8a93a6">encoder.rs · encodings/</text>
+
+  <rect x="550" y="60" width="200" height="150" rx="10" fill="#e7f7f1" stroke="#0ca678"/>
+  <text x="650" y="86" text-anchor="middle" font-size="13.5" font-weight="700" fill="#087f5b">③ 落盘（lance-file/io）</text>
+  <text x="650" y="112" text-anchor="middle" font-size="12" fill="#5b6472">buffer 对齐写入 data/</text>
+  <text x="650" y="134" text-anchor="middle" font-size="12" fill="#5b6472">写 column metadata</text>
+  <text x="650" y="156" text-anchor="middle" font-size="12" fill="#5b6472">写 48B footer "LANC"</text>
+  <text x="650" y="184" text-anchor="middle" font-size="11" fill="#8a93a6">versions/v2_1/writer.rs</text>
+
+  <rect x="800" y="60" width="230" height="150" rx="10" fill="#f3ecff" stroke="#7048e8"/>
+  <text x="915" y="86" text-anchor="middle" font-size="13.5" font-weight="700" fill="#4c1d95">④ 提交（乐观并发）</text>
+  <text x="915" y="112" text-anchor="middle" font-size="12" fill="#5b6472">Transaction{Append,…}</text>
+  <text x="915" y="134" text-anchor="middle" font-size="12" fill="#5b6472">写新 Manifest(v+1)</text>
+  <text x="915" y="156" text-anchor="middle" font-size="12" fill="#5b6472">冲突检测→重试/中止</text>
+  <text x="915" y="184" text-anchor="middle" font-size="11" fill="#8a93a6">io/commit.rs · _manifests/</text>
+
+  <rect x="280" y="270" width="220" height="150" rx="10" fill="#eef2ff" stroke="#3b5bdb"/>
+  <text x="390" y="296" text-anchor="middle" font-size="13.5" font-weight="700" fill="#243b8a">⑤ 读取计划</text>
+  <text x="390" y="322" text-anchor="middle" font-size="12" fill="#5b6472">Scanner→ExecutionPlan</text>
+  <text x="390" y="344" text-anchor="middle" font-size="12" fill="#5b6472">scan→filter→take→knn</text>
+  <text x="390" y="366" text-anchor="middle" font-size="12" fill="#5b6472">谓词/投影下推</text>
+  <text x="390" y="394" text-anchor="middle" font-size="11" fill="#8a93a6">io/exec/*.rs</text>
+
+  <rect x="550" y="270" width="200" height="150" rx="10" fill="#e7f7f1" stroke="#0ca678"/>
+  <text x="650" y="296" text-anchor="middle" font-size="13.5" font-weight="700" fill="#087f5b">⑥ I/O 调度</text>
+  <text x="650" y="322" text-anchor="middle" font-size="12" fill="#5b6472">footer→page 定位</text>
+  <text x="650" y="344" text-anchor="middle" font-size="12" fill="#5b6472">并行 Range GET</text>
+  <text x="650" y="366" text-anchor="middle" font-size="12" fill="#5b6472">优先级（ANN 优先）</text>
+  <text x="650" y="394" text-anchor="middle" font-size="11" fill="#8a93a6">lance-io/scheduler.rs</text>
+
+  <rect x="800" y="270" width="230" height="150" rx="10" fill="#fff4ec" stroke="#e8590c"/>
+  <text x="915" y="296" text-anchor="middle" font-size="13.5" font-weight="700" fill="#a34700">⑦ 解码重组</text>
+  <text x="915" y="322" text-anchor="middle" font-size="12" fill="#5b6472">spawn_blocking 解码</text>
+  <text x="915" y="344" text-anchor="middle" font-size="12" fill="#5b6472">repdef 还原嵌套结构</text>
+  <text x="915" y="366" text-anchor="middle" font-size="12" fill="#5b6472">删除掩码·组装 RecordBatch</text>
+  <text x="915" y="394" text-anchor="middle" font-size="11" fill="#8a93a6">decoder.rs · stream.rs</text>
+
+  <line x1="230" y1="135" x2="276" y2="135" stroke="#3b5bdb" stroke-width="1.8" marker-end="url(#f)"/>
+  <line x1="500" y1="135" x2="546" y2="135" stroke="#3b5bdb" stroke-width="1.8" marker-end="url(#f)"/>
+  <line x1="750" y1="135" x2="796" y2="135" stroke="#3b5bdb" stroke-width="1.8" marker-end="url(#f)"/>
+  <line x1="915" y1="210" x2="915" y2="248" stroke="#3b5bdb" stroke-width="1.8" marker-end="url(#f)"/>
+  <line x1="800" y1="345" x2="504" y2="345" stroke="#3b5bdb" stroke-width="1.8" marker-end="url(#f)"/>
+  <line x1="280" y1="345" x2="200" y2="215" stroke="#3b5bdb" stroke-width="1.8" marker-end="url(#f)"/>
+  <line x1="660" y1="210" x2="620" y2="266" stroke="#8a93a6" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#f)"/>
+  <text x="655" y="243" font-size="11" fill="#8a93a6">读时加载</text>
+</svg>
+<div class="cap">图 3 · 一次写入的生命周期：①API → ②编码 → ③数据文件 → ④Manifest 提交（原子版本切换）；读取则走 ⑤计划 → ⑥调度 → ⑦解码。④ 是数据"可见"的唯一瞬间——之前的文件都是垃圾，之后的 Manifest 一旦出现即不可变。</div>
+</div>
+
+<h2>四、本系列文档目录（点击进入）</h2>
+
+<a class="toc-card" href="01-physical-layout.html"><span class="no">01</span><span class="t">物理存储布局：目录树 · 文件 Footer · Manifest</span>
+<div class="d">Dataset 磁盘目录结构、v2.x 文件物理布局逐字节解析（buffers→column metadata→footer）、Manifest/Fragment/DataFile/DeletionFile 实体关系、版本与分支的物理表达。图 6 张。</div></a>
+
+<a class="toc-card" href="02-encoding.html"><span class="no">02</span><span class="t">编码体系：结构编码与压缩的两层正交设计</span>
+<div class="d">PageLayout（MiniBlock/FullZip/Sparse/Blob/Constant）与 CompressiveEncoding（BitPack/FSST/RLE/Dict/General…）、RepDef 层级、编码选择决策树。图 7 张。</div></a>
+
+<a class="toc-card" href="03-read-path.html"><span class="no">03</span><span class="t">读路径：从 Dataset.scan 到 RecordBatch</span>
+<div class="d">Scanner→DataFusion 执行计划、LanceScanExec、structural FileReader、I/O 调度器双线程池架构、解码流水线、search cache。图 6 张。</div></a>
+
+<a class="toc-card" href="04-write-path.html"><span class="no">04</span><span class="t">写路径与 ACID 提交</span>
+<div class="d">InsertBuilder→编码→写文件→Transaction→乐观并发提交、冲突解决矩阵、ManifestNamingScheme、_transactions 目录、删除文件机制。图 5 张。</div></a>
+
+<a class="toc-card" href="05-vector-index.html"><span class="no">05</span><span class="t">向量索引：IVF · PQ · SQ · HNSW 全解</span>
+<div class="d">K-means 聚类、乘积量化与距离表、IVF 分区、HNSW 图构建/搜索源码级解析、IVF_HNSW_PQ 三级索引、ANN 执行计划物理结构。图 8 张。</div></a>
+
+<a class="toc-card" href="06-scalar-index.html"><span class="no">06</span><span class="t">标量索引与全文检索</span>
+<div class="d">BTree/Bitmap/ZoneMap、Inverted 索引与 BM25、NGram、RTree、谓词下推与 prefilter 联动向量检索。图 5 张。</div></a>
+
+<a class="toc-card" href="07-linalg-simd.html"><span class="no">07</span><span class="t">lance-linalg：SIMD 距离计算内核</span>
+<div class="d">SIMD trait 抽象、f32x8/f32x16、L2/Cosine/Dot/Hamming 内核、PQ 距离表(dist_table)、AMX fp16、量化距离校正。图 4 张。</div></a>
+
+<a class="toc-card" href="08-bindings-ecosystem.html"><span class="no">08</span><span class="t">多语言绑定与生态系统</span>
+<div class="d">Python(PyO3) 绑定架构、Java(JNI)、DataFusion SQL 集成、Session/缓存体系、对象存储 providers、namespace/catalog。图 4 张。</div></a>
+
+<h2>五、如何自己动手验证（配套源码实验）</h2>
+<div class="card">
+<p>学习分支已建好：<code>learn/lance-deep-dive</code>。推荐验证路径：</p>
+<pre><code><span class="c"># 1. 打一个最小的 lance 文件，观察物理布局</span>
+cd python && maturin develop --release
+python -c <span class="s">"""
+import lance, pyarrow as pa
+tbl = pa.table({'id': range(1000), 'vec': pa.array([[0.1]*8]*1000, type=pa.list_(pa.float32(), 8))})
+lance.write_dataset(tbl, '/tmp/demo.lance')
+"""</span>
+
+<span class="c"># 2. 用 Rust 侧工具 dump footer</span>
+cargo run -p lance-tools -- --help   <span class="c"># lance 工具集</span>
+
+<span class="c"># 3. 跑通读路径调试断点（rust/lance/src/dataset/scanner.rs）</span>
+RUST_BACKTRACE=1 cargo test -p lance test_scan -- --nocapture</code></pre>
+<p>本系列所有行号与结构体名都基于当前 main 分支，可直接 <code>rg "struct Manifest" rust/lance-table</code> 定位。</p>
+</div>
+
+</main>
+<footer>Lance 深度源码解析系列 · 共 9 篇 · 基于学习分支 learn/lance-deep-dive（upstream/main @ 108f78e92）生成</footer>
+</body>
+</html>

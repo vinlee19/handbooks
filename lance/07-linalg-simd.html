@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>07 · lance-linalg：SIMD 距离计算内核</title>
+<style>
+  :root{--bg:#f7f8fb;--card:#fff;--ink:#1a2233;--muted:#5b6472;--accent:#3b5bdb;--accent2:#7048e8;--teal:#0ca678;--orange:#e8590c;--red:#e03131;--line:#dde3ee;--code-bg:#f1f3f9}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.78}
+  header{background:linear-gradient(135deg,#3b5bdb,#4c6ef5 55%,#748ffc);color:#fff;padding:44px 8% 36px}
+  header h1{font-size:28px}header p{opacity:.95;font-size:15px;max-width:920px;margin-top:8px}
+  nav.top{background:#101832;padding:10px 8%;font-size:13.5px}
+  nav.top a{color:#9db8ff;text-decoration:none;margin-right:18px}
+  nav.top a.cur{color:#fff;font-weight:700}
+  main{max-width:1150px;margin:0 auto;padding:34px 4% 90px}
+  h2{font-size:23px;margin:42px 0 14px;padding-left:14px;border-left:5px solid #4c6ef5}
+  h3{font-size:18px;margin:26px 0 10px;color:#364fc7}
+  p{margin:10px 0}.lead{color:var(--muted);font-size:15.5px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px 26px;margin:16px 0;box-shadow:0 1px 3px rgba(30,42,90,.05)}
+  code{font-family:"SF Mono",Menlo,Consolas,monospace;background:var(--code-bg);border-radius:5px;padding:1px 7px;font-size:.92em;color:#0b3a8f}
+  pre{background:#0f1730;color:#dbe4ff;border-radius:10px;padding:16px 20px;overflow-x:auto;font-size:13px;line-height:1.6;margin:14px 0}
+  pre .c{color:#7d8bb0}.k{color:#82aaff}.s{color:#c3e88d}.t2{color:#ffcb6b}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th{background:#edf2ff;color:#364fc7;text-align:left;padding:8px 12px;border:1px solid var(--line)}
+  td{padding:7px 12px;border:1px solid var(--line);vertical-align:top}
+  .svgwrap{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin:20px 0;overflow-x:auto}
+  .svgwrap .cap{text-align:center;color:var(--muted);font-size:13px;margin-top:8px}
+  .note{border-left:4px solid var(--orange);background:#fff4ec;border-radius:0 8px 8px 0;padding:11px 16px;margin:13px 0;font-size:14px}
+  .tip{border-left:4px solid var(--teal);background:#e9faf3;border-radius:0 8px 8px 0;padding:11px 16px;margin:13px 0;font-size:14px}
+  svg text{font-family:-apple-system,PingFang SC,sans-serif}
+</style>
+</head>
+<body>
+<header>
+  <h1>07 · lance-linalg：SIMD 内核</h1>
+  <p>整个系统的"最后一厘米"：所有 ANN、KNN、rerank 的性能都落在 <code>lance-linalg/src/distance/</code> 的一组手写 SIMD 内核上。类型系统（f32/f16/bf16/u8）、指令集（AVX2/AVX-512/NEON/AMX）、算法（L2/Cosine/Dot/Hamming）三维矩阵的工程实现。</p>
+</header>
+<nav class="top">
+  <a href="index.html">总览</a><a href="01-physical-layout.html">01 物理布局</a><a href="02-encoding.html">02 编码体系</a><a href="03-read-path.html">03 读路径</a><a href="04-write-path.html">04 写路径与提交</a><a href="05-vector-index.html">05 向量索引</a><a href="06-scalar-index.html">06 标量索引/FTS</a><a class="cur" href="07-linalg-simd.html">07 SIMD</a><a href="08-bindings-ecosystem.html">08 生态</a>
+</nav>
+<main>
+
+<h2>1. 双层抽象：类型 trait × SIMD 宽度</h2>
+<p class="lead"><code>DistanceType</code> 枚举只有 4 个成员（distance.rs:275）：<code>L2 / Cosine / Dot / Hamming</code>。每种类型 × 每种元素类型（f32、f16、bf16、u8）组合出一个 <code>DistanceFunc&lt;T&gt; = fn(&amp;[T], &amp;[T]) -&gt; f32</code>：</p>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1080 430" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 7-1 · 距离内核分发表（类型 × 算法 × 指令集）</text>
+  <g font-size="12">
+    <!-- matrix header -->
+    <rect x="150" y="52" width="180" height="40" fill="#364fc7"/><text x="240" y="77" text-anchor="middle" fill="#fff" font-weight="700">f32 (x8/x16 SIMD)</text>
+    <rect x="330" y="52" width="180" height="40" fill="#4263eb"/><text x="420" y="77" text-anchor="middle" fill="#fff" font-weight="700">f16 / bf16</text>
+    <rect x="510" y="52" width="180" height="40" fill="#4c6ef5"/><text x="600" y="77" text-anchor="middle" fill="#fff" font-weight="700">u8 (量化码)</text>
+    <rect x="690" y="52" width="180" height="40" fill="#5c7cfa"/><text x="780" y="77" text-anchor="middle" fill="#fff" font-weight="700">binary/BQ</text>
+    <rect x="60" y="92" width="90" height="44" fill="#dbe4ff"/><text x="105" y="118" text-anchor="middle" font-weight="700" fill="#243b8a">L2</text>
+    <rect x="60" y="136" width="90" height="44" fill="#dbe4ff"/><text x="105" y="162" text-anchor="middle" font-weight="700" fill="#243b8a">Cosine</text>
+    <rect x="60" y="180" width="90" height="44" fill="#dbe4ff"/><text x="105" y="206" text-anchor="middle" font-weight="700" fill="#243b8a">Dot</text>
+    <rect x="60" y="224" width="90" height="44" fill="#dbe4ff"/><text x="105" y="250" text-anchor="middle" font-weight="700" fill="#243b8a">Hamming</text>
+    <rect x="60" y="268" width="90" height="44" fill="#ffe3bf"/><text x="105" y="294" text-anchor="middle" font-weight="700" fill="#a34700">PQ LUT</text>
+
+    <!-- row L2 -->
+    <rect x="150" y="92" width="180" height="44" fill="#e9ecff"/><text x="240" y="112" text-anchor="middle">l2.rs: AVX2 gather 内核</text><text x="240" y="128" text-anchor="middle" font-size="10.5" fill="#5b6472">NEON 退化 loadu 路径</text>
+    <rect x="330" y="92" width="180" height="44" fill="#e9ecff"/><text x="420" y="112" text-anchor="middle">l2_bf16_avx512 / _f16_avx512</text><text x="420" y="128" text-anchor="middle" font-size="10.5" fill="#5b6472">NEON bf16 内核（C 编译）</text>
+    <rect x="510" y="92" width="180" height="44" fill="#e9ecff"/><text x="600" y="118" text-anchor="middle">l2_distance_uint_scalar</text>
+    <rect x="690" y="92" width="180" height="44" fill="#f1f3f9"/><text x="780" y="118" text-anchor="middle" fill="#8a93a6">—</text>
+
+    <!-- row cosine -->
+    <rect x="150" y="136" width="180" height="44" fill="#e9ecff"/><text x="240" y="156" text-anchor="middle">点积+范数 组合</text><text x="240" y="172" text-anchor="middle" font-size="10.5" fill="#5b6472">cosine_u8.rs</text>
+    <rect x="330" y="136" width="180" height="44" fill="#e9ecff"/><text x="420" y="162" text-anchor="middle" font-size="11">f16 版本</text>
+    <rect x="510" y="136" width="180" height="44" fill="#e9ecff"/><text x="600" y="162" text-anchor="middle" font-size="11">u8 版本</text>
+    <rect x="690" y="136" width="180" height="44" fill="#f1f3f9"/><text x="780" y="162" text-anchor="middle" fill="#8a93a6">—</text>
+
+    <!-- row dot -->
+    <rect x="150" y="180" width="180" height="44" fill="#e9ecff"/><text x="240" y="206" text-anchor="middle">dot.rs: FMA 融合乘加</text>
+    <rect x="330" y="180" width="180" height="44" fill="#e9ecff"/><text x="420" y="200" text-anchor="middle">dot_f16.rs（AVX512_F16）</text><text x="420" y="216" text-anchor="middle" font-size="10.5" fill="#5b6472">dot_u8.rs</text>
+    <rect x="510" y="180" width="180" height="44" fill="#e9ecff"/><text x="600" y="206" text-anchor="middle" font-size="11">dot_u8</text>
+    <rect x="690" y="180" width="180" height="44" fill="#f1f3f9"/><text x="780" y="206" text-anchor="middle" fill="#8a93a6">—</text>
+
+    <!-- hamming -->
+    <rect x="150" y="224" width="180" height="44" fill="#f1f3f9"/><text x="240" y="250" text-anchor="middle" fill="#8a93a6">—</text>
+    <rect x="330" y="224" width="180" height="44" fill="#f1f3f9"/><text x="420" y="250" text-anchor="middle" fill="#8a93a6">—</text>
+    <rect x="510" y="224" width="180" height="44" fill="#f1f3f9"/><text x="600" y="250" text-anchor="middle" fill="#8a93a6">—</text>
+    <rect x="690" y="224" width="180" height="44" fill="#e9ecff"/><text x="780" y="250" text-anchor="middle">hamming.rs: popcount</text>
+
+    <!-- PQ LUT -->
+    <rect x="150" y="268" width="180" height="44" fill="#fff4ec" stroke="#e8590c"/><text x="240" y="294" text-anchor="middle" fill="#a34700">dist_table.rs（dist_table.c）</text>
+    <rect x="330" y="268" width="180" height="44" fill="#f1f3f9"/><text x="420" y="294" text-anchor="middle" fill="#8a93a6">—</text>
+    <rect x="510" y="268" width="180" height="44" fill="#fff4ec" stroke="#e8590c"/><text x="600" y="288" text-anchor="middle" fill="#a34700">每 8 码字一条指令查表</text><text x="600" y="304" text-anchor="middle" font-size="10.5" fill="#a34700">AVX2 gather</text>
+    <rect x="690" y="268" width="180" height="44" fill="#f1f3f9"/><text x="780" y="294" text-anchor="middle" fill="#8a93a6">—</text>
+
+    <!-- AMX note -->
+    <rect x="150" y="330" width="720" height="60" rx="8" fill="#0f1730"/>
+    <text x="170" y="354" fill="#9db8ff" font-size="12" font-weight="700">AMX fp16 矩阵扩展（simd/amx_fp16.c/.rs）：矩阵化批量距离 —— 把"一查询对 N 库向量"表述为矩阵乘，</text>
+    <text x="170" y="376" fill="#7d8bb0" font-size="11.5">在 Intel AMX 硬件上获得数量级吞吐；按 CPU 能力运行时分发（kernel_support cfg + 运行时 is_x86_feature_detected）</text>
+
+    <text x="90" y="416" font-size="11.5" fill="#8a93a6">编译期：cfg(target_feature) 选模板 → 运行时：能力检测退化。Per-tier 宏批量生成同型内核。</text>
+  </g>
+</svg>
+<div class="cap">图 7-1 · 内核分发表。同一 API 下三层降级：AVX-512 → AVX2/FMA → NEON/标量。</div>
+</div>
+
+<h2>2. 关键内核源码速览</h2>
+<pre><code><span class="c">// simd/f32.rs —— SIMD 向量类型（节选自 1100+ 行实现）</span>
+<span class="k">pub struct</span> <span class="t2">f32x8</span>(<span class="k">pub</span> [__m256; <span class="f">1</span>]);     <span class="c">// x86: 8×f32 一条 AVX 寄存器</span>
+<span class="k">impl</span> FloatSimd&lt;f32, <span class="f">8</span>&gt; <span class="k">for</span> f32x8 {
+    <span class="k">fn</span> <span class="t2">gather</span>(&amp;self, idx) { <span class="c">// AVX2 vgatherdps；无 AVX2 主机退化逐元素 loadu</span> }
+    <span class="k">fn</span> mul_add(...)          <span class="c">// FMA：乘加一条指令</span>
+}
+
+<span class="c">// distance/l2.rs —— L2 距离（核心循环）</span>
+<span class="k">pub fn</span> <span class="t2">l2_distance</span>(x: &amp;[f32], y: &amp;[f32]) -&gt; f32 {
+    <span class="c">// 8 路 SIMD 展开：diff = x-y; acc = fma(diff, diff, acc)</span>
+    <span class="c">// 尾部标量收尾；x86_64 无 AVX2 时走 gather 标量回退</span>
+}
+
+<span class="c">// distance/dot.rs —— 内积</span>
+<span class="k">pub fn</span> <span class="t2">dot_distance</span>(x, y) -&gt; f32 { <span class="c">// FMA 归约 + reduce_sum</span> }
+
+<span class="c">// cosine = dot / (||x|| × ||y||)，范数走 norm_l2.rs</span>
+<span class="c">// hamming = (x ^ y).count_ones()（u8 按 64B 块 popcnt）</span></code></pre>
+
+<h3>2.1 PQ 距离表：把 O(dim) 变成 O(M)</h3>
+<div class="svgwrap">
+<svg viewBox="0 0 1080 300" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 7-2 · dist_table：一条 SIMD 指令完成 8 个码字查表</text>
+  <g font-size="12">
+    <rect x="60" y="50" width="400" height="90" rx="8" fill="#fff4ec" stroke="#e8590c"/>
+    <text x="80" y="76" font-weight="700" fill="#a34700">LUT（M 行 × 256 列 f32）</text>
+    <text x="80" y="102" font-family="Menlo,monospace" font-size="11.5">LUT[0][c] = ‖q子段0 − 码本0,c‖²</text>
+    <text x="80" y="122" font-size="11" fill="#5b6472">查询前一次性构造（SIMD 批量距离）</text>
+
+    <rect x="60" y="160" width="400" height="90" rx="8" fill="#eef2ff" stroke="#3b5bdb"/>
+    <text x="80" y="186" font-weight="700" fill="#243b8a">候选码字（M 字节）</text>
+    <text x="80" y="212" font-family="Menlo,monospace" font-size="11.5">[0x3f, 0xa1, 0x07, …]</text>
+    <text x="80" y="234" font-size="11" fill="#5b6472">每字节是 LUT 行内的列索引</text>
+
+    <rect x="560" y="90" width="480" height="150" rx="10" fill="#0f1730"/>
+    <text x="580" y="118" fill="#9db8ff" font-weight="700">汇编视角（AVX2）</text>
+    <text x="580" y="146" fill="#dbe4ff" font-family="Menlo,monospace" font-size="12">vpgatherdd  LUT[m][code[0..8]] → ymm  ; 8 查表</text>
+    <text x="580" y="172" fill="#dbe4ff" font-family="Menlo,monospace" font-size="12">vpaddd / vfmadd …                  ; 累加 M 段</text>
+    <text x="580" y="200" fill="#7d8bb0" font-size="11.5">768 维 f32 暴力 ≈ 1μs；96 字节 PQ 查表 ≈ 24ns（≈40×）</text>
+    <text x="580" y="224" fill="#7d8bb0" font-size="11.5">Batch 路径：一次对 8~32 个码字向量并行（量化批量扫描）</text>
+    <line x1="460" y1="110" x2="556" y2="130" stroke="#5b6472" stroke-width="1.6"/>
+    <line x1="460" y1="200" x2="556" y2="180" stroke="#5b6472" stroke-width="1.6"/>
+  </g>
+</svg>
+<div class="cap">图 7-2 · PQ ADC 内核。gather 指令让"查表"不再是随机内存访问瓶颈。</div>
+</div>
+
+<h3>2.2 量化距离的数学修正</h3>
+<div class="card">
+<p><code>storage.rs: QueryResidual</code> 与 SQ 的 <code>Transform</code> 链展示了一个容易被忽视的细节：量化后直接算出的距离有系统偏差，Lance 提供：</p>
+<ul style="margin:8px 0 0 22px;font-size:14px">
+  <li><b>残差变换（residual.rs）</b>：先减去 IVF 分区质心再量化/算距离，消除分区中心偏移——IVF_PQ 召回提升显著；</li>
+  <li><b>KeepFiniteVectors</b>：训练前剔除 NaN/Inf，防止码本被污染；</li>
+  <li><b>rerank</b>：量化距离只做"粗排"，最终 top-k 用原始向量精确距离复核（refine_factor 控制）；</li>
+  <li><b>多向量（Multivector/ColBERT MaxSim）</b>：MultivectorScoringExec 逐子向量取最大相似度聚合。</li>
+</ul>
+</div>
+
+<h2>3. 与上下游的接线</h2>
+<div class="svgwrap">
+<svg viewBox="0 0 1080 260" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 7-3 · 内核在系统中的位置（数据通道）</text>
+  <g font-size="12">
+    <rect x="40" y="60" width="230" height="120" rx="9" fill="#e7f7f1" stroke="#0ca678"/>
+    <text x="155" y="86" text-anchor="middle" font-weight="700" fill="#087f5b">数据源</text>
+    <text x="55" y="112">FullZip 页解码出的</text>
+    <text x="55" y="134">连续对齐 f32/f16 数组</text>
+    <text x="55" y="162" font-size="11" fill="#8a93a6">02 篇布局的直接受益者</text>
+
+    <rect x="330" y="60" width="220" height="120" rx="9" fill="#eef2ff" stroke="#3b5bdb"/>
+    <text x="440" y="86" text-anchor="middle" font-weight="700" fill="#243b8a">lance-linalg</text>
+    <text x="345" y="112">l2/cosine/dot/hamming</text>
+    <text x="345" y="134">dist_table（PQ ADC）</text>
+    <text x="345" y="156">amx_fp16（矩阵化）</text>
+
+    <rect x="610" y="60" width="200" height="120" rx="9" fill="#f3ecff" stroke="#7048e8"/>
+    <text x="710" y="86" text-anchor="middle" font-weight="700" fill="#4c1d95">消费者</text>
+    <text x="625" y="112">KNNVectorDistanceExec</text>
+    <text x="625" y="134">HNSW 遍历/IVF 训练</text>
+    <text x="625" y="156">kmeans / PQ 码本训练</text>
+
+    <rect x="870" y="60" width="170" height="120" rx="9" fill="#fff4ec" stroke="#e8590c"/>
+    <text x="955" y="86" text-anchor="middle" font-weight="700" fill="#a34700">上游复用</text>
+    <text x="885" y="112">标量值 v2.1 的</text>
+    <text x="885" y="134">ByteStreamSplit/BitPack</text>
+    <text x="885" y="156">（compression/bitpacking）</text>
+
+    <line x1="270" y1="120" x2="326" y2="120" stroke="#5b6472" stroke-width="1.8"/>
+    <line x1="550" y1="120" x2="606" y2="120" stroke="#5b6472" stroke-width="1.8"/>
+  </g>
+</svg>
+<div class="cap">图 7-3 · 为什么 FullZip 的"SIMD 就绪平坦数组"如此重要：距离内核可以直接 <code>as_ptr()</code> 读，零转换。</div>
+</div>
+
+<div class="tip"><b>验证实验建议：</b>在 <code>rust/lance-linalg</code> 下跑 <code>cargo bench</code>（含 benches），对比 <code>RUSTFLAGS="-C target-cpu=native"</code> 前后的 L2 吞吐；再手工把 refine_factor 从 1 调到 10 观察召回率（recall@k）曲线——你会直观看到"量化粗排 + 精确 rerank"的取舍。</div>
+
+</main>
+<nav class="top" style="text-align:center">
+  <a href="06-scalar-index.html">« 06 标量索引/FTS</a> · <a href="08-bindings-ecosystem.html">08 生态 »</a>
+</nav>
+</body>
+</html>

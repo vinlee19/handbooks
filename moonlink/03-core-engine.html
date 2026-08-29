@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>03 · 存储引擎 — Moonlink 源码深度解析</title>
+<style>
+:root{
+  --blue:#2563eb;--green:#16a34a;--orange:#ea580c;--purple:#7c3aed;--gray:#64748b;--red:#dc2626;
+  --ink:#1e293b;--muted:#64748b;--bg:#f6f8fa;--card:#fff;--line:#e2e8f0;--code-bg:#0d1117;--code-ink:#e6edf3;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.8}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.97);display:flex;flex-wrap:wrap;gap:2px;padding:8px 16px;font-size:13px}
+.topnav .brand{color:#fbbf24;font-weight:700;margin-right:10px;padding:4px 6px}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:4px 10px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav a.active{background:var(--blue);color:#fff}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 20px 80px}
+.page-head{background:linear-gradient(135deg,#0f172a,#14532d);border-radius:14px;color:#f1f5f9;padding:30px 34px;margin-bottom:26px}
+.page-head h1{font-size:28px;margin-bottom:6px}
+.page-head p{color:#cbd5e1;font-size:14.5px}
+h2{font-size:23px;margin:40px 0 12px;padding-left:12px;border-left:5px solid var(--orange)}
+h3{font-size:18px;margin:24px 0 8px;color:#0f172a}
+p{margin:10px 0;color:#334155}
+.lead{font-size:15.5px;color:#475569}
+.figure{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin:20px 0}
+.fig-title{font-weight:700;font-size:14.5px;color:#0f172a;margin-bottom:4px}
+.fig-title .fno{color:var(--blue)}
+.fig-desc{font-size:13px;color:var(--muted);margin-bottom:10px}
+svg{width:100%;height:auto;display:block}
+code{background:#eef2f7;border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:.88em;color:#be185d}
+pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:16px 18px;overflow-x:auto;font-size:13px;line-height:1.6;margin:14px 0}
+pre code{background:none;border:none;color:inherit;padding:0}
+.k{color:#ff7b72}.t{color:#79c0ff}.s{color:#a5d6ff}.c{color:#8b949e;font-style:italic}.n{color:#ffa657}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px;background:var(--card)}
+th{background:#f1f5f9;text-align:left}
+th,td{border:1px solid var(--line);padding:8px 12px;vertical-align:top}
+tbody tr:nth-child(even){background:#fafbfc}
+.callout{border-left:4px solid var(--blue);background:#eff6ff;border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0;font-size:14px}
+.callout.warn{border-color:var(--orange);background:#fff7ed}
+.callout.good{border-color:var(--green);background:#f0fdf4}
+.callout b{color:#0f172a}
+.footer{display:flex;justify-content:space-between;margin-top:60px;padding-top:18px;border-top:1px solid var(--line);font-size:14px}
+.footer a{color:var(--blue);text-decoration:none;font-weight:600}
+ul,ol{margin:8px 0 8px 24px}
+li{margin:4px 0}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">🥮 Moonlink 源码解析</span>
+  <a href="index.html">总导航</a>
+  <a href="01-overview.html">01 总体架构</a>
+  <a href="02-ingestion.html">02 数据摄入</a>
+  <a class="active" href="03-core-engine.html">03 存储引擎</a>
+  <a href="04-index-dv.html">04 索引与 DV</a>
+  <a href="05-wal-recovery.html">05 WAL 与恢复</a>
+  <a href="06-iceberg.html">06 Iceberg 集成</a>
+  <a href="07-query.html">07 查询路径</a>
+  <a href="08-control-plane.html">08 控制面</a>
+  <a href="09-concurrency-lsn.html">09 并发模型</a>
+</nav>
+
+<div class="wrap">
+<div class="page-head">
+  <h1>Chapter 03 · 存储引擎：MooncakeTable</h1>
+  <p>MooncakeTable 是整个项目的发动机：一个「磁盘表 + 内存切片」的混合结构，用 LSN 控制可见性。它不是 LSM-Tree，但借用了 LSM 的核心思想——分层、延迟物化、后台合并。</p>
+</div>
+
+<h2>3.1 总体结构：一张表的三个世界</h2>
+<p class="lead">打开 <code>src/moonlink/src/storage/mooncake_table.rs</code>（约 1800 行），头注释一句话定调：<i>"MooncakeTable is a disk table + mem slice … LSN is used for visibility control"</i>。一张表的完整状态分三个世界：<b>可变内存</b>（MemSlice，写正在发生）、<b>快照内存</b>（SnapshotTableState，已 commit 待 flush 的批与删除）、<b>磁盘快照</b>（Snapshot ↔ Iceberg snapshot 一一对应）。</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 3-1</span> · MooncakeTable 总体结构：数据从左到右单向流动</div>
+  <div class="fig-desc">绿色 = 内存可变区；青色 = 快照内存区；橙色 = 磁盘/对象存储区。紫色管道是「LSN 可见性」。</div>
+  <svg viewBox="0 0 1160 660" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="c11" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    </defs>
+    <!-- world 1 -->
+    <text x="30" y="32" font-size="14" font-weight="700" fill="#16a34a">世界一 · MemSlice（可变，唯一写入口）</text>
+    <rect x="30" y="44" width="330" height="270" rx="12" fill="#dcfce7" stroke="#16a34a" stroke-width="1.8"/>
+    <g font-size="11.5">
+      <rect x="48" y="62" width="294" height="66" rx="8" fill="#fff" stroke="#86efac"/>
+      <text x="195" y="84" text-anchor="middle" font-weight="700" fill="#14532d">column_store: ColumnStoreBuffer</text>
+      <text x="195" y="103" text-anchor="middle" fill="#166534">行流攒批：每 4096 行 → (batch_id, RecordBatch)</text>
+      <text x="195" y="120" text-anchor="middle" fill="#166534">未满批的尾行在 SharedRowBufferSnapshot</text>
+      <rect x="48" y="140" width="294" height="56" rx="8" fill="#fff" stroke="#86efac"/>
+      <text x="195" y="162" text-anchor="middle" font-weight="700" fill="#14532d">mem_index: MemIndex</text>
+      <text x="195" y="181" text-anchor="middle" fill="#166534">主键哈希 → 内存位置（CH04 三形态）</text>
+      <rect x="48" y="208" width="294" height="56" rx="8" fill="#fff" stroke="#86efac"/>
+      <text x="195" y="230" text-anchor="middle" font-weight="700" fill="#14532d">Copy-On-Read 语义</text>
+      <text x="195" y="249" text-anchor="middle" fill="#166534">读快照时应用删除生成只读视图（CH07）</text>
+      <text x="48" y="292" fill="#166534">append/delete/commit 直接改这里；</text>
+      <text x="48" y="306" font-size="10.5" fill="#15803d">mem_slice.rs · data_batches.rs</text>
+    </g>
+    <!-- world 2 -->
+    <text x="410" y="32" font-size="14" font-weight="700" fill="#0d9488">世界二 · SnapshotTableState（快照内存）</text>
+    <rect x="410" y="44" width="380" height="270" rx="12" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.8"/>
+    <g font-size="11.5">
+      <rect x="428" y="62" width="344" height="56" rx="8" fill="#fff" stroke="#5eead4"/>
+      <text x="600" y="84" text-anchor="middle" font-weight="700" fill="#115e59">batches: BTreeMap&lt;batch_id, InMemoryBatch&gt;</text>
+      <text x="600" y="103" text-anchor="middle" fill="#0f766e">已 commit 的批 + 每 batch 自己的 BatchDeletionVector</text>
+      <rect x="428" y="128" width="344" height="56" rx="8" fill="#fff" stroke="#5eead4"/>
+      <text x="600" y="150" text-anchor="middle" font-weight="700" fill="#115e59">三级删除日志（图 3-6）</text>
+      <text x="600" y="169" text-anchor="middle" fill="#0f766e">uncommitted / committed 未持久化 / committed 已持久化</text>
+      <rect x="428" y="194" width="344" height="56" rx="8" fill="#fff" stroke="#5eead4"/>
+      <text x="600" y="216" text-anchor="middle" font-weight="700" fill="#115e59">current_snapshot: Snapshot</text>
+      <text x="600" y="235" text-anchor="middle" fill="#0f766e">磁盘文件视图（disk_files）+ 全局索引 MooncakeIndex</text>
+      <text x="428" y="278" fill="#0f766e">SnapshotTask：下一次快照的「增量暂存区」；</text>
+      <text x="428" y="296" fill="#0f766e">last_commit: RecordLocation 记录提交点位置。</text>
+      <text x="428" y="308" font-size="10.5" fill="#0f766e">mooncake_table/snapshot.rs</text>
+    </g>
+    <!-- world 3 -->
+    <text x="840" y="32" font-size="14" font-weight="700" fill="#ea580c">世界三 · Snapshot（磁盘态 ↔ Iceberg）</text>
+    <rect x="840" y="44" width="290" height="270" rx="12" fill="#ffedd5" stroke="#ea580c" stroke-width="1.8"/>
+    <g font-size="11.5">
+      <rect x="858" y="62" width="254" height="84" rx="8" fill="#fff" stroke="#fdba74"/>
+      <text x="985" y="84" text-anchor="middle" font-weight="700" fill="#7c2d12">disk_files: HashMap&lt;DataFileRef,</text>
+      <text x="985" y="102" text-anchor="middle" font-weight="700" fill="#7c2d12">DiskFileEntry&gt;</text>
+      <text x="985" y="121" text-anchor="middle" fill="#9a3412">num_rows · file_size · cache_handle</text>
+      <text x="985" y="138" text-anchor="middle" fill="#9a3412">committed_deletion_vector · puffin blob 引用</text>
+      <rect x="858" y="158" width="254" height="48" rx="8" fill="#fff" stroke="#fdba74"/>
+      <text x="985" y="178" text-anchor="middle" font-weight="700" fill="#7c2d12">indices: MooncakeIndex</text>
+      <text x="985" y="197" text-anchor="middle" fill="#9a3412">file_indices: Vec&lt;GlobalIndex&gt;（CH04）</text>
+      <rect x="858" y="218" width="254" height="48" rx="8" fill="#fff" stroke="#fdba74"/>
+      <text x="985" y="238" text-anchor="middle" font-weight="700" fill="#7c2d12">snapshot_version / flush_lsn</text>
+      <text x="985" y="257" text-anchor="middle" fill="#9a3412">版本号与刷盘水位（CH09）</text>
+      <text x="858" y="292" fill="#9a3412">一个 Snapshot ↔ 一个 Iceberg snapshot；</text>
+      <text x="858" y="306" font-size="10.5" fill="#b45309">可 Clone —— 读侧拿到的是不可变副本</text>
+    </g>
+    <!-- arrows -->
+    <line x1="360" y1="180" x2="410" y2="180" stroke="#475569" stroke-width="2" marker-end="url(#c11)"/>
+    <text x="385" y="168" text-anchor="middle" font-size="11" fill="#475569">flush</text>
+    <line x1="790" y1="180" x2="840" y2="180" stroke="#475569" stroke-width="2" marker-end="url(#c11)"/>
+    <text x="815" y="168" text-anchor="middle" font-size="11" fill="#475569">iceberg</text>
+    <text x="815" y="196" text-anchor="middle" font-size="11" fill="#475569">commit</text>
+    <!-- bottom: config band -->
+    <rect x="30" y="350" width="1100" height="120" rx="12" fill="#f8fafc" stroke="#cbd5e1"/>
+    <text x="55" y="378" font-weight="700" fill="#334155">关键配置（mooncake_table_config.rs，release 值）</text>
+    <g font-size="12" fill="#475569">
+      <text x="55" y="404">mem_slice_size = <tspan fill="#be185d" font-family="Menlo,monospace">batch_size(4096) × 32 = 131072 行</tspan> —— 触发 flush 的内存水位</text>
+      <text x="55" y="428">parquet_file_size = <tspan fill="#be185d" font-family="Menlo,monospace">128MiB</tspan> —— 单个 data file 上限，超过滚动新文件（debug 构建为 2MiB 便于测试观察）</text>
+      <text x="55" y="452">snapshot_deletion_record_count = <tspan fill="#be185d" font-family="Menlo,monospace">1000</tspan> —— 新增删除记录达到该值即提前触发 mooncake snapshot</text>
+    </g>
+    <!-- bottom: streaming txn -->
+    <rect x="30" y="496" width="1100" height="130" rx="12" fill="#fef9c3" stroke="#ca8a04"/>
+    <text x="55" y="524" font-weight="700" fill="#713f12">特殊结构：流式大事务 TransactionStreamState（transaction_stream.rs）</text>
+    <g font-size="12" fill="#854d0e">
+      <text x="55" y="550">PG 发送超大事务时用流式协议（StreamStart/StreamStop/…）。moonlink 为每个 xact_id 建独立的 MemSlice + 删除缓冲，中途达到水位就 flush_stream（对外不可见）；</text>
+      <text x="55" y="574">commit_transaction_stream(xact_id, lsn) 时先 flush 尾部，再把 Commit 结果放进 SnapshotTask —— 流内删除的 LSN 统一盖为 lsn−1（LSN_START_FOR_STREAMING_XACT），</text>
+      <text x="55" y="598">保证「删除发生在该事务提交之前」的可见性不变式（COMMIT_LSN_xact1 ≤ DELETE_LSN_xact2 &lt; COMMIT_LSN_xact2）。</text>
+    </g>
+    <text x="580" y="650" text-anchor="middle" font-size="12" fill="#94a3b8">读路径（union read）同时横跨三个世界 —— 详见 CH07</text>
+  </svg>
+</div>
+
+<h2>3.2 MemSlice 内部：行流如何变成列批</h2>
+<p class="lead">摄入层送进来的是<b>行</b>（MoonlinkRow），落盘需要<b>列</b>（RecordBatch）。ColumnStoreBuffer 是这个转换器的核心：它把行流按 <code>batch_size</code> 切批，并为每个批分配 <code>batch_id</code>。</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 3-2</span> · MemSlice 攒批流程与 BatchIdCounter 双计数器</div>
+  <svg viewBox="0 0 1160 520" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="c21" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    </defs>
+    <!-- row stream -->
+    <rect x="30" y="60" width="180" height="180" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+    <text x="120" y="86" text-anchor="middle" font-weight="700" fill="#1e3a8a">MoonlinkRow 行流</text>
+    <g font-size="10.5" font-family="Menlo,monospace" fill="#3b5ba9">
+      <text x="120" y="112" text-anchor="middle">row_1001 →</text>
+      <text x="120" y="130" text-anchor="middle">row_1002 →</text>
+      <text x="120" y="148" text-anchor="middle">row_1003 →</text>
+      <text x="120" y="166" text-anchor="middle">…</text>
+    </g>
+    <text x="120" y="216" text-anchor="middle" font-size="10.5" fill="#64748b">来自 CDC / REST（图2-1）</text>
+    <!-- buffer -->
+    <rect x="270" y="60" width="200" height="180" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+    <text x="370" y="86" text-anchor="middle" font-weight="700" fill="#14532d">ColumnStoreBuffer</text>
+    <g font-size="10.5">
+      <text x="370" y="110" text-anchor="middle" fill="#166534">逐行 append 进列 builder</text>
+      <rect x="288" y="122" width="164" height="30" rx="6" fill="#fff" stroke="#86efac"/>
+      <text x="370" y="142" text-anchor="middle" fill="#166534">行 1 … 4096 → 满！</text>
+      <rect x="288" y="160" width="164" height="30" rx="6" fill="#fff" stroke="#bfdbfe"/>
+      <text x="370" y="180" text-anchor="middle" fill="#3b5ba9">行 4097 … 6000（未满）</text>
+      <text x="370" y="216" text-anchor="middle" fill="#15803d">满批 → 产出 Arc&lt;RecordBatch&gt;</text>
+    </g>
+    <line x1="210" y1="150" x2="270" y2="150" stroke="#475569" stroke-width="1.8" marker-end="url(#c21)"/>
+    <!-- batch id counter -->
+    <rect x="530" y="60" width="250" height="180" rx="10" fill="#fef9c3" stroke="#ca8a04"/>
+    <text x="655" y="86" text-anchor="middle" font-weight="700" fill="#713f12">BatchIdCounter（双计数器）</text>
+    <g font-size="11">
+      <rect x="548" y="102" width="214" height="52" rx="8" fill="#fff" stroke="#fde047"/>
+      <text x="655" y="122" text-anchor="middle" font-weight="600" fill="#713f12">non_streaming_batch_id_counter</text>
+      <text x="655" y="142" text-anchor="middle" font-size="10.5" fill="#a16207">普通事务的批：…100, 101, 102</text>
+      <rect x="548" y="162" width="214" height="52" rx="8" fill="#fff" stroke="#fde047"/>
+      <text x="655" y="182" text-anchor="middle" font-weight="600" fill="#713f12">streaming_batch_id_counter</text>
+      <text x="655" y="202" text-anchor="middle" font-size="10.5" fill="#a16207">流式大事务的批：独立编号空间</text>
+      <text x="655" y="230" text-anchor="middle" font-size="9" fill="#a16207">batch_id_counter.rs —— 两套编号避免交错歧义</text>
+    </g>
+    <line x1="470" y1="150" x2="530" y2="150" stroke="#475569" stroke-width="1.8" marker-end="url(#c21)"/>
+    <!-- in-memory batch -->
+    <rect x="840" y="60" width="290" height="180" rx="10" fill="#ccfbf1" stroke="#0d9488"/>
+    <text x="985" y="86" text-anchor="middle" font-weight="700" fill="#115e59">InMemoryBatch（进入快照区）</text>
+    <g font-size="11" font-family="Menlo,monospace">
+      <rect x="858" y="100" width="254" height="46" rx="8" fill="#fff" stroke="#5eead4"/>
+      <text x="985" y="120" text-anchor="middle" fill="#0f766e">record_batch: Arc&lt;RecordBatch&gt;</text>
+      <text x="985" y="138" text-anchor="middle" fill="#0f766e">batch_id = 102</text>
+      <rect x="858" y="156" width="254" height="46" rx="8" fill="#fff" stroke="#5eead4"/>
+      <text x="985" y="176" text-anchor="middle" fill="#0f766e">deletions: BatchDeletionVector</text>
+      <text x="985" y="194" text-anchor="middle" fill="#0f766e">{7, 42, 100}（位图，CH04）</text>
+      <text x="985" y="222" text-anchor="middle" font-size="10" fill="#0f766e" font-family="-apple-system,'PingFang SC',sans-serif">batches: BTreeMap&lt;u64, InMemoryBatch&gt; 按 batch_id 有序</text>
+    </g>
+    <line x1="780" y1="150" x2="840" y2="150" stroke="#475569" stroke-width="1.8" marker-end="url(#c21)"/>
+
+    <!-- location explanation -->
+    <rect x="30" y="280" width="1100" height="110" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+    <text x="55" y="308" font-weight="700" fill="#334155">数据定位：没有全局 row_id，只有 (batch_id, row_offset)</text>
+    <g font-size="12" fill="#475569">
+      <text x="55" y="334"><tspan font-family="Menlo,monospace" fill="#be185d">RecordLocation</tspan>（storage_utils.rs）：MemoryBatch{batch_id, row_offset, is_delete} | DiskFile{file_id, row_offset, is_delete} —— 内存态与磁盘态统一抽象</text>
+      <text x="55" y="358">索引值（CH04）、删除日志（RawDeletionRecord）、快照 last_commit 全部用 RecordLocation 表达 → 内存批 flush 成文件后只需「重映射」，无需改任何上层逻辑</text>
+      <text x="55" y="380">file_id 由 next_file_id: u32 表内自增（不持久化，恢复时从 Iceberg 快照续算）</text>
+    </g>
+    <!-- example mapping -->
+    <rect x="30" y="410" width="1100" height="86" rx="10" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="55" y="438" font-weight="700" fill="#1e3a8a">例：主键=42 的行在哪里？</text>
+    <text x="55" y="464" font-size="12" fill="#1e293b">查 MemIndex → MemoryBatch{batch_id: 102, row_offset: 4130, is_delete: false}；flush 后 compaction 重映射 → DiskFile{file_id: 7, row_offset: 124, …}。上层（删除日志/读路径）无感知。</text>
+    <text x="55" y="486" font-size="11" fill="#3b5ba9">这张「重映射表」就是 compaction 结果 DataCompactionResult{remapped_data_files} 的核心内容（CH06）。</text>
+  </svg>
+</div>
+
+<h2>3.3 Flush：MemSlice 如何变成 Parquet</h2>
+<p class="lead">flush 是「内存态 → 磁盘态」的唯一通道。触发点在事件循环的 <code>commit_and_attempt_flush()</code>：每次 Commit 后检查水位；满足则走一条精心设计的异步流水线，<b>actor 绝不等待磁盘</b>。</p>
+
+<pre><code><span class="c">// mooncake_table.rs（逻辑摘录）</span>
+<span class="k">fn</span> <span class="t">should_flush</span>(&amp;<span class="k">self</span>) -&gt; <span class="t">bool</span> {
+    <span class="k">self</span>.mem_slice.get_num_rows() &gt;= <span class="k">self</span>.config.mem_slice_size  <span class="c">// release: 131072 行</span>
+}
+<span class="c">// table_handler.rs::commit_and_attempt_flush</span>
+<span class="k">if</span> should_flush() || should_force_flush || force_flush_requested {
+    <span class="k">let</span> disk_slice = mooncake_table.prepare_disk_slice(lsn)?;      <span class="c">// ① actor 内：排空 MemSlice</span>
+    tokio::spawn(<span class="k">async move</span> {                                      <span class="c">// ② 后台：写 Parquet</span>
+        <span class="k">let</span> result = disk_slice.write().<span class="k">await</span>;                     <span class="c">//    AsyncArrowWriter + 滚动切分</span>
+        event_tx.send(TableEvent::FlushResult{event_id, result});   <span class="c">// ③ 完成后回投事件</span>
+    });
+}</code></pre>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 3-3</span> · Flush 流水线全流程（含 flush LSN 顺序保证）</div>
+  <div class="fig-desc">上半部是数据流，下半部是「ongoing flush LSN 窗口」——flush 完成顺序与 LSN 顺序解耦的关键。</div>
+  <svg viewBox="0 0 1160 620" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="c31" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    </defs>
+    <g font-size="12">
+      <rect x="30" y="40" width="240" height="150" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+      <text x="150" y="66" text-anchor="middle" font-weight="700" fill="#14532d">① actor 内 prepare_disk_slice</text>
+      <text x="46" y="92" font-size="11" fill="#166534">mem_slice.drain()：排空列缓冲</text>
+      <text x="46" y="112" font-size="11" fill="#166534">产出：finalized batches + BatchEntry 列表</text>
+      <text x="46" y="132" font-size="11" fill="#166534">+ MemIndex（主键→内存位置）</text>
+      <text x="46" y="156" font-size="11" fill="#166534">创建 DiskSliceWriter（持有全部数据）</text>
+      <text x="46" y="176" font-size="10.5" fill="#15803d">此后 actor 可继续处理新事件</text>
+
+      <rect x="330" y="40" width="250" height="150" rx="10" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="455" y="66" text-anchor="middle" font-weight="700" fill="#7c2d12">② 后台 DiskSliceWriter::write</text>
+      <text x="346" y="92" font-size="11" fill="#9a3412">应用各批 deletion vector（跳过已删行）</text>
+      <text x="346" y="112" font-size="11" fill="#9a3412">AsyncArrowWriter 异步写 Parquet</text>
+      <text x="346" y="132" font-size="11" fill="#9a3412">累计 &gt;128MiB → 滚动下一个 data file</text>
+      <text x="346" y="152" font-size="11" fill="#9a3412">写本地缓存目录（write-through）</text>
+      <text x="346" y="176" font-size="10.5" fill="#b45309">disk_slice.rs · DiskSliceWriterConfig</text>
+
+      <rect x="640" y="40" width="230" height="150" rx="10" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="755" y="66" text-anchor="middle" font-weight="700" fill="#7c2d12">③ remap_index()</text>
+      <text x="656" y="92" font-size="11" fill="#9a3412">MemIndex（内存位置）</text>
+      <text x="656" y="112" font-size="11" fill="#9a3412">→ GlobalIndex（文件位置）</text>
+      <text x="656" y="132" font-size="11" fill="#9a3412">持久化为 puffin 文件索引 blob</text>
+      <text x="656" y="152" font-size="11" fill="#9a3412">persisted_bucket_hash_map.rs</text>
+      <text x="656" y="176" font-size="10.5" fill="#b45309">详见 CH04</text>
+
+      <rect x="930" y="40" width="200" height="150" rx="10" fill="#f3e8ff" stroke="#7c3aed"/>
+      <text x="1030" y="66" text-anchor="middle" font-weight="700" fill="#4c1d95">④ 上传 + Iceberg 登记</text>
+      <text x="946" y="92" font-size="11" fill="#6d28d9">文件先落对象存储缓存</text>
+      <text x="946" y="112" font-size="11" fill="#6d28d9">等下一次 iceberg snapshot</text>
+      <text x="946" y="132" font-size="11" fill="#6d28d9">由 IcebergTableSyncer 批量提交</text>
+      <text x="946" y="156" font-size="11" fill="#6d28d9">（flush 不单独提交 iceberg）</text>
+      <text x="946" y="176" font-size="10.5" fill="#7c3aed">CH06</text>
+      <line x1="270" y1="115" x2="330" y2="115" stroke="#475569" stroke-width="1.8" marker-end="url(#c31)"/>
+      <line x1="580" y1="115" x2="640" y2="115" stroke="#475569" stroke-width="1.8" marker-end="url(#c31)"/>
+      <line x1="870" y1="115" x2="930" y2="115" stroke="#475569" stroke-width="1.8" marker-end="url(#c31)"/>
+    </g>
+    <!-- result loop -->
+    <path d="M 1030 190 L 1030 240 L 150 240 L 150 190" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#c31)"/>
+    <text x="590" y="232" text-anchor="middle" font-size="11" fill="#94a3b8">⑤ 完成后回投 TableEvent::FlushResult{event_id, flush_result} → actor 串行 apply_flush_result()</text>
+
+    <!-- flush lsn window -->
+    <rect x="30" y="280" width="1100" height="150" rx="12" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="55" y="308" font-weight="700" fill="#1e3a8a">flush LSN 的顺序窗口（apply_flush_result 内部机制）</text>
+    <g font-size="12" fill="#1e293b">
+      <text x="55" y="334">ongoing_flush_lsns: BTreeMap&lt;u64 /*start_lsn*/, u32 /*file count*/&gt;　——　记录每个「在途 flush」的起始 LSN</text>
+      <text x="55" y="360">completed_unrecorded_flush_lsns　——　已完成但「窗口未到」的 flush 先攒着</text>
+      <text x="55" y="386">try_set_next_flush_lsn()：只有当 <tspan font-family="Menlo,monospace" fill="#be185d">candidate_lsn &lt; min(ongoing_flush_lsns)</tspan> 时，才允许把该 flush 的 LSN 写进 SnapshotTask —— 保证磁盘态推进严格按 LSN 序</text>
+      <text x="55" y="412" fill="#3b5ba9" font-size="11">为什么需要？flush 在后台并行完成，完成顺序 = 打乱顺序。窗口机制让「磁盘上的世界」永远是一致的 LSN 前缀。</text>
+    </g>
+    <!-- timeline -->
+    <rect x="30" y="460" width="1100" height="130" rx="12" fill="#fef9c3" stroke="#ca8a04"/>
+    <text x="55" y="488" font-weight="700" fill="#713f12">示例时间线</text>
+    <g font-size="11.5" fill="#854d0e">
+      <text x="55" y="514">LSN=100 触发 flush-A（在途）→ LSN=200 触发 flush-B（在途）→ B 先写完（completed_unrecorded 攒着）→ A 写完 → min 窗口推进 → A、B 的 LSN 依次写入 SnapshotTask</text>
+      <text x="55" y="540">期间任何 mooncake snapshot 的 new_flush_lsn 都不会越过 200，除非 A 已完成 —— 读侧（CH07/09）因此永远能看到一致的状态。</text>
+      <text x="55" y="566" font-size="11" fill="#a16207">相关字段：ongoing_flush_lsns / completed_unrecorded_flush_lsns / largest_flush_lsn（Snapshot 上）——读 mooncake_table.rs 时重点盯这三个。</text>
+    </g>
+  </svg>
+</div>
+
+<h2>3.4 两级快照：mooncake snapshot → iceberg snapshot</h2>
+<p class="lead">「快照」在 moonlink 里有两级，容易混淆，务必分清：<b>mooncake snapshot</b> 是内存态的整理与打包（500ms 周期），产出「待持久化 payload」；<b>iceberg snapshot</b> 才是真正向 Iceberg catalog 提交（异步、可攒批）。</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 3-4</span> · 两级快照流水线与触发条件</div>
+  <svg viewBox="0 0 1160 560" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="c41" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    </defs>
+    <!-- stage 1 -->
+    <rect x="30" y="40" width="340" height="300" rx="12" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.6"/>
+    <text x="200" y="66" text-anchor="middle" font-weight="700" fill="#115e59" font-size="13.5">第一级 · mooncake snapshot</text>
+    <text x="200" y="88" text-anchor="middle" font-size="11" fill="#0f766e">事件：PeriodicalMooncakeTableSnapshot(500ms) 或条件满足</text>
+    <g font-size="11">
+      <rect x="48" y="104" width="304" height="70" rx="8" fill="#fff" stroke="#5eead4"/>
+      <text x="200" y="124" text-anchor="middle" font-weight="600" fill="#115e59">SnapshotTask::should_create_snapshot?</text>
+      <text x="60" y="144" fill="#0f766e">· 有新 commit　· 新删除记录 ≥ 1000</text>
+      <text x="60" y="162" fill="#0f766e">· 有新 disk slice / streaming xact　· 有待反映的持久化结果</text>
+      <rect x="48" y="184" width="304" height="126" rx="8" fill="#fff" stroke="#5eead4"/>
+      <text x="200" y="206" text-anchor="middle" font-weight="600" fill="#115e59">SnapshotTableState::update_snapshot()（后台）</text>
+      <g fill="#0f766e" font-size="10.5">
+        <text x="60" y="226">1. reflect 上一次 iceberg 结果（unpersisted→persisted）</text>
+        <text x="60" y="244">2. 导入 file index 进缓存　3. 应用 index merge / compaction</text>
+        <text x="60" y="262">4. 重映射删除日志 → 5. prune 过期记录</text>
+        <text x="60" y="280">6. apply 事务流 / 整合新 disk slices / 合并 mem index</text>
+        <text x="60" y="298" font-weight="600">7. 推进 flush_lsn / commit point → SnapshotOutput</text>
+      </g>
+    </g>
+    <!-- payload -->
+    <rect x="430" y="110" width="240" height="160" rx="10" fill="#fef9c3" stroke="#ca8a04"/>
+    <text x="550" y="136" text-anchor="middle" font-weight="700" fill="#713f12">PersistenceSnapshotPayload</text>
+    <g font-size="10.5" fill="#854d0e">
+      <text x="560" y="160" text-anchor="middle">· 新增 data files（flush 产物）</text>
+      <text x="560" y="180" text-anchor="middle">· committed 删除记录（待写 DV）</text>
+      <text x="560" y="200" text-anchor="middle">· 新 file index blobs</text>
+      <text x="560" y="220" text-anchor="middle">· compaction / index merge 结果</text>
+      <text x="560" y="248" text-anchor="middle" fill="#a16207">＝「这一刻内存世界」的持久化清单</text>
+    </g>
+    <line x1="370" y1="190" x2="430" y2="190" stroke="#475569" stroke-width="1.8" marker-end="url(#c41)"/>
+    <!-- stage 2 -->
+    <rect x="730" y="40" width="400" height="300" rx="12" fill="#f3e8ff" stroke="#7c3aed" stroke-width="1.6"/>
+    <text x="930" y="66" text-anchor="middle" font-weight="700" fill="#4c1d95" font-size="13.5">第二级 · iceberg snapshot（真正提交）</text>
+    <text x="930" y="88" text-anchor="middle" font-size="11" fill="#6d28d9">事件：RegularIcebergSnapshot（payload 到达且前置条件满足）</text>
+    <g font-size="11">
+      <rect x="748" y="104" width="364" height="60" rx="8" fill="#fff" stroke="#d8b4fe"/>
+      <text x="930" y="124" text-anchor="middle" font-weight="600" fill="#4c1d95">can_initiate_iceberg_snapshot?</text>
+      <text x="760" y="144" fill="#6d28d9" font-size="10.5">commit_lsn &gt; min(在途 flush LSN)　·　无在途持久化任务　·　无在途快照</text>
+      <rect x="748" y="176" width="364" height="134" rx="8" fill="#fff" stroke="#d8b4fe"/>
+      <text x="930" y="198" text-anchor="middle" font-weight="600" fill="#4c1d95">persist_iceberg_snapshot → IcebergTableSyncer</text>
+      <g fill="#6d28d9" font-size="10.5">
+        <text x="760" y="220">上传 data files（并发 128）→ 写 puffin DV → 写 puffin file index</text>
+        <text x="760" y="238">→ Transaction::fast_append().commit(catalog)</text>
+        <text x="760" y="256">→ snapshot summary 写入 MOONCAKE_TABLE_FLUSH_LSN</text>
+        <text x="760" y="282">触发阈值 IcebergPersistenceConfig：</text>
+        <text x="760" y="300">新 data file ≥1　·　未持久化 committed 删除 ≥1000</text>
+        <text x="760" y="318">新/旧 compacted file ≥1　·　merged file index ≥1</text>
+      </g>
+    </g>
+    <line x1="670" y1="190" x2="730" y2="190" stroke="#475569" stroke-width="1.8" marker-end="url(#c41)"/>
+    <!-- back arrow -->
+    <path d="M 930 340 L 930 380 L 200 380 L 200 340" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#c41)"/>
+    <text x="565" y="372" text-anchor="middle" font-size="11" fill="#94a3b8">提交结果以 PersistenceSnapshotResult / MooncakeTableSnapshotResult 事件回投，在「下一次」mooncake snapshot 里 reflect（reflect-then-apply 模式）</text>
+
+    <!-- why two levels -->
+    <rect x="30" y="420" width="1100" height="110" rx="10" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="55" y="448" font-weight="700" fill="#1e3a8a">为什么拆两级？</text>
+    <g font-size="12" fill="#1e293b">
+      <text x="55" y="474">① 频率解耦：内存世界每 500ms 就能「整理干净」（读侧拿到更干净的状态），但对象存储提交不必这么频繁 —— 攒批降低提交成本；</text>
+      <text x="55" y="498">② 失败隔离：iceberg 提交失败（网络/限流）只阻塞第二级，内存世界照常运转，数据在 WAL 里兜底；</text>
+      <text x="55" y="522">③ 一致性：快照 reflect 机制保证「磁盘态」只会按 LSN 序单调推进 —— 与图 3-3 的 flush 窗口是同一哲学。</text>
+    </g>
+  </svg>
+</div>
+
+<h2>3.5 三级删除日志的生命周期</h2>
+<p>SnapshotTableState 里有三条删除日志队列，对应删除记录从「刚发生」到「进入 Iceberg」的三个阶段。理解它就理解了 moonlink 的一致性模型：</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 3-5</span> · 删除记录的三级流转（snapshot.rs 头注释的图形化）</div>
+  <svg viewBox="0 0 1160 380" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="c51" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#dc2626"/></marker>
+    </defs>
+    <g font-size="12">
+      <rect x="30" y="60" width="320" height="150" rx="10" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+      <text x="190" y="88" text-anchor="middle" font-weight="700" fill="#7f1d1d">① uncommitted_deletion_log</text>
+      <text x="190" y="112" text-anchor="middle" fill="#b91c1c">Delete 事件到达，但事务未 commit</text>
+      <text x="190" y="136" text-anchor="middle" fill="#b91c1c">打在 MemSlice 批的内存位图上，</text>
+      <text x="190" y="156" text-anchor="middle" fill="#b91c1c">对读不可见（读按 commit point 过滤）</text>
+      <text x="190" y="186" text-anchor="middle" font-size="10.5" fill="#ef4444">事务 abort → 直接丢弃</text>
+
+      <rect x="420" y="60" width="320" height="150" rx="10" fill="#fef3c7" stroke="#ca8a04" stroke-width="1.5"/>
+      <text x="580" y="88" text-anchor="middle" font-weight="700" fill="#713f12">② committed_deletion_log（未持久化）</text>
+      <text x="580" y="112" text-anchor="middle" fill="#a16207">commit 后进入此队列；读侧可见，</text>
+      <text x="580" y="136" text-anchor="middle" fill="#a16207">但对象存储里还没有对应 DV blob</text>
+      <text x="580" y="160" text-anchor="middle" fill="#a16207">参与 union read 的 position_deletes 输出</text>
+      <text x="580" y="186" text-anchor="middle" font-size="10.5" fill="#b45309">≥1000 条 → 触发 mooncake/iceberg snapshot</text>
+
+      <rect x="810" y="60" width="320" height="150" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="970" y="88" text-anchor="middle" font-weight="700" fill="#14532d">③ committed + persisted</text>
+      <text x="970" y="112" text-anchor="middle" fill="#166534">iceberg 提交完成：删除已固化为</text>
+      <text x="970" y="136" text-anchor="middle" fill="#166534">puffin DV blob，挂在 data file 上</text>
+      <text x="970" y="160" text-anchor="middle" fill="#166534">DiskFileEntry.puffin_deletion_blob</text>
+      <text x="970" y="186" text-anchor="middle" font-size="10.5" fill="#15803d">日志队列清空（prune），内存态瘦身</text>
+
+      <line x1="350" y1="135" x2="420" y2="135" stroke="#dc2626" stroke-width="2.2" marker-end="url(#c51)"/>
+      <text x="385" y="122" text-anchor="middle" font-size="10.5" fill="#dc2626">Commit</text>
+      <line x1="740" y1="135" x2="810" y2="135" stroke="#dc2626" stroke-width="2.2" marker-end="url(#c51)"/>
+      <text x="775" y="122" text-anchor="middle" font-size="10.5" fill="#dc2626">iceberg 提交</text>
+    </g>
+    <rect x="30" y="240" width="1100" height="110" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+    <text x="55" y="268" font-weight="700" fill="#334155">这套机制回答了三个一致性问题</text>
+    <g font-size="12" fill="#475569">
+      <text x="55" y="294">· 崩溃在 ②？→ WAL 里删除事件还在（CH05 重放），iceberg 里从未出现过该删除 → 无不一致；</text>
+      <text x="55" y="318">· 读发生在 ②？→ union read 把 ② 作为 position_deletes 附给引擎（CH07），等效于读到了最新状态；</text>
+      <text x="55" y="342">· compaction 与 ② 交织？→ compacting_data_files 集合锁定正在重写的文件，重映射完成后才允许 prune。</text>
+    </g>
+  </svg>
+</div>
+
+<h2>3.6 关键类型速查表</h2>
+<table>
+  <thead><tr><th>类型</th><th>文件</th><th>一句话职责</th></tr></thead>
+  <tbody>
+    <tr><td><code>MemSlice</code></td><td>mooncake_table/mem_slice.rs</td><td>可变写缓冲 = ColumnStoreBuffer + MemIndex，Copy-On-Read</td></tr>
+    <tr><td><code>ColumnStoreBuffer</code></td><td>mooncake_table/data_batches.rs</td><td>行→列攒批器，满 4096 行产出 Arc&lt;RecordBatch&gt;</td></tr>
+    <tr><td><code>InMemoryBatch</code></td><td>mooncake_table/data_batches.rs</td><td>已提交批 = RecordBatch + BatchDeletionVector</td></tr>
+    <tr><td><code>SnapshotTableState</code></td><td>mooncake_table/snapshot.rs</td><td>快照可变状态：batches / 三级删除日志 / SnapshotTask</td></tr>
+    <tr><td><code>Snapshot</code></td><td>mooncake_table.rs</td><td>磁盘态视图：disk_files + indices + flush_lsn（可 Clone）</td></tr>
+    <tr><td><code>DiskFileEntry</code></td><td>mooncake_table.rs</td><td>单个 data file 的元数据 + 缓存句柄 + DV</td></tr>
+    <tr><td><code>DiskSliceWriter</code></td><td>mooncake_table/disk_slice.rs</td><td>后台写 Parquet 并滚动切分的任务载体</td></tr>
+    <tr><td><code>SnapshotTask</code></td><td>mooncake_table.rs</td><td>下一次 mooncake snapshot 的增量暂存区</td></tr>
+    <tr><td><code>TransactionStreamState</code></td><td>mooncake_table/transaction_stream.rs</td><td>流式大事务的独立 MemSlice + 提交/中止</td></tr>
+    <tr><td><code>RecordLocation</code></td><td>storage_utils.rs</td><td>(batch_id|file_id, row_offset) 统一数据定位</td></tr>
+  </tbody>
+</table>
+
+<div class="callout warn"><b>读源码建议：</b>按「一次 Append 的一生」走读：<code>mooncake_table.rs::append</code> → <code>mem_slice.append</code> → <code>data_batches.rs</code> 攒批 → <code>commit_and_attempt_flush</code> → <code>disk_slice.rs::write</code> → <code>FlushResult</code> → <code>apply_flush_result</code> → <code>try_create_mooncake_snapshot</code> → <code>snapshot.rs::update_snapshot</code>。走完这条线，CH03 就通关了。</div>
+
+<div class="footer">
+  <a href="02-ingestion.html">← 02 数据摄入</a>
+  <a href="04-index-dv.html">下一章：04 索引与删除向量 →</a>
+</div>
+</div>
+</body>
+</html>

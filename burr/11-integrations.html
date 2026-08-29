@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>11 · 集成生态 — Apache Burr 源码剖析</title>
+<style>
+:root{
+  --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --line:#e2e8f0;
+  --blue:#2563eb; --blue-bg:#eff6ff; --green:#16a34a; --green-bg:#f0fdf4;
+  --amber:#d97706; --amber-bg:#fffbeb; --purple:#9333ea; --purple-bg:#faf5ff;
+  --red:#dc2626; --red-bg:#fef2f2; --code-bg:#0f172a;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.75}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.94);backdrop-filter:blur(6px);color:#e2e8f0;display:flex;gap:12px;align-items:center;padding:10px 24px;font-size:13px;flex-wrap:wrap}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:3px 8px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav .brand{font-weight:700;color:#fff;font-size:14px;letter-spacing:.5px;margin-right:8px}
+.topnav .brand span{color:#60a5fa}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+.hero{background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:40px 0;margin-bottom:28px}
+.hero h1{margin:0 0 8px;font-size:28px}
+.hero p{margin:0;color:#cbd5e1;font-size:14.5px;max-width:880px}
+main{padding-bottom:64px}
+h2{font-size:23px;border-left:5px solid var(--blue);padding-left:12px;margin:42px 0 10px}
+h3{font-size:18px;margin:26px 0 6px;color:#1d4ed8}
+h4{font-size:15.5px;margin:18px 0 6px}
+p,li{color:#334155;font-size:14.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:16px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.grid{display:grid;gap:16px}
+.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:860px){.grid.c2,.grid.c3{grid-template-columns:1fr}}
+figure{margin:20px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;overflow-x:auto}
+figcaption{font-size:13px;color:var(--muted);text-align:center;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+figcaption b{color:#1d4ed8}
+pre{background:var(--code-bg);color:#e2e8f0;padding:16px 18px;border-radius:10px;overflow-x:auto;font-size:12.8px;line-height:1.65}
+code{font-family:"SF Mono",Menlo,Consolas,"Courier New",monospace}
+p code,li code,td code,h3 code,h4 code,figcaption code{background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:5px;font-size:.9em}
+pre code{background:none;color:inherit;padding:0}
+.c-key{color:#7dd3fc}.c-str{color:#fbbf24}.c-com{color:#94a3b8;font-style:italic}.c-fn{color:#a5b4fc}.c-num{color:#f472b6}.c-dec{color:#fde047}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:#fff}
+th{background:#1e293b;color:#fff;text-align:left;padding:8px 12px;font-weight:600}
+td{border:1px solid var(--line);padding:7px 12px;vertical-align:top}
+tr:nth-child(even) td{background:#f8fafc}
+.path{font-family:monospace;background:#f1f5f9;border:1px solid var(--line);padding:1px 7px;border-radius:5px;font-size:12.5px;color:#0f766e;word-break:break-all}
+.note{border-left:4px solid var(--amber);background:var(--amber-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.note b{color:#92400e}
+.tip{border-left:4px solid var(--green);background:var(--green-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.tip b{color:#166534}
+.warn{border-left:4px solid var(--red);background:var(--red-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.pager{display:flex;justify-content:space-between;margin:40px 0 8px}
+.pager a{background:#fff;border:1px solid var(--line);padding:10px 18px;border-radius:10px;text-decoration:none;color:var(--ink);font-size:14px}
+.pager a:hover{border-color:var(--blue);color:var(--blue)}
+footer.foot{text-align:center;color:#94a3b8;font-size:12.5px;padding:24px 0 40px}
+svg text{font-family:inherit}
+svg .t{fill:#1e293b;font-size:13px}
+svg .tb{fill:#fff;font-weight:700;font-size:13px}
+svg .ts{fill:#475569;font-size:11px}
+svg .tt{fill:#0f172a;font-weight:700;font-size:15px}
+svg .tc{fill:#64748b;font-size:11px;font-family:Menlo,monospace}
+svg .lbl{fill:#334155;font-size:11.5px}
+svg .ar{stroke:#64748b;stroke-width:1.5;fill:none}
+svg .ar-b{stroke:#2563eb;stroke-width:1.8;fill:none}
+svg .ar-dash{stroke:#94a3b8;stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+svg .zone{fill:#f8fafc;stroke:#cbd5e1;stroke-dasharray:6 4}
+svg .bx{stroke-width:1.5}
+svg .b-blue{fill:#eff6ff;stroke:#3b82f6}
+svg .b-blue-d{fill:#dbeafe;stroke:#2563eb}
+svg .b-green{fill:#f0fdf4;stroke:#22c55e}
+svg .b-green-d{fill:#dcfce7;stroke:#16a34a}
+svg .b-amber{fill:#fffbeb;stroke:#f59e0b}
+svg .b-purple{fill:#faf5ff;stroke:#a855f7}
+svg .b-red{fill:#fef2f2;stroke:#ef4444}
+svg .b-slate{fill:#f1f5f9;stroke:#94a3b8}
+svg .b-dark{fill:#1e293b;stroke:#0f172a}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">Apache&nbsp;Burr<span>·源码深度剖析</span></span>
+  <a href="index.html">总导航</a><a href="01-overview.html">项目全景</a>
+  <a href="02-core-state.html">State</a><a href="03-core-action.html">Action</a>
+  <a href="04-core-application.html">运行时</a><a href="05-graph-builder.html">Graph/Builder</a>
+  <a href="06-lifecycle-hooks.html">Hooks/Tracing</a><a href="07-persistence.html">持久化</a>
+  <a href="08-parallelism.html">并行</a><a href="09-tracking.html">追踪系统</a>
+  <a href="10-ui-frontend.html">遥测 UI</a><a href="11-integrations.html"><b>集成生态</b></a>
+  <a href="12-execution-flow.html">端到端全景</a>
+</nav>
+
+<header class="hero"><div class="wrap">
+  <h1>11 · 集成生态：外接世界的全部接口</h1>
+  <p>源码：<span class="path">burr/integrations/</span>。Burr 不试图包裹一切——集成只做三类事：把外部组件变成 <b>Action</b>、把状态类型变成 <b>pydantic</b>、把追踪数据桥接到 <b>OTel/Langfuse</b>。</p>
+</div></header>
+
+<main class="wrap">
+
+<h2>11.1 集成全景图</h2>
+<figure>
+<svg viewBox="0 0 1060 560" width="100%" xmlns="http://www.w3.org/2000/svg">
+<rect class="bx b-blue" x="30" y="30" width="310" height="490" rx="12" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="tt" x="50" y="60">①「外部组件 → Action」</text>
+<rect class="bx b-slate" x="50" y="80" width="270" height="90" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="66" y="104" font-weight="700">hamilton.py（249 行）</text>
+<text class="ts" x="66" y="124">Hamilton(Action)：Driver 即动作；</text>
+<text class="ts" x="66" y="142">from_state/from_value 入，</text>
+<text class="ts" x="66" y="160">update_state/append_state 出</text>
+<rect class="bx b-slate" x="50" y="184" width="270" height="90" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="66" y="208" font-weight="700">haystack.py（390 行）</text>
+<text class="ts" x="66" y="228">HaystackAction 包 Component；</text>
+<text class="ts" x="66" y="146">haystack_pipeline_to_burr_graph()</text>
+<text class="ts" x="66" y="264">把整条 Pipeline 转成 Burr Graph</text>
+<rect class="bx b-slate" x="50" y="288" width="270" height="90" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="66" y="312" font-weight="700">bedrock.py（367 行）</text>
+<text class="ts" x="66" y="332">BedrockAction / BedrockStreamingAction</text>
+<text class="ts" x="66" y="350">Converse API · StateToPromptMapper</text>
+<text class="ts" x="66" y="368">guardrail 支持（:229/:304）</text>
+<text class="ts" x="50" y="408">反例说明：OpenAI/Anthropic 无官方</text>
+<text class="ts" x="50" y="426">包装 —— 官方推荐直接在 @action 里调</text>
+<text class="ts" x="50" y="444">SDK（框架不夺走你的代码，12 篇示例）</text>
+<rect class="bx b-green" x="370" y="30" width="310" height="490" rx="12" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tt" x="390" y="60">②「状态类型化 / 数据序列化」</text>
+<rect class="bx b-slate" x="390" y="80" width="270" height="120" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="406" y="104" font-weight="700">pydantic.py（423 行）</text>
+<text class="ts" x="406" y="126">@pydantic_action / @pydantic_streaming_action</text>
+<text class="ts" x="406" y="144">PydanticTypingSystem（393）：</text>
+<text class="ts" x="406" y="162">state ⇄ pydantic 模型双向物化</text>
+<text class="ts" x="406" y="180">subset_model / merge_to_state（guardrails）</text>
+<rect class="bx b-slate" x="390" y="214" width="270" height="130" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="406" y="238" font-weight="700">serde/ 插件目录</text>
+<text class="tc" x="406" y="262">pydantic.py   模型⇄JSON（带 allowlist）</text>
+<text class="tc" x="406" y="280">pandas.py     DataFrame⇄JSON（records）</text>
+<text class="tc" x="406" y="298">langchain.py  消息/文档对象</text>
+<text class="tc" x="406" y="316">pickle.py     register_type_to_pickle</text>
+<text class="ts" x="406" y="338">（state.py 导入时自动注册前三个）</text>
+<rect class="bx b-slate" x="390" y="358" width="270" height="90" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="406" y="382" font-weight="700">persisters/（07 篇详述）</text>
+<text class="ts" x="406" y="404">b_aiosqlite / b_asyncpg / b_psycopg2</text>
+<text class="ts" x="406" y="422">b_pymongo / b_redis（+废弃别名）</text>
+<rect class="bx b-purple" x="710" y="30" width="320" height="490" rx="12" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="tt" x="730" y="60">③「追踪桥接 / 运行环境」</text>
+<rect class="bx b-slate" x="730" y="80" width="280" height="130" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="746" y="104" font-weight="700">opentelemetry.py（747 行）</text>
+<text class="ts" x="746" y="126">OpenTelemetryTracker（263）Burr→OTel</text>
+<text class="ts" x="746" y="144">OpenTelemetryBridge（144）双向桥</text>
+<text class="ts" x="746" y="162">BurrTrackingSpanProcessor（474）OTel→Burr</text>
+<text class="ts" x="746" y="180">initialize_tracer / init_instruments</text>
+<text class="ts" x="746" y="198">（自动 instrument openai 等已知库）</text>
+<rect class="bx b-slate" x="730" y="224" width="280" height="76" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="746" y="248" font-weight="700">langfuse.py（414 行）</text>
+<text class="ts" x="746" y="270">LangfuseBridge(OpenTelemetryBridge)</text>
+<text class="ts" x="746" y="288">app_id→session · partition→user</text>
+<rect class="bx b-slate" x="730" y="314" width="280" height="130" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="746" y="338" font-weight="700">运行环境类</text>
+<text class="ts" x="746" y="360">streamlit.py  旧版可视化浏览器（305）</text>
+<text class="ts" x="746" y="378">notebook.py   Jupyter/Colab 起 UI（176）</text>
+<text class="ts" x="746" y="396">ray.py        RayExecutor（08 篇）</text>
+<text class="ts" x="746" y="414">base.py       require_plugin 懒加载助手</text>
+</svg>
+<figcaption><b>图 11-1 · 集成生态三分法</b> —— 组件变 Action（蓝色）、状态类型化与序列化（绿色）、追踪桥接与运行环境（紫色）。所有集成都是「可选依赖 + 函数体内 import」，内核永不感知。</figcaption>
+</figure>
+
+<h2>11.2 Hamilton 双向集成（血缘最近的伙伴）</h2>
+<div class="grid c2">
+<div class="card">
+<h4>Burr ← Hamilton：DAG 变动作</h4>
+<p><code>Hamilton(Action)</code>（<span class="path">hamilton.py:106</span>）把一个 Hamilton <code>Driver</code> 包成单个动作：</p>
+<pre><code>hamilton_action = (
+  Hamilton(driver)
+  .with_inputs(                    <span class="c-com"># 外部 run_kwargs 进 DAG</span>
+    from_value(query=<span class="c-str">"..."</span>))
+  .with_outputs({                  <span class="c-com"># DAG 结果出向 State</span>
+    <span class="c-str">"llm_output"</span>: update_state(<span class="c-str">"response"</span>),
+    <span class="c-str">"chunks"</span>: append_state(<span class="c-str">"history"</span>)}))</code></pre>
+<p> Hamilton 负责一次 DAG 内的计算编排，Burr 负责跨 DAG 的状态机推进与观测。</p>
+</div>
+<div class="card">
+<h4>Hamilton 侧的 Burr 追踪</h4>
+<p>反向地，Hamilton 官方包（sf-hamilton）提供 tracker 把 DAG 运行写入 Burr UI——所以 UI 里你能看到「一个 action 里面还有一张 DAG 图」的两层结构。这解释了：</p>
+<ul>
+<li>为何 Burr 的动作有 <code>get_source()</code> 供 UI 展示；</li>
+<li>为何追踪事件模型里 span 可以任意嵌套（06 篇）；</li>
+<li>历史渊源：Burr 出生就是 Hamilton 的「状态外壳」。</li>
+</ul>
+</div>
+</div>
+
+<h2>11.3 OpenTelemetry 双向桥</h2>
+<figure>
+<svg viewBox="0 0 1060 470" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker><marker id="arr2p" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#a855f7"/></marker></defs>
+<rect class="bx b-blue-d" x="40" y="40" width="270" height="180" rx="12" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="tt" x="60" y="68">Burr 侧</text>
+<text class="ts" x="60" y="94">Application 执行 → 钩子事件</text>
+<text class="ts" x="60" y="114">（create/step/span/attribute）</text>
+<text class="tc" x="60" y="146">OpenTelemetryTracker（:263）</text>
+<text class="ts" x="60" y="168">本身是 LifecycleAdapter 组合，</text>
+<text class="ts" x="60" y="186">把每类钩子翻译成 OTel span</text>
+<text class="ts" x="60" y="206">（with_tracker(use_otel_tracing=True)）</text>
+<rect class="bx b-amber" x="390" y="40" width="280" height="180" rx="12" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="tt" x="410" y="68">OTel SDK</text>
+<text class="ts" x="410" y="94">TracerProvider + SpanProcessor 链</text>
+<text class="tc" x="410" y="122">BurrTrackingSpanProcessor(:474)</text>
+<text class="ts" x="410" y="144">反向插进处理器链：把 OTel 侧</text>
+<text class="ts" x="410" y="162">产生的 span（例如 OTel 自动</text>
+<text class="ts" x="410" y="180">instrumentation 的 openai 调用）</text>
+<text class="ts" x="410" y="198">映射回 Burr 的 span 事件</text>
+<rect class="bx b-purple" x="750" y="40" width="270" height="180" rx="12" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="tt" x="770" y="68">外部后端</text>
+<text class="tc" x="770" y="94">initialize_tracer(:541)</text>
+<text class="ts" x="770" y="116">配置 OTLP exporter → Jaeger/</text>
+<text class="ts" x="770" y="134">Tempo/云厂商 APM</text>
+<text class="tc" x="770" y="166">OpenTelemetryBridge(:144)</text>
+<text class="ts" x="770" y="188">双向桥基类 —— LangfuseBridge</text>
+<text class="ts" x="770" y="206">继承它，导出时做字段映射</text>
+<path class="ar-b" d="M310 110 L388 110" marker-end="url(#arr2)"/>
+<text class="lbl" x="316" y="100" style="fill:#2563eb">Burr→OTel</text>
+<path class="ar-b" d="M670 110 L748 110" marker-end="url(#arr2)"/>
+<text class="lbl" x="676" y="100" style="fill:#2563eb">OTLP 导出</text>
+<path class="ar" d="M670 190 L530 258" style="stroke:#a855f7" style="stroke-dasharray:5 4" marker-end="url(#arr2p)"/>
+<text class="lbl" x="540" y="246" style="fill:#7c3aed">OTel→Burr（回填 UI）</text>
+<rect class="bx b-green" x="40" y="280" width="980" height="150" rx="12" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tt" x="60" y="308">组装示例（integrations/opentelemetry.py 文档示例模式）</text>
+<text class="tc" x="60" y="336">tracker = OpenTelemetryTracker(burr_tracker=LocalTrackingClient(...))   # Burr 事件同时镜像到 OTel</text>
+<text class="tc" x="60" y="360">provider.add_span_processor(BurrTrackingSpanProcessor(...))            # OTel 事件同时回填到 Burr UI</text>
+<text class="tc" x="60" y="384">init_instruments()   # 自动 instrument openai 等已安装库（available_dists 检测）→ LLM 调用自动成 span</text>
+<text class="ts" x="60" y="412">效果：Burr UI 与任意 OTel 生态互通 —— 两边都能看到完整链路，选择你喜欢的观测面。</text>
+</svg>
+<figcaption><b>图 11-2 · OpenTelemetry 双向桥</b> —— 出向（Tracker 把 Burr 钩子镜像为 OTel span）与入向（SpanProcessor 把 OTel span 回填 Burr UI）各自独立、可单独启用；Langfuse 通过继承双向桥获得同款能力。</figcaption>
+</figure>
+
+<h2>11.4 pydantic 类型化状态（guardrails 模式）</h2>
+<div class="grid c2">
+<div class="card">
+<h4>两个装饰器 + 一个类型系统</h4>
+<ul>
+<li><code>@action.pydantic(reads, writes, state_input_type, state_output_type)</code>（<span class="path">action.py:1852</span> 转发到 <span class="path">integrations/pydantic.py:192</span>）——动作签名里的 state 参数变成 pydantic 模型，引擎自动做双向转换；</li>
+<li><code>PydanticTypingSystem</code>（:393）实现 02 篇的 TypingSystem：让<b>整个应用</b>以模型为外观；</li>
+<li><code>subset_model(state, keys)</code> / <code>merge_to_state(model, state)</code>（:171 附近）——把「部分模型」安全地写回状态，实现字段级 guardrails。</li>
+</ul>
+</div>
+<div class="card">
+<h4>何时值得用</h4>
+<ul>
+<li>状态结构复杂、需要字段校验（LLM 结构化输出直接进模型）；</li>
+<li>想要「改一个字段名，全链路 IDE 报错」的重构体验；</li>
+<li>配合 <code>instructor</code> 等结构化输出库使用。</li>
+</ul>
+<div class="note"><b>代价：</b>每步有模型构造/校验开销；且 <code>data</code> 物化是 cached_property——跨步不会缓存，注意热路径。</div>
+</div>
+</div>
+
+<h2>11.5 serde 插件与运行环境集成速览</h2>
+<div class="grid c3">
+<div class="card">
+<h4>serde 插件机制</h4>
+<p>插件就是「在 import 时向 02 篇的两级注册表注册函数」的模块。以 pandas 为例：<code>serialize_pydantic</code> 风格的函数把 DataFrame 变成 <code>{"__burr_serde__": "pandas.DataFrame", "value": records}</code>，反序列化时经 StringDispatch 还原。pickle 插件出于安全考虑要求<b>逐类型显式注册</b>。</p>
+</div>
+<div class="card">
+<h4>streamlit.py（旧 UI）</h4>
+<p>React UI 出现前的探索工具：`render_state_machine` 用 graphviz 在 Streamlit 里画图、读 log.jsonl 回放。现属「轻量替代品」，代码仍是学习 log.jsonl 格式的好材料。</p>
+</div>
+<div class="card">
+<h4>notebook.py</h4>
+<p><code>%load_ext burr.integrations.notebook</code> 后获得 notebook magic 与 <code>launch_ui()</code>：在 Jupyter/Colab 里以子进程拉起追踪服务并自动开浏览器端口转发（Colab 场景）。Graph/Application 的 <code>_repr_mimebundle_</code> 让 notebook 内联渲染 graphviz 图。</p>
+</div>
+</div>
+
+<div class="tip"><b>本篇要点：</b>① 集成只有三类姿势：组件→Action、状态→类型、追踪→桥；② Hamilton 是双向深度集成（DAG in action、tracker in UI）；③ OTel 桥是双向的：出向镜像 + 入向回填，Langfuse 白嫖同款；④ 一切可选依赖都懒加载，内核零感知；⑤ LLM SDK 不被包装——Burr 刻意让你直接写业务代码。</div>
+
+<div class="pager"><a href="10-ui-frontend.html">← 10 遥测 UI</a><a href="12-execution-flow.html">下一篇：12 端到端全景 →</a></div>
+</main>
+<footer class="foot">Apache Burr 源码学习笔记 · 11 集成生态 · 基于 v0.42.0</footer>
+</body>
+</html>

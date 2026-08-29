@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>09 · 追踪客户端与服务端 — Apache Burr 源码剖析</title>
+<style>
+:root{
+  --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --line:#e2e8f0;
+  --blue:#2563eb; --blue-bg:#eff6ff; --green:#16a34a; --green-bg:#f0fdf4;
+  --amber:#d97706; --amber-bg:#fffbeb; --purple:#9333ea; --purple-bg:#faf5ff;
+  --red:#dc2626; --red-bg:#fef2f2; --code-bg:#0f172a;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.75}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.94);backdrop-filter:blur(6px);color:#e2e8f0;display:flex;gap:12px;align-items:center;padding:10px 24px;font-size:13px;flex-wrap:wrap}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:3px 8px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav .brand{font-weight:700;color:#fff;font-size:14px;letter-spacing:.5px;margin-right:8px}
+.topnav .brand span{color:#60a5fa}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+.hero{background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:40px 0;margin-bottom:28px}
+.hero h1{margin:0 0 8px;font-size:28px}
+.hero p{margin:0;color:#cbd5e1;font-size:14.5px;max-width:880px}
+main{padding-bottom:64px}
+h2{font-size:23px;border-left:5px solid var(--blue);padding-left:12px;margin:42px 0 10px}
+h3{font-size:18px;margin:26px 0 6px;color:#1d4ed8}
+h4{font-size:15.5px;margin:18px 0 6px}
+p,li{color:#334155;font-size:14.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:16px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.grid{display:grid;gap:16px}
+.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:860px){.grid.c2,.grid.c3{grid-template-columns:1fr}}
+figure{margin:20px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;overflow-x:auto}
+figcaption{font-size:13px;color:var(--muted);text-align:center;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+figcaption b{color:#1d4ed8}
+pre{background:var(--code-bg);color:#e2e8f0;padding:16px 18px;border-radius:10px;overflow-x:auto;font-size:12.8px;line-height:1.65}
+code{font-family:"SF Mono",Menlo,Consolas,"Courier New",monospace}
+p code,li code,td code,h3 code,h4 code,figcaption code{background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:5px;font-size:.9em}
+pre code{background:none;color:inherit;padding:0}
+.c-key{color:#7dd3fc}.c-str{color:#fbbf24}.c-com{color:#94a3b8;font-style:italic}.c-fn{color:#a5b4fc}.c-num{color:#f472b6}.c-dec{color:#fde047}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:#fff}
+th{background:#1e293b;color:#fff;text-align:left;padding:8px 12px;font-weight:600}
+td{border:1px solid var(--line);padding:7px 12px;vertical-align:top}
+tr:nth-child(even) td{background:#f8fafc}
+.path{font-family:monospace;background:#f1f5f9;border:1px solid var(--line);padding:1px 7px;border-radius:5px;font-size:12.5px;color:#0f766e;word-break:break-all}
+.note{border-left:4px solid var(--amber);background:var(--amber-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.note b{color:#92400e}
+.tip{border-left:4px solid var(--green);background:var(--green-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.tip b{color:#166534}
+.warn{border-left:4px solid var(--red);background:var(--red-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.pager{display:flex;justify-content:space-between;margin:40px 0 8px}
+.pager a{background:#fff;border:1px solid var(--line);padding:10px 18px;border-radius:10px;text-decoration:none;color:var(--ink);font-size:14px}
+.pager a:hover{border-color:var(--blue);color:var(--blue)}
+footer.foot{text-align:center;color:#94a3b8;font-size:12.5px;padding:24px 0 40px}
+svg text{font-family:inherit}
+svg .t{fill:#1e293b;font-size:13px}
+svg .tb{fill:#fff;font-weight:700;font-size:13px}
+svg .ts{fill:#475569;font-size:11px}
+svg .tt{fill:#0f172a;font-weight:700;font-size:15px}
+svg .tc{fill:#64748b;font-size:11px;font-family:Menlo,monospace}
+svg .lbl{fill:#334155;font-size:11.5px}
+svg .ar{stroke:#64748b;stroke-width:1.5;fill:none}
+svg .ar-b{stroke:#2563eb;stroke-width:1.8;fill:none}
+svg .ar-dash{stroke:#94a3b8;stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+svg .zone{fill:#f8fafc;stroke:#cbd5e1;stroke-dasharray:6 4}
+svg .bx{stroke-width:1.5}
+svg .b-blue{fill:#eff6ff;stroke:#3b82f6}
+svg .b-blue-d{fill:#dbeafe;stroke:#2563eb}
+svg .b-green{fill:#f0fdf4;stroke:#22c55e}
+svg .b-green-d{fill:#dcfce7;stroke:#16a34a}
+svg .b-amber{fill:#fffbeb;stroke:#f59e0b}
+svg .b-purple{fill:#faf5ff;stroke:#a855f7}
+svg .b-red{fill:#fef2f2;stroke:#ef4444}
+svg .b-slate{fill:#f1f5f9;stroke:#94a3b8}
+svg .b-dark{fill:#1e293b;stroke:#0f172a}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">Apache&nbsp;Burr<span>·源码深度剖析</span></span>
+  <a href="index.html">总导航</a><a href="01-overview.html">项目全景</a>
+  <a href="02-core-state.html">State</a><a href="03-core-action.html">Action</a>
+  <a href="04-core-application.html">运行时</a><a href="05-graph-builder.html">Graph/Builder</a>
+  <a href="06-lifecycle-hooks.html">Hooks/Tracing</a><a href="07-persistence.html">持久化</a>
+  <a href="08-parallelism.html">并行</a><a href="09-tracking.html"><b>追踪系统</b></a>
+  <a href="10-ui-frontend.html">遥测 UI</a><a href="11-integrations.html">集成生态</a>
+  <a href="12-execution-flow.html">端到端全景</a>
+</nav>
+
+<header class="hero"><div class="wrap">
+  <h1>09 · 追踪客户端与服务端：从 JSONL 到浏览器</h1>
+  <p>源码：<span class="path">burr/tracking/</span>（client.py 680 行 / s3client.py 513 行 / server/ 全目录）。设计关键词：<b>文件即数据库</b>（本地模式）、<b>追加式 JSONL</b>、<b>客户端与服务端共享同一目录</b>。</p>
+</div></header>
+
+<main class="wrap">
+
+<h2>9.1 LocalTrackingClient：把钩子写成文件</h2>
+<div class="grid c2">
+<div class="card">
+<h3>身份与文件契约</h3>
+<pre><code><span class="c-com"># tracking/client.py:155-172</span>
+<span class="c-key">class</span> <span class="c-fn">LocalTrackingClient</span>(SyncTrackingClient, BaseStateLoader):
+    GRAPH_FILENAME    = <span class="c-str">"graph.json"</span>
+    METADATA_FILENAME = <span class="c-str">"metadata.json"</span>
+    LOG_FILENAME      = <span class="c-str">"log.jsonl"</span>
+    CHILDREN_FILENAME = <span class="c-str">"children.jsonl"</span>
+    DEFAULT_STORAGE_DIR = <span class="c-str">"~/.burr"</span></code></pre>
+<p>它同时实现 <code>BaseStateLoader</code> —— 追踪数据可以反过来当<b>状态初始化器</b>：<code>initialize_from(tracker, ...)</code> 直接从 log.jsonl 恢复（hello-world-counter 就这么用）。</p>
+</div>
+<div class="card">
+<h3>事件 → 钩子的映射</h3>
+<table>
+<tr><th>钩子</th><th>写盘动作</th></tr>
+<tr><td><code>post_application_create</code></td><td>打开 log 句柄；写 graph.json（图+源码）+ metadata.json；向父目录 children.jsonl 追加 fork/spawn 关系</td></tr>
+<tr><td><code>pre_run_step</code></td><td>追加 BeginEntry（含 inputs）</td></tr>
+<tr><td><code>post_run_step</code></td><td>追加 EndEntry（含序列化 state/result/异常/耗时）</td></tr>
+<tr><td><code>pre/post_start_span、do_log_attributes</code></td><td>追加 span/attribute 事件</td></tr>
+<tr><td><code>pre_start_stream / post_stream_item / post_end_stream</code></td><td>流事件（post_stream_item 只记首个，省体积）</td></tr>
+</table>
+</div>
+</div>
+
+<h2>9.2 磁盘布局与事件时间线</h2>
+<figure>
+<svg viewBox="0 0 1060 480" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<rect class="bx b-amber" x="30" y="30" width="420" height="410" rx="12" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="tt" x="50" y="60">~/.burr/ 目录树</text>
+<text class="tc" x="50" y="90">~/.burr/</text>
+<text class="tc" x="72" y="112">└── demo_counter/               ← project（名字仅字母数字_-）</text>
+<text class="tc" x="94" y="134">├── annotations.jsonl        ← UI 注释（服务端写）</text>
+<text class="tc" x="94" y="156">├── app-abc123/              ← 每次运行一个目录(app_id)</text>
+<text class="tc" x="116" y="178">├── graph.json    状态机+动作源码</text>
+<text class="tc" x="116" y="200">├── metadata.json partition/父子指针</text>
+<text class="tc" x="116" y="222">├── log.jsonl     ★ 全部事件（追加式）</text>
+<text class="tc" x="116" y="244">└── (children.jsonl 仅当有子应用)</text>
+<text class="tc" x="94" y="274">├── app-def456/ …</text>
+<text class="tc" x="94" y="304">└── children.jsonl           ← 反向索引：列出 fork/spawn 的子应用</text>
+<text class="ts" x="50" y="340">children.jsonl 写在「父应用目录」里——</text>
+<text class="ts" x="50" y="358">文件系统不是数据库，双向查询靠这种反范式</text>
+<text class="ts" x="50" y="376">冗余；并发写用 fcntl.flock 独占锁（client.py:270-274）。</text>
+<text class="ts" x="50" y="408">project 名校验：_allowed_project_name 非法字符直接</text>
+<text class="ts" x="50" y="426">ValueError（client.py:193-197）。</text>
+<rect class="bx b-blue" x="490" y="30" width="540" height="410" rx="12" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="tt" x="510" y="60">log.jsonl 的一段时间线（一次含流式 + span 的步骤）</text>
+<rect class="bx b-slate" x="510" y="76" width="500" height="26" rx="6" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="tc" x="522" y="94">{"type":"begin_entry", "action":"answer", "sequence_id":7, "start_time":…, "inputs":{…}}</text>
+<rect class="bx b-purple" x="530" y="108" width="480" height="26" rx="6" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="tc" x="542" y="126">{"type":"begin_span", "action":"answer", "span_id":"s_root", "parent_span_id":null}</text>
+<rect class="bx b-purple" x="550" y="140" width="460" height="26" rx="6" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="tc" x="562" y="158">{"type":"begin_span", "span_id":"s_llm", "parent_span_id":"s_root", "span_type":"llm"}</text>
+<rect class="bx b-amber" x="570" y="172" width="440" height="26" rx="6" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="tc" x="582" y="190">{"type":"attribute", "span_id":"s_llm", "key":"prompt_tokens", "value":1320}</text>
+<rect class="bx b-purple" x="550" y="204" width="460" height="26" rx="6" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="tc" x="562" y="222">{"type":"end_span", "span_id":"s_llm", "end_time":…}</text>
+<rect class="bx b-green" x="530" y="236" width="480" height="26" rx="6" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tc" x="542" y="254">{"type":"initialize_stream"} {"type":"first_item_stream"} …</text>
+<rect class="bx b-red" x="510" y="268" width="500" height="30" rx="6" style="fill:#fef2f2" style="stroke:#ef4444"/>
+<text class="tc" x="522" y="288">{"type":"end_entry", "action":"answer", "sequence_id":7, "result":{…}, "state":{…序列化…}, "exception":null}</text>
+<text class="ts" x="510" y="330">全部模型定义在 tracking/common/models.py（pydantic v2）：</text>
+<text class="tc" x="510" y="352">BeginEntryModel / EndEntryModel / BeginSpanModel / EndSpanModel /</text>
+<text class="tc" x="510" y="370">AttributeModel / InitializeStreamModel / FirstItemStreamModel / EndStreamModel /</text>
+<text class="tc" x="510" y="388">ApplicationModel / PointerModel / ChildApplicationModel …</text>
+<text class="ts" x="510" y="416">服务端读取：LocalBackend 逐行 safe_json_load 重建（server/backend.py）。</text>
+</svg>
+<figcaption><b>图 9-1 · 磁盘布局与 log.jsonl 时间线</b> —— 每个应用一个目录、一条 JSONL 事件流；span/attribute 事件夹在 begin_entry 与 end_entry 之间，读取端按 sequence_id 与 span id 重建结构。</figcaption>
+</figure>
+
+<h2>9.3 FastAPI 服务端</h2>
+<div class="card">
+<table>
+<tr><th>模块</th><th>职责</th><th>源码</th></tr>
+<tr><td><code>run.py</code></td><td><code>create_burr_ui_app(serve_static)</code> 装配路由 + SPA 托管；<code>mount_burr_ui(parent_app, path="/burr")</code> 嵌入你的 FastAPI；lifespan 里拷贝 demo 数据</td><td><span class="path">server/run.py:192 / :422 / :131</span></td></tr>
+<tr><td><code>backend.py</code></td><td><code>BackendBase</code>（list_projects / list_apps / get_application_logs + settings_model/create_from_env）+ 四个 mixin（Indexing/Annotations/Snapshotting/EventDriven）</td><td><span class="path">server/backend.py:190</span></td></tr>
+<tr><td><code>LocalBackend</code></td><td>默认实现：直接读 ~/.burr 同一份文件；注释存 <code>&lt;project&gt;/annotations.jsonl</code></td><td><span class="path">:296</span></td></tr>
+<tr><td><code>schema.py</code></td><td>pydantic 响应模型（Project/ApplicationSummary/ApplicationLogs/Step/Span/Annotation…），OpenAPI 文档即由此生成前端客户端</td><td><span class="path">server/schema.py</span></td></tr>
+</table>
+<p><b>关键 REST 端点</b>（前缀 <code>/api/v0</code>）：<code>projects</code> · <code>{project}/{partition}/apps</code>（分页列表）· <code>{project}/{app}/{partition}/apps</code>（完整日志）· <code>annotations</code> CRUD · <code>ready / version / indexing_jobs / metadata/app_spec</code>。</p>
+<div class="note"><b>后端选择：</b>环境变量 <code>BURR_BACKEND_IMPL</code> 指向实现类（默认 LocalBackend）；CLI 里 <code>--backend s3</code> 映射到 <code>SQLiteS3Backend</code>（cli/__main__.py:154）。</div>
+</div>
+
+<h2>9.4 S3 生产拓扑（tracking-server-s3）</h2>
+<figure>
+<svg viewBox="0 0 1060 430" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<rect class="bx b-blue-d" x="40" y="40" width="280" height="150" rx="12" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="tt" x="60" y="68">应用集群（多机）</text>
+<text class="tc" x="60" y="96">S3TrackingClient（s3client.py:130）</text>
+<text class="ts" x="60" y="122">写 data/&lt;project&gt;/YYYY/MM/DD/HH/</text>
+<text class="ts" x="60" y="140">{application.json, metadata.json,</text>
+<text class="ts" x="60" y="158">log_&lt;ts&gt;.jsonl}</text>
+<text class="ts" x="60" y="180">后台线程 fire-and-forget（可选）</text>
+<rect class="bx b-amber" x="390" y="30" width="280" height="170" rx="12" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="tt" x="410" y="58">AWS S3 + SQS</text>
+<text class="tc" x="410" y="84">S3 事件通知 → SQS 队列</text>
+<text class="ts" x="410" y="112">SQLiteS3Backend 消费 SQS 消息</text>
+<text class="ts" x="410" y="130">（_parse_sqs_message_events）</text>
+<text class="ts" x="410" y="150">把对象键写入本地 SQLite 索引</text>
+<text class="ts" x="410" y="170">（TrackingMode: local/snapshot，BIP-0042）</text>
+<rect class="bx b-green" x="740" y="30" width="280" height="170" rx="12" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tt" x="760" y="58">追踪服务（SQLiteS3Backend）</text>
+<text class="tc" x="760" y="84">本地 SQLite = 目录索引（快）</text>
+<text class="tc" x="760" y="104">S3 = 数据本体（真源）</text>
+<text class="ts" x="760" y="130">Tortoise-ORM + aerich 迁移；</text>
+<text class="ts" x="760" y="148">列表查询走索引，详情按需拉 S3</text>
+<text class="ts" x="760" y="168">annotations 仍存本地 JSONL</text>
+<rect class="bx b-purple" x="390" y="260" width="630" height="110" rx="12" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="tt" x="410" y="288">为什么这样设计</text>
+<text class="ts" x="410" y="314">对象存储无法 list/分页得快 → 用 SQLite 建「文件名索引」；多副本部署时各自消费 SQS 保持索引一致；</text>
+<text class="ts" x="410" y="334">服务无状态化（数据全在 S3），可横向扩容 —— 这是把「文件即数据库」理念推到云端的形态。</text>
+<path class="ar-b" d="M320 115 L388 110" marker-end="url(#arr2)"/>
+<path class="ar-b" d="M670 115 L738 112" marker-end="url(#arr2)"/>
+<path class="ar-dash" d="M530 200 L530 258" />
+</svg>
+<figcaption><b>图 9-2 · S3 部署拓扑</b> —— 客户端直写 S3，SQS 事件驱动索引器更新 SQLite，服务端「索引在本、数据在云」。本地模式的「客户端/服务端共享目录」在这里退化为「共享 S3 前缀」。</figcaption>
+</figure>
+
+<h2>9.5 细节与陷阱</h2>
+<div class="grid c2">
+<div class="card">
+<h4>值得注意的实现细节</h4>
+<ul>
+<li>client 的 <code>__getstate__/__setstate__</code> 把打开的文件句柄排除在 pickle 外——client 对象可以随应用一起被 pickle/并行传递（client.py 尾部）。</li>
+<li><code>copy_from / fork_app</code> 支持整目录复制出分支应用；<code>get_logs/load</code> 类方法用于离线分析。</li>
+<li>流式观测的 <code>post_stream_item</code> 只记录<b>首个</b>块（体积考虑），UI 显示「有流、首块延迟」。</li>
+<li>S3 客户端的 <code>unique_ordered_prefix</code> 按时间分层，保证 S3 list 的时间有序性。</li>
+</ul>
+</div>
+<div class="card">
+<h4>常见问题</h4>
+<ul>
+<li><b>UI 看不到数据？</b>确认 server 的 <code>burr_path</code>（env）与 client 的 <code>storage_dir</code> 指向同一目录；project 名拼写一致。</li>
+<li><b>并发写损坏？</b>log.jsonl 是单写者追加（每个 app 目录一个写者）；children.jsonl 有 flock。多进程写同一 app_id 不受支持——那是 fork/spawn 该做的事。</li>
+<li><b>状态反序列化失败？</b>检查 serde 注册（02 篇）——服务端只需展示 JSON，通常无需还原类型。</li>
+<li><b>匿名遥测？</b>已按 ASF 政策移除；<span class="path">burr/telemetry.py</span> 只是兼容桩。</li>
+</ul>
+</div>
+</div>
+
+<div class="tip"><b>本篇要点：</b>① 追踪客户端 = 钩子集合 → 追加式 JSONL；graph.json/metadata.json 一次性写、log.jsonl 持续追加、children.jsonl 反范式血缘；② 服务端默认 LocalBackend 直接读同一目录——「文件即 API 的数据源」；③ 生产用 S3+SQS+SQLite 索引的同构扩展；④ 客户端兼任 BaseStateLoader，追踪数据可直接用于断点恢复。</div>
+
+<div class="pager"><a href="08-parallelism.html">← 08 并行</a><a href="10-ui-frontend.html">下一篇：10 遥测 UI →</a></div>
+</main>
+<footer class="foot">Apache Burr 源码学习笔记 · 09 追踪系统 · 基于 v0.42.0</footer>
+</body>
+</html>

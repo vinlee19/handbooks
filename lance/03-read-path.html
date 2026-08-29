@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>03 · 读路径：从 Dataset.scan 到 RecordBatch</title>
+<style>
+  :root{--bg:#f7f8fb;--card:#fff;--ink:#1a2233;--muted:#5b6472;--accent:#3b5bdb;--accent2:#7048e8;--teal:#0ca678;--orange:#e8590c;--red:#e03131;--line:#dde3ee;--code-bg:#f1f3f9}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.78}
+  header{background:linear-gradient(135deg,#0b7285,#15aabf 60%,#3bc9db);color:#fff;padding:44px 8% 36px}
+  header h1{font-size:28px}header p{opacity:.95;font-size:15px;max-width:920px;margin-top:8px}
+  nav.top{background:#101832;padding:10px 8%;font-size:13.5px}
+  nav.top a{color:#9db8ff;text-decoration:none;margin-right:18px}
+  nav.top a.cur{color:#fff;font-weight:700}
+  main{max-width:1150px;margin:0 auto;padding:34px 4% 90px}
+  h2{font-size:23px;margin:42px 0 14px;padding-left:14px;border-left:5px solid #0b7285}
+  h3{font-size:18px;margin:26px 0 10px;color:#08657a}
+  p{margin:10px 0}.lead{color:var(--muted);font-size:15.5px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px 26px;margin:16px 0;box-shadow:0 1px 3px rgba(30,42,90,.05)}
+  code{font-family:"SF Mono",Menlo,Consolas,monospace;background:var(--code-bg);border-radius:5px;padding:1px 7px;font-size:.92em;color:#0b3a8f}
+  pre{background:#0f1730;color:#dbe4ff;border-radius:10px;padding:16px 20px;overflow-x:auto;font-size:13px;line-height:1.6;margin:14px 0}
+  pre .c{color:#7d8bb0}.k{color:#82aaff}.s{color:#c3e88d}.t2{color:#ffcb6b}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th{background:#e7fafc;color:#08657a;text-align:left;padding:8px 12px;border:1px solid var(--line)}
+  td{padding:7px 12px;border:1px solid var(--line);vertical-align:top}
+  .svgwrap{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin:20px 0;overflow-x:auto}
+  .svgwrap .cap{text-align:center;color:var(--muted);font-size:13px;margin-top:8px}
+  .note{border-left:4px solid var(--orange);background:#fff4ec;border-radius:0 8px 8px 0;padding:11px 16px;margin:13px 0;font-size:14px}
+  .tip{border-left:4px solid var(--teal);background:#e9faf3;border-radius:0 8px 8px 0;padding:11px 16px;margin:13px 0;font-size:14px}
+  svg text{font-family:-apple-system,PingFang SC,sans-serif}
+</style>
+</head>
+<body>
+<header>
+  <h1>03 · 读路径全链路</h1>
+  <p>一次 <code>dataset.scan().filter(...).to_batches()</code> 背后：Scanner 构建 DataFusion 物理计划 → 文件读取器按 footer 定位 page → I/O 调度器按优先级并发拉取 → 解码线程池还原 Arrow → 谓词过滤/删除掩码应用。本章逐层拆解每个环节的源码。</p>
+</header>
+<nav class="top">
+  <a href="index.html">总览</a><a href="01-physical-layout.html">01 物理布局</a><a href="02-encoding.html">02 编码体系</a><a class="cur" href="03-read-path.html">03 读路径</a><a href="04-write-path.html">04 写路径与提交</a><a href="05-vector-index.html">05 向量索引</a><a href="06-scalar-index.html">06 标量索引/FTS</a><a href="07-linalg-simd.html">07 SIMD</a><a href="08-bindings-ecosystem.html">08 生态</a>
+</nav>
+<main>
+
+<h2>1. 起点：Scanner 如何编译成执行计划</h2>
+<p class="lead"><code>rust/lance/src/dataset/scanner.rs</code>（16,344 行，全仓库最大文件）是查询的"编译器前端"。它是一个 fluent builder，最终 <code>create_plan()</code> 产出一棵 DataFusion <code>ExecutionPlan</code> 树：</p>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1080 560" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 3-1 · 典型查询的物理执行计划树（自底向上执行，流式 pull）</text>
+
+  <!-- Tree: top = output -->
+  <g font-size="12.5">
+    <rect x="430" y="46" width="220" height="46" rx="9" fill="#dbe4ff" stroke="#3b5bdb" stroke-width="2"/>
+    <text x="540" y="66" text-anchor="middle" font-weight="700" fill="#243b8a">用户流（RecordBatch 流）</text>
+    <text x="540" y="84" text-anchor="middle" font-size="11" fill="#3b5bdb">scanner.to_batches() 消费端</text>
+
+    <rect x="380" y="120" width="320" height="46" rx="9" fill="#fff" stroke="#7048e8" stroke-width="1.6"/>
+    <text x="540" y="140" text-anchor="middle" font-weight="700" fill="#4c1d95">LanceCommitLock / LimitExec（可选）</text>
+    <text x="540" y="158" text-anchor="middle" font-size="11" fill="#5b6472">limit/offset 下推到 scan 层</text>
+
+    <rect x="330" y="194" width="420" height="56" rx="9" fill="#fff4ec" stroke="#e8590c" stroke-width="1.6"/>
+    <text x="540" y="216" text-anchor="middle" font-weight="700" fill="#a34700">LanceFilterExec（残余谓词，未走索引的部分）</text>
+    <text x="540" y="238" text-anchor="middle" font-size="11" fill="#5b6472">DataFusion 优化器拆分谓词：可下推的移到索引/scan</text>
+
+    <rect x="280" y="278" width="520" height="56" rx="9" fill="#f3ecff" stroke="#7048e8" stroke-width="1.6"/>
+    <text x="540" y="300" text-anchor="middle" font-weight="700" fill="#4c1d95">TakeExec（乱序行取回）＋ RowAddrMaskFilterExec</text>
+    <text x="540" y="322" text-anchor="middle" font-size="11" fill="#5b6472">ANN/标量索引给出 row_addr 集合 → 这里按地址取列数据并应用删除掩码</text>
+
+    <rect x="60" y="362" width="300" height="120" rx="9" fill="#e7f7f1" stroke="#0ca678" stroke-width="1.6"/>
+    <text x="210" y="386" text-anchor="middle" font-weight="700" fill="#087f5b">ANN 分支（可选）</text>
+    <text x="210" y="408" text-anchor="middle" font-size="11.5">ANNIvfPartitionExec → ANNIvfSubIndexExec</text>
+    <text x="210" y="428" text-anchor="middle" font-size="11.5">→ KNNVectorDistanceExec → top-k 排序</text>
+    <text x="210" y="450" text-anchor="middle" font-size="11" fill="#8a93a6">分区/子索引两级并行（knn.rs:1164/1381/150）</text>
+    <text x="210" y="470" text-anchor="middle" font-size="11" fill="#8a93a6">prefilter 与标量索引按位与融合</text>
+
+    <rect x="400" y="362" width="280" height="120" rx="9" fill="#eef2ff" stroke="#3b5bdb" stroke-width="1.6"/>
+    <text x="540" y="386" text-anchor="middle" font-weight="700" fill="#243b8a">ScalarIndexExec（可选）</text>
+    <text x="540" y="408" text-anchor="middle" font-size="11.5">btree/bitmap/inverted 查询 → row id mask</text>
+    <text x="540" y="428" text-anchor="middle" font-size="11" fill="#8a93a6">scalar_index.rs:117；谓词命中索引时</text>
+    <text x="540" y="448" text-anchor="middle" font-size="11" fill="#8a93a6">谓词被替换成"取掩码"的算子</text>
+    <text x="540" y="468" text-anchor="middle" font-size="11" fill="#8a93a6">CountFromMaskExec 专做 count(*) 加速</text>
+
+    <rect x="720" y="362" width="300" height="120" rx="9" fill="#fff" stroke="#3b5bdb" stroke-width="1.8"/>
+    <text x="870" y="386" text-anchor="middle" font-weight="700" fill="#243b8a">LanceScanExec / LancePushdownScanExec</text>
+    <text x="870" y="408" text-anchor="middle" font-size="11.5">按 fragment 切片并行流式扫描（scan.rs:598）</text>
+    <text x="870" y="428" text-anchor="middle" font-size="11" fill="#8a93a6">LanceStream 逐 fragment 产 batch</text>
+    <text x="870" y="448" text-anchor="middle" font-size="11" fill="#8a93a6">zone map/统计可整段跳过（pushdown_scan.rs）</text>
+    <text x="870" y="468" text-anchor="middle" font-size="11" fill="#8a93a6">FilteredReadExec：v2 结构化过滤读（v23 实验）</text>
+
+    <!-- arrows -->
+    <line x1="540" y1="92" x2="540" y2="116" stroke="#5b6472" stroke-width="1.5" marker-end="url(#none)"/>
+    <line x1="540" y1="166" x2="540" y2="190" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="540" y1="250" x2="540" y2="274" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="440" y1="334" x2="230" y2="358" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="540" y1="334" x2="540" y2="358" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="660" y1="334" x2="860" y2="358" stroke="#5b6472" stroke-width="1.5"/>
+    <line x1="230" y1="482" x2="470" y2="440" stroke="#5b6472" stroke-width="1.2" stroke-dasharray="4 3"/>
+    <line x1="700" y1="482" x2="760" y2="440" stroke="#5b6472" stroke-width="1.2" stroke-dasharray="4 3"/>
+    <text x="300" y="470" font-size="10.5" fill="#8a93a6">row_addr 集合</text>
+    <text x="700" y="470" font-size="10.5" fill="#8a93a6">row_addr 集合</text>
+  </g>
+</svg>
+<div class="cap">图 3-1 · 查询计划树。三分支（ANN / 标量索引 / 顺序扫描）最终都汇成 row address 流进入 TakeExec，或作为纯扫描直接出流。</div>
+</div>
+
+<div class="card">
+<h3 style="margin-top:0">DataFusion 在这里的角色</h3>
+<p>Lance 不是"用 DataFusion 做 SQL 解析"那么简单：<code>Scanner::analyze_plan/create_plan</code> 手工构建物理计划节点（不经 volcano 逻辑优化），然后可交给 <code>lance/src/datafusion.rs</code> 的 <code>DataFrame</code> 做进一步关系代数（join/aggregate）。<b>谓词拆分</b>是关键优化：DataFusion 优化器把 <code>WHERE</code> 拆成"索引可回答"与"需要回表验证"两半——前者变 ScalarIndexExec 掩码，后者留在 LanceFilterExec。</p>
+</div>
+
+<h2>2. 文件读取层：structural FileReader</h2>
+<p class="lead">v2.1 起读取器重构为 <b>structural reader</b>（<code>lance-file/src/reader/structural.rs</code> + <code>versions/v2_*/reader.rs</code>）。核心思想：读取器的每一层都通过 trait 组合，文件版本只决定"组装哪套实现"：</p>
+
+<pre><code><span class="c">// lance-file/src/reader.rs —— 关键抽象</span>
+<span class="k">pub struct</span> <span class="t2">FileReader</span>  { metadata: CachedFileMetadata, scheduler: Arc&lt;ScanScheduler&gt;, ... }
+<span class="k">pub trait</span> <span class="t2">ReadProjection</span>     <span class="c">// 把用户 schema 投影成"物理列读取计划"</span>
+<span class="k">pub trait</span> <span class="t2">ProjectedReader</span>    <span class="c">// 按投影读取：decode_column / decode_pages</span>
+
+<span class="c">// 版本组装（versions/mod.rs）—— 每个版本给出自己的组合根</span>
+<span class="k">fn</span> read_projection(version) -&gt; Result&lt;Arc&lt;<span class="k">dyn</span> ReadProjection&gt;&gt; {
+    <span class="k">match</span> version {
+        V2_0 =&gt; v2_0::read_projection(),  V2_1 =&gt; v2_1::read_projection(),
+        V2_2 =&gt; v2_2::read_projection(),  V2_3 =&gt; v2_3::read_projection(), ... }}</code></pre>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1080 470" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 3-2 · 读取一个 page 的完整调用栈（随机访问第 i 行）</text>
+  <defs><marker id="r1" markerWidth="9" markerHeight="9" refX="7" refY="2.6" orient="auto"><path d="M0,0 L7,2.6 L0,5.2" fill="none" stroke="#0b7285" stroke-width="1.5"/></marker></defs>
+  <g font-size="12">
+    <rect x="60" y="48" width="960" height="50" rx="8" fill="#eef2ff" stroke="#3b5bdb"/>
+    <text x="80" y="68" font-weight="700" fill="#243b8a">① Projection / Decoder 层（lance-encoding decoder.rs）</text>
+    <text x="80" y="88" fill="#5b6472">DecodeBatchScheduler::schedule_range(row_offset, priority) → 为每个 field 创建 FieldScheduler &amp; SchedulingJob</text>
+
+    <rect x="60" y="108" width="960" height="50" rx="8" fill="#f3ecff" stroke="#7048e8"/>
+    <text x="80" y="128" font-weight="700" fill="#4c1d95">② 结构调度层（decoder.rs: StructuralFieldScheduler / FieldScheduler）</text>
+    <text x="80" y="148" fill="#5b6472">由 ColumnInfo(page 表+encoding) 定位目标 page → 生成 PageScheduler； miniblock: 2B 元数据算出块内偏移</text>
+
+    <rect x="60" y="168" width="960" height="50" rx="8" fill="#fff4ec" stroke="#e8590c"/>
+    <text x="80" y="188" font-weight="700" fill="#a34700">③ PageScheduler（lance-encoding encodings/logical/primitive/*）</text>
+    <text x="80" y="208" fill="#5b6472">把"读 page"翻译成具体字节区间请求：miniblock 区间 / fullzip 两段(index+data) / constant 零请求</text>
+
+    <rect x="60" y="228" width="960" height="50" rx="8" fill="#e7f7f1" stroke="#0ca678"/>
+    <text x="80" y="248" font-weight="700" fill="#087f5b">④ I/O 调度（lance-io scheduler.rs: ScanScheduler → FileScheduler → submit request）</text>
+    <text x="80" y="268" fill="#5b6472">请求带 u128 优先级 → 进 IoQueue（容量 io_parallelism；backpressure 预算 io_buffer_size_bytes）→ run_io_loop 并发执行</text>
+
+    <rect x="60" y="288" width="960" height="50" rx="8" fill="#0f1730"/>
+    <text x="80" y="308" font-weight="700" fill="#9db8ff">⑤ 对象存储（object_store providers: S3/Azure/GCS/本地…）</text>
+    <text x="80" y="328" fill="#7d8bb0">Range GET（一次可合并相邻区间）→ Bytes 返回 → Response::drop 时退还 backpressure 预算</text>
+
+    <rect x="60" y="348" width="960" height="50" rx="8" fill="#fff" stroke="#dde3ee"/>
+    <text x="80" y="368" font-weight="700">⑥ 解码线程池（tokio::spawn_blocking）</text>
+    <text x="80" y="388" fill="#5b6472">StructuralPageDecoder::decode → 还原 DataBlock 树 → repdef 重建嵌套 → LogicalPageDecoder 组装 Arrow Array</text>
+
+    <line x1="540" y1="98" x2="540" y2="104" stroke="#0b7285" stroke-width="1.5" marker-end="url(#r1)"/>
+    <line x1="540" y1="158" x2="540" y2="164" stroke="#0b7285" stroke-width="1.5" marker-end="url(#r1)"/>
+    <line x1="540" y1="218" x2="540" y2="224" stroke="#0b7285" stroke-width="1.5" marker-end="url(#r1)"/>
+    <line x1="540" y1="278" x2="540" y2="284" stroke="#0b7285" stroke-width="1.5" marker-end="url(#r1)"/>
+    <line x1="540" y1="338" x2="540" y2="344" stroke="#0b7285" stroke-width="1.5" marker-end="url(#r1)"/>
+  </g>
+  <text x="540" y="440" text-anchor="middle" font-size="12.5" fill="#5b6472">"调度"与"执行"彻底异步解耦：②③只做决策（微秒级），④在 I/O 线程，⑥在 CPU 线程池 —— 流水线永不互相阻塞。</text>
+</svg>
+<div class="cap">图 3-2 · 六层调用栈。注意没有任何一层会"等待"：调度器发完请求立刻处理下一个。</div>
+</div>
+
+<h2>3. I/O 调度器：Lance 性能的心脏</h2>
+<p class="lead"><code>rust/lance-io/src/scheduler.rs</code>（约 5000 行含测试）实现了一个带<b>优先级 + 背压</b>的异步 I/O 队列。三个关键机制：</p>
+
+<div class="card">
+<h3 style="margin-top:0">机制一：u128 优先级编码</h3>
+<p>每个 I/O 请求携带 <code>priority: u128</code>。高位来自解码器赋予的"行号优先级"（page 的首行号，或 ANN 查询的分区优先级），低位由 <code>split_priority</code> 拆出子优先级。队列永远先服务优先级最小的请求，但有一条巧妙的<b>旁路规则</b>（scheduler.rs:156-165）：队头任务若优先级 ≤ 所有在途请求的最小优先级，则直接旁路发出，避免"低优先级任务堵住队列头"的死锁。</p>
+<h3>机制二：字节背压（io_buffer_size_bytes）</h3>
+<p>调度器为"已读入但未被消费"的字节设预算（默认 <code>max_bandwidth = 32MiB × io_parallelism</code>）。解码太慢→预算耗尽→<b>I/O 循环暂停发新请求</b>；<code>Response::drop</code> 时退还预算（即使 future 被取消也保证释放）。这是流式系统防止 OOM 的标准做法，但 Lance 把粒度做到了"每个请求"。</p>
+<h3>机制三：标准 vs Lite 双队列</h3>
+<p><code>IoQueueType::{Standard, Lite}</code>：本地盘/低延迟后端用 Lite（省内存、少簿记），S3 等高延迟后端用 Standard（深度流水线）。可通过 <code>LANCE_USE_LITE_SCHEDULER</code> 环境变量或对象存储的 <code>prefers_lite_scheduler()</code> 自动选择。</p>
+</div>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1080 430" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 3-3 · I/O 调度器与解码流水线线程模型（物理架构图）</text>
+  <rect x="40" y="50" width="240" height="320" rx="10" fill="#eef2ff" stroke="#3b5bdb" stroke-width="1.6"/>
+  <text x="160" y="76" text-anchor="middle" font-size="13.5" font-weight="700" fill="#243b8a">调度线程（tokio task）</text>
+  <text x="60" y="104" font-size="12" fill="#1a2233">DecodeBatchScheduler</text>
+  <text x="60" y="126" font-size="12" fill="#1a2233">FieldScheduler 决策</text>
+  <rect x="60" y="142" width="200" height="44" rx="7" fill="#fff" stroke="#3b5bdb"/>
+  <text x="160" y="160" text-anchor="middle" font-size="11.5" fill="#243b8a">优先级队列 IoQueue</text>
+  <text x="160" y="178" text-anchor="middle" font-size="11" fill="#5b6472">u128 prio + head bypass</text>
+  <rect x="60" y="196" width="200" height="44" rx="7" fill="#fff" stroke="#3b5bdb"/>
+  <text x="160" y="214" text-anchor="middle" font-size="11.5" fill="#243b8a">字节预算（背压）</text>
+  <text x="160" y="232" text-anchor="middle" font-size="11" fill="#5b6472">io_buffer_size_bytes</text>
+  <text x="60" y="264" font-size="11" fill="#8a93a6">只做微小决策，</text>
+  <text x="60" y="282" font-size="11" fill="#8a93a6">绝不阻塞等待数据</text>
+
+  <rect x="320" y="50" width="240" height="320" rx="10" fill="#e7f7f1" stroke="#0ca678" stroke-width="1.6"/>
+  <text x="440" y="76" text-anchor="middle" font-size="13.5" font-weight="700" fill="#087f5b">I/O 线程（io_parallelism 个）</text>
+  <text x="340" y="104" font-size="12">run_io_loop(tasks)</text>
+  <rect x="340" y="118" width="200" height="40" rx="7" fill="#fff" stroke="#0ca678"/><text x="440" y="136" text-anchor="middle" font-size="11.5">Range GET（合并相邻区间）</text>
+  <rect x="340" y="166" width="200" height="40" rx="7" fill="#fff" stroke="#0ca678"/><text x="440" y="184" text-anchor="middle" font-size="11.5">io_uring / multipart（本地盘）</text>
+  <rect x="340" y="214" width="200" height="40" rx="7" fill="#fff" stroke="#0ca678"/><text x="440" y="232" text-anchor="middle" font-size="11.5">重试·限流·ETag 校验</text>
+  <text x="340" y="286" font-size="11" fill="#087f5b">S3: 8~16 并发深流水</text>
+  <text x="340" y="306" font-size="11" fill="#087f5b">本地: Lite 队列 + 直读</text>
+
+  <rect x="600" y="50" width="220" height="320" rx="10" fill="#fff4ec" stroke="#e8590c" stroke-width="1.6"/>
+  <text x="710" y="76" text-anchor="middle" font-size="13.5" font-weight="700" fill="#a34700">CPU 池（spawn_blocking）</text>
+  <text x="620" y="104" font-size="12">LogicalPageDecoder</text>
+  <text x="620" y="126" font-size="12">StructuralPageDecoder</text>
+  <rect x="620" y="140" width="180" height="40" rx="7" fill="#fff" stroke="#e8590c"/><text x="710" y="158" text-anchor="middle" font-size="11.5">解压: bitpack/fsst/zstd</text>
+  <rect x="620" y="188" width="180" height="40" rx="7" fill="#fff" stroke="#e8590c"/><text x="710" y="206" text-anchor="middle" font-size="11.5">repdef → 嵌套 Arrow</text>
+  <text x="620" y="258" font-size="11" fill="#a34700">解码与 I/O 并行重叠：</text>
+  <text x="620" y="276" font-size="11" fill="#a34700">网络等待时间被计算掩盖</text>
+
+  <rect x="860" y="50" width="180" height="320" rx="10" fill="#f3ecff" stroke="#7048e8" stroke-width="1.6"/>
+  <text x="950" y="76" text-anchor="middle" font-size="13.5" font-weight="700" fill="#4c1d95">缓存（Session）</text>
+  <rect x="880" y="96" width="140" height="40" rx="7" fill="#fff" stroke="#7048e8"/><text x="950" y="114" text-anchor="middle" font-size="11">search cache (LRU)</text>
+  <rect x="880" y="144" width="140" height="40" rx="7" fill="#fff" stroke="#7048e8"/><text x="950" y="162" text-anchor="middle" font-size="11">footer/列元数据</text>
+  <rect x="880" y="192" width="140" height="40" rx="7" fill="#fff" stroke="#7048e8"/><text x="950" y="210" text-anchor="middle" font-size="11">索引元数据/向量</text>
+  <text x="880" y="262" font-size="11" fill="#4c1d95">可配 bytes 上限：</text>
+  <text x="880" y="280" font-size="11" fill="#4c1d95">index_cache_size_bytes</text>
+  <text x="880" y="298" font-size="11" fill="#4c1d95">metadata_cache_size_bytes</text>
+
+  <line x1="280" y1="160" x2="316" y2="160" stroke="#5b6472" stroke-width="1.8"/>
+  <line x1="560" y1="180" x2="596" y2="180" stroke="#5b6472" stroke-width="1.8"/>
+  <line x1="820" y1="120" x2="856" y2="120" stroke="#5b6472" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <line x1="820" y1="200" x2="856" y2="200" stroke="#5b6472" stroke-width="1.5" stroke-dasharray="4 3"/>
+</svg>
+<div class="cap">图 3-3 · 四个执行域：调度决策 → 网络 I/O → CPU 解码 → 缓存。全异步、全流水。</div>
+</div>
+
+<h2>4. Search Cache：随机访问的"页目录"</h2>
+<p>随机访问前需要知道"第 i 行在哪个 page、page 用什么编码、miniblock 元数据长什么样"。这些统称 <b>search cache</b>（LRU），按列存于 <code>FileReader</code>。初始化阶段（init phase）一次加载：列元数据、miniblock 元数据、字典。全量扫描则刻意<b>绕过</b>它（冷扫描不为一次性读预热缓存）。</p>
+
+<table>
+<tr><th>缓存条目</th><th>内容</th><th>何时加载</th></tr>
+<tr><td>列元数据 ColumnInfo</td><td>page 位置表 + 每页 encoding proto</td><td>首次投影该列</td></tr>
+<tr><td>MiniBlock 元数据</td><td>每块 2 字节的 (字数, log2 值数)</td><td>首次随机访问该列</td></tr>
+<tr><td>字典（dict 编码）</td><td>解码后的字典数组</td><td>init phase</td></tr>
+<tr><td>Repetition index</td><td>行→item 换算表</td><td>init phase（嵌套列）</td></tr>
+<tr><td>索引页/向量缓存</td><td>IVF 质心、PQ 码本、HNSW 邻接</td><td>首次 ANN 查询</td></tr>
+</table>
+
+<h2>5. 特殊读法：take / take_blobs / sample</h2>
+<div class="grid">
+  <div class="card" style="margin:0"><b><code>take(indices)</code></b><br><span style="font-size:13px;color:#5b6472">全局行号 → (fragment, offset) 二分（fragment_offsets 预计算）→ 各 fragment 并行随机访问 → 按请求顺序重组。百万级 take 会被分批。</span></div>
+  <div class="card" style="margin:0"><b><code>take_blobs</code></b><br><span style="font-size:13px;color:#5b6472">只取 blob 列的单值，不经 batch 流水线，Blob 布局保证 1~2 IOP/值。训练数据加载器的主力 API。</span></div>
+  <div class="card" style="margin:0"><b><code>scan().with_row_address()</code></b><br><span style="font-size:13px;color:#5b6472">已知 row address（如来自 ANN 结果）直接定点取行，RowAddrMaskFilterExec 免去索引二次查找。</span></div>
+</div>
+
+<div class="tip"><b>调优抓手速查：</b>① <code>Scanner::batch_size</code> 控制解码粒度；② <code>Scanner::limit/offset</code> 下推避免读多余 page；③ <code>Session</code> 缓存大小决定冷启动后的重复查询延迟；④ <code>LANCE_USE_LITE_SCHEDULER</code>、<code>io_buffer_size_bytes</code> 调节内存/吞吐权衡；⑤ 物化投影顺序（把大列放最后）可让谓词先跑——DataFusion 的 projection pushdown 会自动重排。</div>
+
+</main>
+<nav class="top" style="text-align:center">
+  <a href="02-encoding.html">« 02 编码体系</a> · <a href="04-write-path.html">04 写路径与提交 »</a>
+</nav>
+</body>
+</html>

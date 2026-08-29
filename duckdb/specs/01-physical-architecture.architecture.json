@@ -1,0 +1,446 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "DuckDB 物理架构：进程内嵌 + 单文件 + 签名扩展",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1395,
+      640
+    ],
+    "repository": {
+      "url": "https://github.com/vinlee19/duckdb.git",
+      "revision": "0f8f010560c9140dc677aa08829f112f560ce5c3"
+    },
+    "views": [
+      {
+        "id": "embed",
+        "label": "嵌入式形态",
+        "focus": [
+          "hosts",
+          "capi",
+          "instance"
+        ],
+        "note": "DuckDB 以库形态内嵌进宿主进程，没有独立服务端。"
+      },
+      {
+        "id": "kernel",
+        "label": "引擎内核",
+        "focus": [
+          "instance",
+          "catalog",
+          "tm",
+          "sched",
+          "pool"
+        ],
+        "note": "目录、事务、调度、缓冲池全部在进程内协作。"
+      },
+      {
+        "id": "storage",
+        "label": "持久化与扩展",
+        "focus": [
+          "sfsm",
+          "dbfile",
+          "walfile",
+          "extmgr",
+          "repo"
+        ],
+        "note": "单文件存储 + WAL，扩展从官方仓库签名下载。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "hosts",
+      "type": "external",
+      "label": "宿主进程",
+      "sublabel": "CLI · Swift · Julia",
+      "pos": [
+        40,
+        260
+      ],
+      "size": [
+        150,
+        70
+      ]
+    },
+    {
+      "id": "capi",
+      "type": "backend",
+      "label": "C / C++ API",
+      "sublabel": "duckdb.h · Relation API",
+      "pos": [
+        240,
+        260
+      ],
+      "size": [
+        160,
+        70
+      ],
+      "sources": [
+        {
+          "path": "src/include/duckdb.h",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "instance",
+      "type": "backend",
+      "label": "DatabaseInstance",
+      "sublabel": "进程内引擎内核",
+      "pos": [
+        460,
+        260
+      ],
+      "size": [
+        170,
+        70
+      ],
+      "sources": [
+        {
+          "path": "src/main/database.cpp",
+          "line": 434
+        }
+      ]
+    },
+    {
+      "id": "catalog",
+      "type": "database",
+      "label": "DuckCatalog",
+      "sublabel": "CatalogSet 版本链",
+      "pos": [
+        700,
+        120
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "src/catalog/catalog_set.cpp",
+          "line": 54
+        }
+      ]
+    },
+    {
+      "id": "tm",
+      "type": "backend",
+      "label": "事务管理器",
+      "sublabel": "乐观 MVCC · UndoBuffer",
+      "pos": [
+        700,
+        260
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "src/transaction/duck_transaction.cpp",
+          "line": 245
+        }
+      ]
+    },
+    {
+      "id": "sched",
+      "type": "backend",
+      "label": "TaskScheduler",
+      "sublabel": "moodycamel 队列 · N 线程",
+      "pos": [
+        700,
+        400
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "src/parallel/task_scheduler.cpp",
+          "line": 271
+        }
+      ]
+    },
+    {
+      "id": "pool",
+      "type": "database",
+      "label": "BufferPool",
+      "sublabel": "LRU 驱逐 · 临时文件卸载",
+      "pos": [
+        960,
+        120
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "src/storage/buffer/buffer_pool.cpp",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "sfsm",
+      "type": "database",
+      "label": "单文件存储管理",
+      "sublabel": "块管理 · Checkpoint",
+      "pos": [
+        960,
+        260
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "src/storage/storage_manager.cpp",
+          "line": 366
+        }
+      ]
+    },
+    {
+      "id": "dbfile",
+      "type": "database",
+      "label": "数据文件",
+      "sublabel": ".duckdb · 双 Header",
+      "pos": [
+        1210,
+        120
+      ],
+      "size": [
+        150,
+        66
+      ],
+      "sources": [
+        {
+          "path": "src/storage/single_file_block_manager.cpp",
+          "line": 1249
+        }
+      ]
+    },
+    {
+      "id": "walfile",
+      "type": "database",
+      "label": "WAL 文件",
+      "sublabel": "顺序追加 · fsync",
+      "pos": [
+        1210,
+        400
+      ],
+      "size": [
+        150,
+        66
+      ],
+      "sources": [
+        {
+          "path": "src/storage/write_ahead_log.cpp",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "extmgr",
+      "type": "backend",
+      "label": "ExtensionManager",
+      "sublabel": "RSA 验签 · 自动加载",
+      "pos": [
+        460,
+        470
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "src/main/extension/extension_load.cpp",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "repo",
+      "type": "cloud",
+      "label": "extensions.duckdb.org",
+      "sublabel": ".duckdb_extension.gz",
+      "pos": [
+        700,
+        560
+      ],
+      "size": [
+        190,
+        60
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "单进程（DuckDB 以库内嵌）",
+      "wraps": [
+        "hosts",
+        "capi",
+        "instance",
+        "catalog",
+        "tm",
+        "sched",
+        "pool",
+        "sfsm",
+        "extmgr"
+      ],
+      "pad": 20
+    },
+    {
+      "kind": "region",
+      "label": "磁盘文件",
+      "wraps": [
+        "dbfile",
+        "walfile"
+      ],
+      "pad": 16
+    },
+    {
+      "kind": "region",
+      "label": "扩展仓库（外网）",
+      "wraps": [
+        "repo"
+      ],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    {
+      "id": "e_sql",
+      "from": "hosts",
+      "to": "capi",
+      "label": "SQL / Relation",
+      "variant": "emphasis",
+      "labelAt": [
+        225,
+        344
+      ]
+    },
+    {
+      "id": "e_ctx",
+      "from": "capi",
+      "to": "instance",
+      "label": "ClientContext",
+      "variant": "emphasis",
+      "labelAt": [
+        430,
+        344
+      ]
+    },
+    {
+      "id": "e_cat",
+      "from": "instance",
+      "to": "catalog",
+      "label": "目录访问",
+      "labelAt": [
+        690,
+        210
+      ]
+    },
+    {
+      "id": "e_tm",
+      "from": "instance",
+      "to": "tm",
+      "label": "事务",
+      "labelAt": [
+        628,
+        342
+      ]
+    },
+    {
+      "id": "e_sched",
+      "from": "instance",
+      "to": "sched",
+      "label": "任务投递"
+    },
+    {
+      "id": "e_pool",
+      "from": "sfsm",
+      "to": "pool",
+      "label": "块句柄",
+      "route": "straight",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "e_file",
+      "from": "sfsm",
+      "to": "dbfile",
+      "label": "读写 256KB 块"
+    },
+    {
+      "id": "e_wal",
+      "from": "tm",
+      "to": "walfile",
+      "label": "COMMIT 追加",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "bottom",
+      "via": [
+        [
+          890,
+          293
+        ],
+        [
+          890,
+          510
+        ],
+        [
+          1285,
+          510
+        ]
+      ]
+    },
+    {
+      "id": "e_ext",
+      "from": "extmgr",
+      "to": "repo",
+      "label": "下载 · 验签",
+      "variant": "dashed",
+      "labelAt": [
+        700,
+        628
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "嵌入式形态",
+      "items": [
+        "没有服务端：引擎以库链接进宿主进程，CLI/Swift/Julia 直接进程内调用",
+        "Python/R/JDBC/ODBC 客户端已拆到独立仓库，经 C API 或替换扫描接入",
+        "默认配置就地取材：内存上限 80% 系统可用内存，线程数=物理核"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "单文件持久化",
+      "items": [
+        "文件头 magic DUCK + 双 DatabaseHeader 交替写，崩溃安全",
+        "256KB 块分配 + 空闲链表；RowGroup 122880 行，列段独立压缩",
+        "压缩算法全家桶：Bitpacking/Dictionary/FSST/ALP/Chimp/Roaring/ZSTD"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "扩展信任链",
+      "items": [
+        "512 字节 footer + 256 字节 RSA 签名，SHA-256 分段校验",
+        "ABI 三档：CPP 精确匹配 / C_STRUCT 前向兼容 / UNSTABLE 一对一",
+        "自动加载白名单限 scanner 类扩展；安装需 SET allow_unsigned_extensions 才能绕过"
+      ]
+    }
+  ]
+}

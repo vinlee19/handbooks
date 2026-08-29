@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>05 · WAL 与崩溃恢复 — Moonlink 源码深度解析</title>
+<style>
+:root{
+  --blue:#2563eb;--green:#16a34a;--orange:#ea580c;--purple:#7c3aed;--gray:#64748b;--red:#dc2626;
+  --ink:#1e293b;--muted:#64748b;--bg:#f6f8fa;--card:#fff;--line:#e2e8f0;--code-bg:#0d1117;--code-ink:#e6edf3;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.8}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.97);display:flex;flex-wrap:wrap;gap:2px;padding:8px 16px;font-size:13px}
+.topnav .brand{color:#fbbf24;font-weight:700;margin-right:10px;padding:4px 6px}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:4px 10px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav a.active{background:var(--blue);color:#fff}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 20px 80px}
+.page-head{background:linear-gradient(135deg,#0f172a,#7c2d12);border-radius:14px;color:#f1f5f9;padding:30px 34px;margin-bottom:26px}
+.page-head h1{font-size:28px;margin-bottom:6px}
+.page-head p{color:#cbd5e1;font-size:14.5px}
+h2{font-size:23px;margin:40px 0 12px;padding-left:12px;border-left:5px solid var(--orange)}
+h3{font-size:18px;margin:24px 0 8px;color:#0f172a}
+p{margin:10px 0;color:#334155}
+.lead{font-size:15.5px;color:#475569}
+.figure{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin:20px 0}
+.fig-title{font-weight:700;font-size:14.5px;color:#0f172a;margin-bottom:4px}
+.fig-title .fno{color:var(--blue)}
+.fig-desc{font-size:13px;color:var(--muted);margin-bottom:10px}
+svg{width:100%;height:auto;display:block}
+code{background:#eef2f7;border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:.88em;color:#be185d}
+pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:16px 18px;overflow-x:auto;font-size:13px;line-height:1.6;margin:14px 0}
+pre code{background:none;border:none;color:inherit;padding:0}
+.k{color:#ff7b72}.t{color:#79c0ff}.s{color:#a5d6ff}.c{color:#8b949e;font-style:italic}.n{color:#ffa657}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px;background:var(--card)}
+th{background:#f1f5f9;text-align:left}
+th,td{border:1px solid var(--line);padding:8px 12px;vertical-align:top}
+tbody tr:nth-child(even){background:#fafbfc}
+.callout{border-left:4px solid var(--blue);background:#eff6ff;border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0;font-size:14px}
+.callout.warn{border-color:var(--orange);background:#fff7ed}
+.callout.good{border-color:var(--green);background:#f0fdf4}
+.callout b{color:#0f172a}
+.footer{display:flex;justify-content:space-between;margin-top:60px;padding-top:18px;border-top:1px solid var(--line);font-size:14px}
+.footer a{color:var(--blue);text-decoration:none;font-weight:600}
+ul,ol{margin:8px 0 8px 24px}
+li{margin:4px 0}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">🥮 Moonlink 源码解析</span>
+  <a href="index.html">总导航</a>
+  <a href="01-overview.html">01 总体架构</a>
+  <a href="02-ingestion.html">02 数据摄入</a>
+  <a href="03-core-engine.html">03 存储引擎</a>
+  <a href="04-index-dv.html">04 索引与 DV</a>
+  <a class="active" href="05-wal-recovery.html">05 WAL 与恢复</a>
+  <a href="06-iceberg.html">06 Iceberg 集成</a>
+  <a href="07-query.html">07 查询路径</a>
+  <a href="08-control-plane.html">08 控制面</a>
+  <a href="09-concurrency-lsn.html">09 并发模型</a>
+</nav>
+
+<div class="wrap">
+<div class="page-head">
+  <h1>Chapter 05 · WAL 与崩溃恢复</h1>
+  <p>Iceberg 之外的第二真相源。moonlink 的 WAL 极其「朴素」：每表一个 JSON 文件序列、一个 metadata_wal.json 单一真源，500ms 持久化一次、可截断。朴素，但闭环严谨。</p>
+</div>
+
+<h2>5.1 WAL 的定位与文件组织</h2>
+<p class="lead">先明确：moonlink 的 WAL <b>不参与写路径延迟</b>（Append 先进内存缓冲，500ms 才批量持久化），它的使命是崩溃恢复。真源链条是：<b>Iceberg（已提交数据）+ WAL（Iceberg 提交点之后的增量）</b>。WalManager（src/moonlink/src/storage/wal.rs，约 1300 行）每表一个实例、单线程使用。</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 5-1</span> · WAL 文件组织：JSON 序列 + metadata_wal.json 单一真源</div>
+  <div class="fig-desc">路径规则（wal.rs::get_wal_file_path_for_mooncake_table）：{base}/_wal/{mooncake_table_id}/wal_{file_number}.json</div>
+  <svg viewBox="0 0 1160 560" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="e11" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    </defs>
+    <!-- directory tree -->
+    <rect x="30" y="40" width="640" height="330" rx="12" fill="#fff7ed" stroke="#ea580c" stroke-width="1.6"/>
+    <text x="55" y="70" font-family="Menlo,monospace" font-size="13" fill="#7c2d12" font-weight="700">{base_path}/_wal/{table_id}/</text>
+    <g font-family="Menlo,monospace" font-size="12" fill="#9a3412">
+      <text x="70" y="104">├── metadata_wal.json　　<tspan fill="#dc2626" font-family="-apple-system,sans-serif">★ 恢复的唯一真源（最后写、最先读）</tspan></text>
+      <text x="70" y="132">├── wal_3.json　　　　　<tspan fill="#b45309" font-family="-apple-system,sans-serif">live：含未持久化到 iceberg 的事务</tspan></text>
+      <text x="70" y="160">├── wal_4.json　　　　　<tspan fill="#b45309" font-family="-apple-system,sans-serif">live：当前写入中的缓冲（整文件序列化）</tspan></text>
+      <text x="70" y="188">└── (wal_1.json wal_2.json 已截断删除)</tspan></text>
+    </g>
+    <g font-size="11.5" fill="#9a3412">
+      <text x="70" y="232">· 每个 wal_N.json 是整批 Vec&lt;WalEvent&gt; 的 serde_json 序列化 —— 追加缓冲满/持久化事件触发时「重写整个文件」</text>
+      <text x="70" y="258">· 不是逐条 append 的日志！以「文件内的最大 LSN」为单位推进（对象存储友好，避免 read-modify-write）</text>
+      <text x="70" y="284">· live_wal_files_tracker: Vec&lt;WalFileInfo{file_number, highest_lsn}&gt; 记录每个活文件的水位</text>
+      <text x="70" y="318">· 为什么 JSON 而非二进制？——WAL 体量小（500ms 批量）、可读性利于调试（chaos 测试会人工检查），</text>
+      <text x="70" y="344">　性能瓶颈不在这里；真正的性能通道是 MemSlice→Parquet。</text>
+    </g>
+    <!-- metadata content -->
+    <rect x="710" y="40" width="420" height="330" rx="12" fill="#0d1117"/>
+    <text x="730" y="66" font-family="Menlo,monospace" font-size="12" fill="#8b949e">// PersistentWalMetadata（wal.rs:317）</text>
+    <g font-family="Menlo,monospace" font-size="11.5" fill="#e6edf3">
+      <text x="730" y="92">curr_file_number: u64            <tspan fill="#8b949e">// 下一个文件号</tspan></text>
+      <text x="730" y="116">highest_completion_lsn: u64      <tspan fill="#8b949e">// 已完成事务最高 LSN</tspan></text>
+      <text x="730" y="140">live_wal_files_tracker: Vec&lt;…&gt;   <tspan fill="#8b949e">// 活文件表</tspan></text>
+      <text x="730" y="164">active_transactions: HashMap&lt;u32,</text>
+      <text x="746" y="188">　WalTransactionState&gt;      <tspan fill="#8b949e">// 未决事务</tspan></text>
+      <text x="730" y="212">main_transaction_tracker: Vec&lt;…&gt;</text>
+      <text x="730" y="236">persistence_snapshot_lsn:</text>
+      <text x="746" y="260">　Option&lt;u64&gt;               <tspan fill="#8b949e">// 最后一次 iceberg 持久化 LSN</tspan></text>
+      <text x="730" y="284">mooncake_table_id: String</text>
+    </g>
+    <text x="730" y="322" font-family="-apple-system,'PingFang SC',sans-serif" font-size="11.5" fill="#a5d6ff">WalTransactionState =</text>
+    <text x="730" y="344" font-family="Menlo,monospace" font-size="11.5" fill="#e6edf3">Commit{start_file, completion_lsn}</text>
+    <text x="730" y="364" font-family="Menlo,monospace" font-size="11.5" fill="#e6edf3">　 | Abort{…} | Open{start_file}</text>
+    <!-- wal event code -->
+    <rect x="30" y="400" width="1100" height="130" rx="10" fill="#fef9c3" stroke="#ca8a04"/>
+    <text x="55" y="428" font-weight="700" fill="#713f12">WalEvent：TableEvent 的可持久化子集（wal.rs:81）</text>
+    <g font-family="Menlo,monospace" font-size="12" fill="#713f12">
+      <text x="55" y="454">Append{row, xact_id, lsn} · Delete{row, lsn, xact_id, delete_if_exists} · Commit{lsn, xact_id}</text>
+      <text x="55" y="478">StreamAbort{xact_id} · StreamFlush{xact_id}</text>
+      <text x="55" y="510" font-family="-apple-system,sans-serif" font-size="11.5" fill="#a16207">注意：flush/快照/compaction 等内部事件「不进 WAL」—— 它们的产物（data file/快照）本身就是持久化的，恢复时从 Iceberg 重建。</text>
+    </g>
+  </svg>
+</div>
+
+<h2>5.2 500ms 持久化-截断循环</h2>
+<p class="lead">WalManager 的核心节律由事件 <code>PeriodicalPersistenceUpdateWal</code>（500ms）驱动，形成「prepare（actor 内，同步）→ execute（后台，异步）→ apply（actor 内，串行）」三段式：</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 5-2</span> · WAL 持久化与截断流水线（PreparePersistentUpdate 的旅程）</div>
+  <svg viewBox="0 0 1160 540" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="e21" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    </defs>
+    <g font-size="12">
+      <rect x="30" y="40" width="300" height="190" rx="10" fill="#ccfbf1" stroke="#0d9488"/>
+      <text x="180" y="66" text-anchor="middle" font-weight="700" fill="#115e59">① actor 内 prepare（同步、快）</text>
+      <g font-size="11" fill="#0f766e">
+        <text x="46" y="92">wal_manager.prepare_persistent_update(</text>
+        <text x="60" y="112">latest_persistence_snapshot_lsn)</text>
+        <text x="46" y="140">产出 PreparePersistentUpdate{</text>
+        <text x="60" y="160">files_to_persist: (Vec&lt;WalEvent&gt;, WalFileInfo)</text>
+        <text x="60" y="180">files_to_delete: 截断候选</text>
+        <text x="60" y="200">persistent_wal_metadata: 新真源}</text>
+        <text x="46" y="222" font-size="10.5" fill="#15803d">只做内存计算，不碰磁盘</text>
+      </g>
+      <rect x="390" y="40" width="330" height="190" rx="10" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="555" y="66" text-anchor="middle" font-weight="700" fill="#7c2d12">② 后台 wal_persist_truncate_async</text>
+      <g font-size="11" fill="#9a3412">
+        <text x="406" y="92">1. 写 wal_{next}.json（整文件序列化）</text>
+        <text x="406" y="116">2. 按 files_to_delete 删除旧 wal 文件</text>
+        <text x="406" y="140">3. 最后写 metadata_wal.json</text>
+        <text x="406" y="170">顺序是刻意安排的：metadata 稍后落盘，</text>
+        <text x="406" y="190">崩溃在任何一步 → 恢复时以 metadata</text>
+        <text x="406" y="210" font-size="10.5" fill="#b45309">描述的旧状态为准，重放补齐，永不超前。</text>
+      </g>
+      <rect x="780" y="40" width="350" height="190" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+      <text x="955" y="66" text-anchor="middle" font-weight="700" fill="#14532d">③ actor 内 apply（串行）</text>
+      <g font-size="11" fill="#166534">
+        <text x="796" y="92">handle_complete_wal_persistence_update()</text>
+        <text x="796" y="116">· 更新 live_wal_files_tracker / 文件号</text>
+        <text x="796" y="140">· 通过 wal_flush_lsn_tx（watch）广播</text>
+        <text x="796" y="164">　新持久化 LSN → 唤醒 wait_for_wal_flush()</text>
+        <text x="796" y="188">· REST /flush 端点据此返回（CH02 §2.5）</text>
+        <text x="796" y="212" font-size="10.5" fill="#15803d">同时决定是否可以 ACK PG（图 5-4）</text>
+      </g>
+      <line x1="330" y1="135" x2="390" y2="135" stroke="#475569" stroke-width="1.8" marker-end="url(#e21)"/>
+      <path d="M 720 135 L 780 135" stroke="#475569" stroke-width="1.8" marker-end="url(#e21)"/>
+      <path d="M 955 230 L 955 280 L 180 280 L 180 230" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#e21)"/>
+      <text x="567" y="272" text-anchor="middle" font-size="11" fill="#94a3b8">完成通知经 TableEvent::PersistenceUpdateWalResult 回投事件循环（图 2-2 的结果回投通道）</text>
+    </g>
+    <!-- truncate rule -->
+    <rect x="30" y="320" width="1100" height="90" rx="10" fill="#eff6ff" stroke="#2563eb"/>
+    <text x="55" y="348" font-weight="700" fill="#1e3a8a">截断规则 get_lowest_file_to_keep(truncate_from_lsn)（wal.rs:710）</text>
+    <text x="55" y="376" font-size="12" fill="#1e293b">文件可删 ⇔ 其中所有事务的 completion_lsn ≤ iceberg persistence_snapshot_lsn，且文件号更小；<tspan font-weight="700" fill="#be185d">未完成事务的 start_file 必须保留</tspan>（重放时才能补全该事务）。</text>
+    <text x="55" y="400" font-size="11.5" fill="#3b5ba9">推论：WAL 体积上限 ≈ 「iceberg 提交周期 × 写入速率」。iceberg 提交越勤快（图 3-4 阈值），WAL 越短。</text>
+    <!-- recovery preview -->
+    <rect x="30" y="430" width="1100" height="80" rx="10" fill="#fef9c3" stroke="#ca8a04"/>
+    <text x="55" y="458" font-weight="700" fill="#713f12">recover_flushed_wals() / recover_from_persistent_wal_metadata()</text>
+    <text x="55" y="486" font-size="12" fill="#854d0e">启动时：读 metadata_wal.json → 重建 WalManager 内存态 → 逐个读 live wal 文件 → 把其中事务回放进 MooncakeTable（图 5-3 的核心一步）。</text>
+  </svg>
+</div>
+
+<h2>5.3 崩溃恢复：全链路时序</h2>
+<p class="lead">崩溃可能发生在任何时刻。恢复逻辑（moonlink_backend/src/recovery_utils.rs + wal.rs）的思路：<b>以 metadata_wal.json 为锚，以 Iceberg 快照为基线，重放 WAL 补齐增量，再从 PG 续传增量</b>。</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 5-3</span> · 崩溃恢复时序（进程重启后）</div>
+  <svg viewBox="0 0 1160 660" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="e31" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0d9488"/></marker>
+      <marker id="e32" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#dc2626"/></marker>
+    </defs>
+    <!-- stages -->
+    <g font-size="12">
+      <rect x="30" y="40" width="250" height="150" rx="10" fill="#e2e8f0" stroke="#64748b"/>
+      <text x="155" y="66" text-anchor="middle" font-weight="700" fill="#334155">⓪ 控制面恢复</text>
+      <g font-size="11" fill="#475569">
+        <text x="46" y="92">moonlink_metadata_store（SQLite/PG）</text>
+        <text x="46" y="114">枚举全部表清单（含每表的</text>
+        <text x="46" y="136">warehouse/WAL 配置）</text>
+        <text x="46" y="162" font-size="10.5" fill="#64748b">recover_all_tables()</text>
+      </g>
+      <rect x="320" y="40" width="250" height="150" rx="10" fill="#f3e8ff" stroke="#7c3aed"/>
+      <text x="445" y="66" text-anchor="middle" font-weight="700" fill="#4c1d95">① 基线：读 Iceberg</text>
+      <g font-size="11" fill="#6d28d9">
+        <text x="336" y="92">load_snapshot_from_table()</text>
+        <text x="336" y="114">读最新 iceberg snapshot：</text>
+        <text x="336" y="136">disk_files / DV blob / file index</text>
+        <text x="336" y="158">summary 里的 FLUSH_LSN</text>
+        <text x="336" y="180" font-size="10.5" fill="#7c3aed">→ 重建 Snapshot + next_file_id</text>
+      </g>
+      <rect x="610" y="40" width="250" height="150" rx="10" fill="#fff7ed" stroke="#ea580c"/>
+      <text x="735" y="66" text-anchor="middle" font-weight="700" fill="#7c2d12">② 锚点：metadata_wal.json</text>
+      <g font-size="11" fill="#9a3412">
+        <text x="626" y="92">恢复 WalManager 全部内存态：</text>
+        <text x="626" y="114">活文件表 · 未决事务</text>
+        <text x="626" y="136">highest_completion_lsn</text>
+        <text x="626" y="158">· 未决事务 → 视状态重放或 abort</text>
+        <text x="626" y="180" font-size="10.5" fill="#b45309">· StreamAbort(closes_incomplete) 补写 WAL</text>
+      </g>
+      <rect x="900" y="40" width="230" height="150" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+      <text x="1015" y="66" text-anchor="middle" font-weight="700" fill="#14532d">③ 重放 live WAL</text>
+      <g font-size="11" fill="#166534">
+        <text x="916" y="92">读每个 wal_N.json，</text>
+        <text x="916" y="114">转换回 TableEvent</text>
+        <text x="916" y="136">（is_recovery=true）</text>
+        <text x="916" y="158">按序喂给新表的 actor</text>
+        <text x="916" y="180" font-size="10.5" fill="#15803d">→ MemSlice/索引重建</text>
+      </g>
+      <line x1="280" y1="115" x2="320" y2="115" stroke="#475569" stroke-width="1.8" marker-end="url(#e31)"/>
+      <line x1="570" y1="115" x2="610" y2="115" stroke="#475569" stroke-width="1.8" marker-end="url(#e31)"/>
+      <line x1="860" y1="115" x2="900" y2="115" stroke="#475569" stroke-width="1.8" marker-end="url(#e31)"/>
+    </g>
+    <!-- CDC resume -->
+    <rect x="30" y="230" width="1100" height="130" rx="12" fill="#dbeafe" stroke="#2563eb" stroke-width="1.6"/>
+    <text x="55" y="258" font-weight="700" fill="#1e3a8a">④ CDC 续传（与图 2-3 的 ⓪①② 对应）</text>
+    <g font-size="12" fill="#1e293b">
+      <text x="55" y="286">重新连接 PG → 查 slot 的 confirmed_flush_lsn → START_REPLICATION 从该 LSN 继续。PG 会重发该点之后的全部事务；</text>
+      <text x="55" y="310">moonlink 侧用 skip_before_end_lsn 丢弃「WAL 重放已覆盖」的旧事件 —— 重放与续传的边界由 LSN 精确切割，两者拼起来不多不少。</text>
+      <text x="55" y="338" font-size="11" fill="#3b5ba9">对应测试：test_wal_recovery.rs · test_table_recovery.rs · test_control_plane_recovery.rs · test_replication_recovery.rs —— 测试名即本章目录。</text>
+    </g>
+    <!-- crash matrix -->
+    <rect x="30" y="390" width="1100" height="240" rx="12" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+    <text x="55" y="418" font-weight="700" fill="#7f1d1d">崩溃点位 × 恢复结果矩阵（为什么任何点位都不丢已 ACK 数据）</text>
+    <g font-size="12" fill="#7f1d1d">
+      <text x="55" y="446">崩溃于「Append 进内存、WAL 缓冲未持久化」→ 客户端还没拿到 sync LSN / PG 未被 ACK → 可丢（符合语义）；</text>
+      <text x="55" y="472">崩溃于「WAL 已持久化、iceberg 未提交」→ ③ 重放 WAL 恢复内存态 → 数据不丢；</text>
+      <text x="55" y="498">崩溃于「iceberg 提交中」→ iceberg 事务原子：要么提交成功（① 基线里有了），要么没有（② WAL 里还有）→ 不多不少；</text>
+      <text x="55" y="524">崩溃于「metadata_wal.json 写一半」→ JSON 整文件写 + rename 语义（对象存储原子 PUT）→ 要么旧版要么新版，不会是半份；</text>
+      <text x="55" y="550">崩溃于「WAL 文件已删、metadata 未更新」→ 不可能：② 的执行顺序保证 metadata 最后写（图 5-2 步骤 2/3）。</text>
+      <text x="55" y="584" font-size="11" fill="#b91c1c">关键前提：PG 侧 ACK（send_status_update 的 flush_lsn）只能来自「WAL 已持久化」的 LSN —— 这就是 ACK 闭环（图 5-4）。</text>
+    </g>
+  </svg>
+</div>
+
+<h2>5.4 ACK 闭环：与 PG 的对账机制</h2>
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 5-4</span> · flush_lsn ACK 闭环：PG 什么时候才允许清 WAL</div>
+  <svg viewBox="0 0 1160 300" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="e41" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    </defs>
+    <g font-size="12">
+      <rect x="40" y="60" width="200" height="80" rx="10" fill="#f1f5f9" stroke="#64748b"/>
+      <text x="140" y="94" text-anchor="middle" font-weight="700" fill="#334155">PostgreSQL</text>
+      <text x="140" y="118" text-anchor="middle" font-size="11" fill="#64748b">confirmed_flush_lsn 之前的</text>
+      <text x="140" y="134" text-anchor="middle" font-size="11" fill="#64748b">WAL 段可被回收</text>
+      <rect x="330" y="60" width="240" height="80" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+      <text x="450" y="88" text-anchor="middle" font-weight="700" fill="#14532d">WalManager</text>
+      <text x="450" y="112" text-anchor="middle" font-size="11" fill="#166534">500ms 持久化循环</text>
+      <text x="450" y="130" text-anchor="middle" font-size="11" fill="#166534">（图 5-2）</text>
+      <rect x="660" y="60" width="220" height="80" rx="10" fill="#ccfbf1" stroke="#0d9488"/>
+      <text x="770" y="88" text-anchor="middle" font-weight="700" fill="#115e59">PostgresSource</text>
+      <text x="770" y="112" text-anchor="middle" font-size="11" fill="#0f766e">send_status_update(</text>
+      <text x="770" y="130" text-anchor="middle" font-size="11" fill="#0f766e">…, flush_lsn)</text>
+      <polyline points="770,60 770,36 140,36 140,58" fill="none" stroke="#475569" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#e41)"/>
+      <text x="455" y="28" text-anchor="middle" font-size="11" fill="#475569">ACK：flush_lsn = WAL 持久化水位</text>
+      <path d="M 450 140 L 450 190 L 770 190 L 770 140" fill="none" stroke="#16a34a" stroke-width="1.6" marker-end="url(#e41)"/>
+      <text x="610" y="182" text-anchor="middle" font-size="11" fill="#15803d">wal_flush_lsn watch（图 5-2 ③）→ 周期性取最新值 ACK</text>
+      <text x="580" y="250" text-anchor="middle" font-size="12.5" fill="#475569">闭环意义：PG 只回收「moonlink 已确定能恢复」的日志。ACK 用 replication LSN 会造成窗口期丢数据——这是把「性能（异步 WAL）」和「安全（延迟 ACK）」同时拿下的关键设计。</text>
+    </g>
+  </svg>
+</div>
+
+<h2>5.5 六种 LSN 语义速查</h2>
+<table>
+  <thead><tr><th>LSN（table_handler.rs 头注释）</th><th>含义</th><th>谁维护</th></tr></thead>
+  <tbody>
+    <tr><td>commit LSN</td><td>一次（流式或非流式）提交的 LSN，可见性单位</td><td>MooncakeTable::commit</td></tr>
+    <tr><td>flush LSN</td><td>数据已 flush 成 data file 的水位（受图 3-3 窗口约束）</td><td>apply_flush_result</td></tr>
+    <tr><td>iceberg snapshot LSN</td><td>该 LSN 前的所有变更已持久化进 Iceberg</td><td>IcebergTableSyncer 提交后推进</td></tr>
+    <tr><td>table consistent view LSN</td><td>最后处理的事件是 Commit 时点的 LSN —— 表处于一致视图，可安全 flush</td><td>事件循环</td></tr>
+    <tr><td>replication LSN</td><td>PG 复制流已到达的 LSN</td><td>LsnState::mark（watch 广播）</td></tr>
+    <tr><td>persisted table LSN</td><td>跨表概念：所有表都已持久化的最大公共 LSN（用于全局对账）</td><td>backend 层</td></tr>
+  </tbody>
+</table>
+<div class="callout warn"><b>注意</b>：replication LSN 与 commit LSN 之间<b>没有</b>数值序保证——表从干净状态恢复后，可能存在 iceberg snapshot LSN 但没有后续 replication LSN（源码头注释原话）。读侧（CH09）的可读判定为此专门做了分支。</div>
+
+<div class="footer">
+  <a href="04-index-dv.html">← 04 索引与 DV</a>
+  <a href="06-iceberg.html">下一章：06 Iceberg 集成 →</a>
+</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>02 · State 深度剖析 — Apache Burr 源码剖析</title>
+<style>
+:root{
+  --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --line:#e2e8f0;
+  --blue:#2563eb; --blue-bg:#eff6ff; --green:#16a34a; --green-bg:#f0fdf4;
+  --amber:#d97706; --amber-bg:#fffbeb; --purple:#9333ea; --purple-bg:#faf5ff;
+  --red:#dc2626; --red-bg:#fef2f2; --code-bg:#0f172a;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.75}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.94);backdrop-filter:blur(6px);color:#e2e8f0;display:flex;gap:12px;align-items:center;padding:10px 24px;font-size:13px;flex-wrap:wrap}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:3px 8px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav .brand{font-weight:700;color:#fff;font-size:14px;letter-spacing:.5px;margin-right:8px}
+.topnav .brand span{color:#60a5fa}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+.hero{background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:40px 0;margin-bottom:28px}
+.hero h1{margin:0 0 8px;font-size:28px}
+.hero p{margin:0;color:#cbd5e1;font-size:14.5px;max-width:860px}
+main{padding-bottom:64px}
+h2{font-size:23px;border-left:5px solid var(--blue);padding-left:12px;margin:42px 0 10px}
+h3{font-size:18px;margin:26px 0 6px;color:#1d4ed8}
+h4{font-size:15.5px;margin:18px 0 6px}
+p,li{color:#334155;font-size:14.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:16px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.grid{display:grid;gap:16px}
+.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:860px){.grid.c2,.grid.c3{grid-template-columns:1fr}}
+figure{margin:20px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;overflow-x:auto}
+figcaption{font-size:13px;color:var(--muted);text-align:center;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+figcaption b{color:#1d4ed8}
+pre{background:var(--code-bg);color:#e2e8f0;padding:16px 18px;border-radius:10px;overflow-x:auto;font-size:12.8px;line-height:1.65}
+code{font-family:"SF Mono",Menlo,Consolas,"Courier New",monospace}
+p code,li code,td code,h3 code,h4 code,figcaption code{background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:5px;font-size:.9em}
+pre code{background:none;color:inherit;padding:0}
+.c-key{color:#7dd3fc}.c-str{color:#fbbf24}.c-com{color:#94a3b8;font-style:italic}.c-fn{color:#a5b4fc}.c-num{color:#f472b6}.c-dec{color:#fde047}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:#fff}
+th{background:#1e293b;color:#fff;text-align:left;padding:8px 12px;font-weight:600}
+td{border:1px solid var(--line);padding:7px 12px;vertical-align:top}
+tr:nth-child(even) td{background:#f8fafc}
+.path{font-family:monospace;background:#f1f5f9;border:1px solid var(--line);padding:1px 7px;border-radius:5px;font-size:12.5px;color:#0f766e;word-break:break-all}
+.note{border-left:4px solid var(--amber);background:var(--amber-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.note b{color:#92400e}
+.tip{border-left:4px solid var(--green);background:var(--green-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.tip b{color:#166534}
+.warn{border-left:4px solid var(--red);background:var(--red-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.pager{display:flex;justify-content:space-between;margin:40px 0 8px}
+.pager a{background:#fff;border:1px solid var(--line);padding:10px 18px;border-radius:10px;text-decoration:none;color:var(--ink);font-size:14px}
+.pager a:hover{border-color:var(--blue);color:var(--blue)}
+footer.foot{text-align:center;color:#94a3b8;font-size:12.5px;padding:24px 0 40px}
+svg text{font-family:inherit}
+svg .t{fill:#1e293b;font-size:13px}
+svg .tb{fill:#fff;font-weight:700;font-size:13px}
+svg .ts{fill:#475569;font-size:11px}
+svg .tt{fill:#0f172a;font-weight:700;font-size:15px}
+svg .tc{fill:#64748b;font-size:11px;font-family:Menlo,monospace}
+svg .lbl{fill:#334155;font-size:11.5px}
+svg .ar{stroke:#64748b;stroke-width:1.5;fill:none}
+svg .ar-b{stroke:#2563eb;stroke-width:1.8;fill:none}
+svg .ar-dash{stroke:#94a3b8;stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+svg .zone{fill:#f8fafc;stroke:#cbd5e1;stroke-dasharray:6 4}
+svg .bx{stroke-width:1.5}
+svg .b-blue{fill:#eff6ff;stroke:#3b82f6}
+svg .b-blue-d{fill:#dbeafe;stroke:#2563eb}
+svg .b-green{fill:#f0fdf4;stroke:#22c55e}
+svg .b-green-d{fill:#dcfce7;stroke:#16a34a}
+svg .b-amber{fill:#fffbeb;stroke:#f59e0b}
+svg .b-purple{fill:#faf5ff;stroke:#a855f7}
+svg .b-red{fill:#fef2f2;stroke:#ef4444}
+svg .b-slate{fill:#f1f5f9;stroke:#94a3b8}
+svg .b-dark{fill:#1e293b;stroke:#0f172a}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">Apache&nbsp;Burr<span>·源码深度剖析</span></span>
+  <a href="index.html">总导航</a><a href="01-overview.html">项目全景</a>
+  <a href="02-core-state.html"><b>State</b></a><a href="03-core-action.html">Action</a>
+  <a href="04-core-application.html">运行时</a><a href="05-graph-builder.html">Graph/Builder</a>
+  <a href="06-lifecycle-hooks.html">Hooks/Tracing</a><a href="07-persistence.html">持久化</a>
+  <a href="08-parallelism.html">并行</a><a href="09-tracking.html">追踪系统</a>
+  <a href="10-ui-frontend.html">遥测 UI</a><a href="11-integrations.html">集成生态</a>
+  <a href="12-execution-flow.html">端到端全景</a>
+</nav>
+
+<header class="hero"><div class="wrap">
+  <h1>02 · State 深度剖析：不可变状态的全部真相</h1>
+  <p>源码：<span class="path">burr/core/state.py</span>（491 行）+ <span class="path">burr/core/serde.py</span>（124 行）+ <span class="path">burr/core/typing.py</span>（147 行）。State 是整个框架的「数据库」——不可变、delta 驱动、可序列化、可类型化。</p>
+</div></header>
+
+<main class="wrap">
+
+<h2>2.1 State 的本质：包着 dict 的不可变 Mapping</h2>
+<div class="card">
+<p><code>State</code>（<span class="path">state.py:273</span>）继承 <code>typing.Mapping</code>，内部只持有两样东西：</p>
+<pre><code><span class="c-key">class</span> <span class="c-fn">State</span>(Mapping, Generic[StateType]):
+    <span class="c-str">"""An immutable state object. This is the only way to interact with state in Burr."""</span>
+    <span class="c-key">def</span> <span class="c-fn">__init__</span>(self, initial_values=None, typing_system=None):
+        self._typing_system = typing_system <span class="c-key">or</span> DictBasedTypingSystem()
+        self._state = initial_values        <span class="c-com"># 一个普通 dict</span></code></pre>
+<ul>
+<li><b>读取</b>走 Mapping 协议：<code>__getitem__/__len__/__iter__</code>（<span class="path">state.py:455-469</span>）。取不存在的键时抛出带引导信息的 <code>KeyError</code>（提示你检查上游 action 是否写出该键、是否声明 reads）。</li>
+<li><b>写入</b>只有一条通道：<code>apply_operation(delta)</code>（<span class="path">state.py:302</span>），所有便捷方法（<code>update/append/extend/increment/wipe</code>）都是它的语法糖。</li>
+<li><b>私有键</b>：以 <code>__</code> 开头的键（如 <code>__PRIOR_STEP</code>）是框架内部游标，action 对它们的修改会在归并时被剥离（04 篇 <code>_state_update</code>）。</li>
+</ul>
+<div class="note"><b>为什么不可变？</b>① 引擎可在任意时刻快照/回滚/比较状态；② fork 一份新应用时无需深拷贝防御；③ hooks（追踪器）拿到的 state 永远是稳定快照，不会因后续执行而「变脸」。</div>
+</div>
+
+<h2>2.2 copy-on-write：apply_operation 的完整流程</h2>
+<figure>
+<svg viewBox="0 0 1060 520" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker><marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#16a34a"/></marker></defs>
+<rect class="bx b-blue-d" x="40" y="200" width="210" height="120" rx="10" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="60" y="228" font-weight="700">旧 State S₀</text>
+<text class="tc" x="60" y="252">_state = {</text>
+<text class="tc" x="60" y="268">  counter: 5,</text>
+<text class="tc" x="60" y="284">  chat_history:[...]}</text>
+<rect class="bx b-green" x="330" y="60" width="380" height="440" rx="12" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tt" x="350" y="88">apply_operation(delta)（state.py:302）</text>
+<text class="tc" x="350" y="116">① new_state = copy.copy(self._state)</text>
+<text class="ts" x="362" y="134">浅拷贝顶层 dict（O(键数)，O(1) 大对象引用）</text>
+<text class="tc" x="350" y="162">② for field in delta.reads():</text>
+<text class="tc" x="362" y="178">    new_state[field] = deepcopy(...)</text>
+<text class="ts" x="362" y="196">只深拷贝 delta 声明要读的键 ——</text>
+<text class="ts" x="362" y="212">防止 delta 就地修改共享的可变对象</text>
+<text class="tc" x="350" y="240">③ operation.validate(new_state)</text>
+<text class="ts" x="362" y="258">类型预检：append 键必须是 list、</text>
+<text class="ts" x="362" y="274">increment 键必须是 int，否则抛 ValueError</text>
+<text class="tc" x="350" y="302">④ operation.apply_mutate(new_state)</text>
+<text class="ts" x="362" y="320">对副本就地执行真正的变更</text>
+<text class="tc" x="350" y="348">⑤ return State(new_state,</text>
+<text class="tc" x="362" y="364">       typing_system=self._typing_system)</text>
+<text class="ts" x="362" y="388">全新对象，旧的 S₀ 原封不动</text>
+<rect class="bx b-blue" x="790" y="80" width="230" height="120" rx="10" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="t" x="810" y="108" font-weight="700">新 State S₁</text>
+<text class="tc" x="810" y="132">counter: 6   ← 变更</text>
+<text class="tc" x="810" y="152">chat_history: [同引用]</text>
+<text class="ts" x="810" y="176">未被读的键零拷贝共享</text>
+<rect class="bx b-slate" x="790" y="240" width="230" height="120" rx="10" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="810" y="268" font-weight="700">旧 State S₀ 仍完好</text>
+<text class="tc" x="810" y="292">counter: 5</text>
+<text class="ts" x="810" y="316">追踪器/持久化手里的快照不受影响</text>
+<path class="ar-b" d="M250 240 L328 240" marker-end="url(#arr)"/>
+<text class="lbl" x="256" y="228" style="fill:#2563eb">传入 delta</text>
+<path class="ar-b" d="M710 180 L788 145" marker-end="url(#arr)"/>
+<path class="ar-dash" d="M710 300 L788 300" marker-end="url(#arrg)"/>
+<text class="ts" x="40" y="500">深浅混合拷贝是刻意的折衷（state.py:305-314 的 TODO 承认未来会改为纯事务日志，见 issue #33）：顶层浅拷贝保证键级隔离，reads 键深拷贝保证值级安全。</text>
+</svg>
+<figcaption><b>图 2-1 · copy-on-write 五步流程</b> —— 每次状态变更 = 浅拷贝 dict + 深拷贝 reads 键 + 校验 + 原地变更 + 包装新 State。旧对象永远不受污染。</figcaption>
+</figure>
+
+<h2>2.3 StateDelta：把变更建模成「事务」</h2>
+<p>每种变更不是「直接改 dict」，而是一个可校验、可序列化的<b>事务对象</b>（<span class="path">state.py:71-266</span>）。抽象类 <code>StateDelta</code> 要求实现四个方法：<code>reads()</code>、<code>writes()</code>、<code>validate()</code>、<code>apply_mutate()</code>——正好构成「读什么、写什么、合法性、怎么改」的完整契约。</p>
+<figure>
+<svg viewBox="0 0 1060 470" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#64748b"/></marker></defs>
+<rect class="bx b-dark" x="330" y="20" width="400" height="120" rx="10" style="fill:#1e293b" style="stroke:#0f172a"/>
+<text class="tb" x="350" y="48" style="fill:#fff">«abstract» StateDelta</text>
+<text class="tc" x="350" y="72" style="fill:#cbd5e1">+ name() : str            ← 序列化标识</text>
+<text class="tc" x="350" y="90" style="fill:#cbd5e1">+ reads()/writes() : list[str]</text>
+<text class="tc" x="350" y="108" style="fill:#cbd5e1">+ validate(input_state)   ← 类型预检</text>
+<text class="tc" x="350" y="126" style="fill:#cbd5e1">+ apply_mutate(inputs)    ← 原地变更</text>
+<text class="ts" x="350" y="146" style="fill:#94a3b8">serialize()/base_serialize()：dataclass→JSON，事务可被追踪系统记录</text>
+<rect class="bx b-blue" x="30" y="220" width="190" height="100" rx="10" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="t" x="46" y="246" font-weight="700">SetFields  "set"</text>
+<text class="tc" x="46" y="268">values: Mapping</text>
+<text class="ts" x="46" y="288">upsert 键值对 ← update()</text>
+<rect class="bx b-green" x="240" y="220" width="190" height="100" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="256" y="246" font-weight="700">AppendFields "append"</text>
+<text class="tc" x="256" y="268">values: Mapping</text>
+<text class="ts" x="256" y="288">尾部追加，值须可 append ← append()</text>
+<rect class="bx b-green" x="450" y="220" width="190" height="100" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="466" y="246" font-weight="700">ExtendFields "extend"</text>
+<text class="tc" x="466" y="268">values: Mapping[str, list]</text>
+<text class="ts" x="466" y="288">拼接列表 ← extend()</text>
+<rect class="bx b-amber" x="660" y="220" width="190" height="100" rx="10" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="676" y="246" font-weight="700">IncrementFields "incr"</text>
+<text class="tc" x="676" y="268">values: Mapping[str, int]</text>
+<text class="ts" x="676" y="288">整数自增 ← increment()</text>
+<rect class="bx b-red" x="870" y="220" width="160" height="100" rx="10" style="fill:#fef2f2" style="stroke:#ef4444"/>
+<text class="t" x="886" y="246" font-weight="700">DeleteField "delete"</text>
+<text class="tc" x="886" y="268">keys: list[str]</text>
+<text class="ts" x="886" y="288">删键（writes=[]）← wipe()</text>
+<path class="ar-dash" d="M470 140 L160 218" marker-end="url(#arr2)"/>
+<path class="ar-dash" d="M500 140 L335 218" marker-end="url(#arr2)"/>
+<path class="ar-dash" d="M530 140 L545 218" marker-end="url(#arr2)"/>
+<path class="ar-dash" d="M590 140 L755 218" marker-end="url(#arr2)"/>
+<path class="ar-dash" d="M640 140 L900 218" marker-end="url(#arr2)"/>
+<text class="ts" x="30" y="360">API → Delta 映射：state.update(a=1) → SetFields；state.append(x=2) → AppendFields；</text>
+<text class="ts" x="30" y="380">state.extend(x=[2]) → ExtendFields；state.increment(n=1) → IncrementFields；state.wipe(keep=[...]) → DeleteField。</text>
+<text class="ts" x="30" y="410">另有非 delta 的组合方法：merge(other)（dict 覆盖合并）、subset(*keys)（取子集），二者直接构造新 State。</text>
+<text class="ts" x="30" y="440">validate() 是防线：Append/Extend 校验值可 list 化（state.py:167-176, 203-212）；Increment 校验 int（state.py:229-238）。校验失败在变更前就被拦截。</text>
+</svg>
+<figcaption><b>图 2-2 · StateDelta 类图</b> —— 5 种具体事务覆盖所有状态变更原语；dataclass 化的它们自带 <code>serialize()</code>，因此「状态如何变化」本身也是可被追踪系统记录、回放的数据。</figcaption>
+</figure>
+
+<h2>2.4 serde：序列化管线（追踪/持久化的地基）</h2>
+<p>State 只在两个边界被序列化：<b>追踪客户端写 log.jsonl</b> 和<b>持久化器存数据库</b>（执行期内 state 始终是 Python 对象）。序列化入口是 <code>State.serialize(**kwargs)</code>（<span class="path">state.py:325</span>），它对每个键做两级分发：</p>
+<figure>
+<svg viewBox="0 0 1060 600" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<rect class="bx b-blue-d" x="40" y="30" width="250" height="64" rx="10" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="60" y="56" font-weight="700">State.serialize()</text>
+<text class="tc" x="60" y="76">逐键分发 state.py:329-346</text>
+<rect class="bx b-amber" x="40" y="150" width="250" height="120" rx="10" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="60" y="176" font-weight="700">① FIELD_SERIALIZATION</text>
+<text class="ts" x="60" y="198">全局字段级注册表（state.py:32）</text>
+<text class="ts" x="60" y="218">register_field_serde(name, ser, deser)</text>
+<text class="ts" x="60" y="240">键名精确匹配，优先级最高</text>
+<rect class="bx b-purple" x="40" y="330" width="250" height="150" rx="10" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="t" x="60" y="356" font-weight="700">② serde.serialize</text>
+<text class="ts" x="60" y="378">functools.singledispatch 按类型分发</text>
+<text class="tc" x="60" y="400">str/int/float/bool → 原样</text>
+<text class="tc" x="60" y="418">dict/list → 递归</text>
+<text class="tc" x="60" y="436">其他类型 → str(value) 兜底</text>
+<text class="tc" x="60" y="458">（serde.py:92-124）</text>
+<rect class="bx b-green" x="440" y="150" width="280" height="200" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="460" y="176" font-weight="700">自定义类型插件（带标记）</text>
+<text class="tc" x="460" y="200">{"__burr_serde__": "pandas.DataFrame",</text>
+<text class="tc" x="460" y="218"> "value": {...}}</text>
+<text class="ts" x="460" y="244">KEY = "__burr_serde__"（serde.py:21）</text>
+<text class="ts" x="460" y="266">serialize 端写入类型标记，</text>
+<text class="ts" x="460" y="284">deserialize 端查 StringDispatch 注册表</text>
+<text class="ts" x="460" y="306">按字符串键回调（serde.py:24-70）</text>
+<rect class="bx b-green" x="440" y="390" width="280" height="130" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="460" y="416" font-weight="700">自动注册的插件（state.py:487-491）</text>
+<text class="tc" x="460" y="440">state.py 被 import 时自动尝试：</text>
+<text class="tc" x="460" y="458">integrations.serde.langchain</text>
+<text class="tc" x="460" y="476">integrations.serde.pydantic</text>
+<text class="tc" x="460" y="494">integrations.serde.pandas（pickle 需手动）</text>
+<rect class="bx b-slate" x="820" y="150" width="210" height="370" rx="10" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="840" y="176" font-weight="700">反序列化（对称）</text>
+<text class="tc" x="840" y="200">State.deserialize()</text>
+<text class="tc" x="840" y="226">dict 含 KEY？</text>
+<text class="tc" x="840" y="246">→ StringDispatch.call(key)</text>
+<text class="tc" x="840" y="272">否则递归重建 dict/list</text>
+<text class="tc" x="840" y="298">未注册键 → ValueError</text>
+<text class="ts" x="840" y="330">（提示你 import 对应</text>
+<text class="ts" x="840" y="348">插件模块, serde.py:64-69）</text>
+<path class="ar-b" d="M165 94 L165 148" marker-end="url(#arr3)"/>
+<text class="lbl" x="172" y="126">键名命中？</text>
+<path class="ar-b" d="M165 270 L165 328" marker-end="url(#arr3)"/>
+<text class="lbl" x="172" y="304">否则</text>
+<path class="ar-b" d="M290 400 L438 330" marker-end="url(#arr3)"/>
+<text class="lbl" x="300" y="368">自定义类型</text>
+<path class="ar-b" d="M720 300 L818 260" marker-end="url(#arr3)"/>
+<text class="lbl" x="726" y="290">读端回放</text>
+</svg>
+<figcaption><b>图 2-3 · 序列化两级分发管线</b> —— 字段级注册表（精确控制某键）→ 类型级 singledispatch（通用规则）→ <code>__burr_serde__</code> 类型标记（可逆的自定义类型编码）。</figcaption>
+</figure>
+
+<div class="warn"><b>安全提示（源码原文注释）：</b>serde 默认兜底是 <code>str(value)</code>（serde.py:106）——任何未注册的自定义类型会被「静默」转成字符串写盘，<b>反序列化回不来</b>。生产环境务必为自定义类型注册 serde，或用 <code>burr.integrations.serde.pickle</code> 的 <code>register_type_to_pickle</code>（注意 pickle 数据不可信来源风险）。</div>
+
+<h2>2.5 TypingSystem：给 State 装上「类型外壳」</h2>
+<div class="grid c2">
+<div class="card">
+<h3>设计</h3>
+<p><code>TypingSystem[StateType]</code>（<span class="path">typing.py:35</span>）把「KV 字典」和「你心里的类型化模型」解耦：</p>
+<ul>
+<li><code>construct_data(state)</code> —— 把 State 物化成类型化视图（如一个 pydantic 模型），<code>State.data</code> 用 <code>cached_property</code> 惰性缓存（<span class="path">state.py:298-300</span>）；</li>
+<li><code>construct_state(data)</code> —— 反向包装；</li>
+<li><code>validate_state / state_pre_action_run_type ...</code> —— 校验与类型推导钩子。</li>
+</ul>
+<p>默认实现 <code>DictBasedTypingSystem</code> 是个恒等透传（<span class="path">typing.py:130</span>）；<code>PydanticTypingSystem</code>（11 篇）则让整个应用以 pydantic 模型为第一视角。</p>
+</div>
+<div class="card">
+<h3>与 ActionSchema 的配合</h3>
+<p><code>ActionSchema</code>（<span class="path">typing.py:94</span>）描述单个 action 的输入/输出/中间结果类型：<code>state_input_type / state_output_type / intermediate_result_type</code>。执行引擎在 <code>_validate_result</code>（<span class="path">application.py:92-100</span>）用它校验 action 返回值必须是声明的类型（默认 <code>dict</code>）。</p>
+<div class="note"><b>双层类型体系的意义：</b>TypingSystem 管「全局状态的类型外观」，ActionSchema 管「单个动作的输入输出契约」。两者叠加即可实现「用 pydantic 模型编程、运行时全链路校验」的 guardrails 模式。</div>
+</div>
+</div>
+
+<h2>2.6 一次真实的调用链</h2>
+<div class="card">
+<pre><code><span class="c-com"># State 构造与变更（等价展开）</span>
+s0 = State({<span class="c-str">"counter"</span>: 5})
+s1 = s0.update(counter=6)          <span class="c-com"># → apply_operation(SetFields({"counter": 6}))</span>
+s2 = s1.append(history=<span class="c-str">"hi"</span>)      <span class="c-com"># → apply_operation(AppendFields({"history": "hi"}))</span>
+<span class="c-key">assert</span> s1[<span class="c-str">"counter"</span>] == 6 <span class="c-key">and</span> s0[<span class="c-str">"counter"</span>] == 5  <span class="c-com"># 旧状态不变</span>
+
+<span class="c-com"># 执行期被引擎调用（04 篇展开）</span>
+state.subset(*action.reads)        <span class="c-com"># 只把声明的 reads 交给 action（最小权限）</span>
+new_state = reducer.update(result, state)   <span class="c-com"># action 的写入</span>
+_state_update(old, new)            <span class="c-com"># 归并：剥离 __ 私有键 + 保留删除语义</span>
+
+<span class="c-com"># 边界处被追踪/持久化调用</span>
+payload = state.serialize(serde_kwargs=...) <span class="c-com"># → log.jsonl 里的一行 JSON</span>
+restored = State.deserialize(payload)       <span class="c-com"># 断点恢复时还原</span></code></pre>
+</div>
+
+<div class="tip"><b>本篇要点：</b>① State = 不可变 Mapping，唯一写通道是 apply_operation；② 变更是「事务对象」StateDelta，自带校验与序列化；③ 序列化只在追踪/持久化边界发生，两级分发 + 类型标记；④ TypingSystem 提供可插拔的类型外壳。掌握这些，04 篇的引擎逻辑就只剩「调度」没有「魔法」了。</div>
+
+<div class="pager"><a href="01-overview.html">← 01 项目全景</a><a href="03-core-action.html">下一篇：03 Action 体系 →</a></div>
+</main>
+<footer class="foot">Apache Burr 源码学习笔记 · 02 State 深度剖析 · 基于 v0.42.0</footer>
+</body>
+</html>

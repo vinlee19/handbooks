@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>01 · 总体架构 — Moonlink 源码深度解析</title>
+<style>
+:root{
+  --blue:#2563eb;--green:#16a34a;--orange:#ea580c;--purple:#7c3aed;--gray:#64748b;--red:#dc2626;
+  --ink:#1e293b;--muted:#64748b;--bg:#f6f8fa;--card:#fff;--line:#e2e8f0;--code-bg:#0d1117;--code-ink:#e6edf3;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.8}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.97);display:flex;flex-wrap:wrap;gap:2px;padding:8px 16px;font-size:13px}
+.topnav .brand{color:#fbbf24;font-weight:700;margin-right:10px;padding:4px 6px}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:4px 10px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav a.active{background:var(--blue);color:#fff}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 20px 80px}
+.page-head{background:linear-gradient(135deg,#0f172a,#1e3a5f);border-radius:14px;color:#f1f5f9;padding:30px 34px;margin-bottom:26px}
+.page-head h1{font-size:28px;margin-bottom:6px}
+.page-head p{color:#cbd5e1;font-size:14.5px}
+h2{font-size:23px;margin:40px 0 12px;padding-left:12px;border-left:5px solid var(--blue)}
+h3{font-size:18px;margin:24px 0 8px;color:#0f172a}
+p{margin:10px 0;color:#334155}
+.lead{font-size:15.5px;color:#475569}
+.figure{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin:20px 0}
+.fig-title{font-weight:700;font-size:14.5px;color:#0f172a;margin-bottom:4px}
+.fig-title .fno{color:var(--blue)}
+.fig-desc{font-size:13px;color:var(--muted);margin-bottom:10px}
+svg{width:100%;height:auto;display:block}
+code{background:#eef2f7;border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:.88em;color:#be185d}
+pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:16px 18px;overflow-x:auto;font-size:13px;line-height:1.6;margin:14px 0}
+pre code{background:none;border:none;color:inherit;padding:0}
+.k{color:#ff7b72}.t{color:#79c0ff}.s{color:#a5d6ff}.c{color:#8b949e;font-style:italic}.n{color:#ffa657}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px;background:var(--card)}
+th{background:#f1f5f9;text-align:left}
+th,td{border:1px solid var(--line);padding:8px 12px;vertical-align:top}
+tbody tr:nth-child(even){background:#fafbfc}
+.callout{border-left:4px solid var(--blue);background:#eff6ff;border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0;font-size:14px}
+.callout.warn{border-color:var(--orange);background:#fff7ed}
+.callout.good{border-color:var(--green);background:#f0fdf4}
+.callout b{color:#0f172a}
+.footer{display:flex;justify-content:space-between;margin-top:60px;padding-top:18px;border-top:1px solid var(--line);font-size:14px}
+.footer a{color:var(--blue);text-decoration:none;font-weight:600}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12.5px;color:var(--muted);margin-top:8px}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{width:12px;height:12px;border-radius:3px;display:inline-block}
+ul,ol{margin:8px 0 8px 24px}
+li{margin:4px 0}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">🥮 Moonlink 源码解析</span>
+  <a href="index.html">总导航</a>
+  <a class="active" href="01-overview.html">01 总体架构</a>
+  <a href="02-ingestion.html">02 数据摄入</a>
+  <a href="03-core-engine.html">03 存储引擎</a>
+  <a href="04-index-dv.html">04 索引与 DV</a>
+  <a href="05-wal-recovery.html">05 WAL 与恢复</a>
+  <a href="06-iceberg.html">06 Iceberg 集成</a>
+  <a href="07-query.html">07 查询路径</a>
+  <a href="08-control-plane.html">08 控制面</a>
+  <a href="09-concurrency-lsn.html">09 并发模型</a>
+</nav>
+
+<div class="wrap">
+<div class="page-head">
+  <h1>Chapter 01 · 总体架构：Moonlink 是什么，为什么需要它</h1>
+  <p>一句话：Moonlink 是一个「托管的 Apache Iceberg 摄取引擎」——它站在 PostgreSQL/Kafka/REST 与 Iceberg 湖仓之间，把高频流式写入变成对 Iceberg 友好的大文件 + v3 删除向量。</p>
+</div>
+
+<h2>1.1 要解决的问题：Iceberg 不擅长「高频小写入」</h2>
+<p class="lead">Apache Iceberg 是为「大批量、低频次」的表格式与元数据管理设计的。一旦用传统 CDC 管线（如 Spark/Flink 作业）把高频更新直接打进 Iceberg，就会触发三个连锁问题：</p>
+<ol>
+  <li><b>小文件泛滥</b>：每 1 分钟一个微批就要产生新 Parquet 文件，一天上千个小文件，对象存储 LIST/OPEN 请求暴增；</li>
+  <li><b>元数据爆炸</b>：每次提交都重写 manifest list，equality-delete 文件还要在每次读取时与所有历史数据文件做关联，扫描代价持续上升；</li>
+  <li><b>合并成为日常运维</b>：必须常驻 Spark compaction 作业，且合并窗口内写入/读取互相干扰。</li>
+</ol>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 1-1</span> · 传统摄取管线 vs Moonlink：把「合并」从日常运维变成内置后台任务</div>
+  <div class="fig-desc">上：传统 CDC → Iceberg 管线。下：Moonlink 管线。核心差异在于中间多了一个「本地 NVMe 缓冲层」。</div>
+  <svg viewBox="0 0 1160 560" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="a11" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#64748b"/></marker>
+      <marker id="a12" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#16a34a"/></marker>
+    </defs>
+    <!-- traditional lane -->
+    <text x="30" y="36" font-size="15" font-weight="700" fill="#64748b">传统管线：每个微批直接写 Iceberg</text>
+    <g font-size="12.5">
+      <rect x="30" y="56" width="150" height="70" rx="9" fill="#f1f5f9" stroke="#64748b" stroke-width="1.4"/>
+      <text x="105" y="86" text-anchor="middle" font-weight="600">PostgreSQL</text>
+      <text x="105" y="106" text-anchor="middle" font-size="11" fill="#64748b">业务库，高频写入</text>
+      <rect x="250" y="56" width="170" height="70" rx="9" fill="#f1f5f9" stroke="#64748b" stroke-width="1.4"/>
+      <text x="335" y="86" text-anchor="middle" font-weight="600">CDC 作业（Spark/Flink）</text>
+      <text x="335" y="106" text-anchor="middle" font-size="11" fill="#64748b">每微批 = 每次提交</text>
+      <rect x="490" y="50" width="230" height="82" rx="9" fill="#fee2e2" stroke="#dc2626" stroke-width="1.5"/>
+      <text x="605" y="72" text-anchor="middle" font-weight="700" fill="#7f1d1d">Iceberg 表</text>
+      <text x="605" y="92" text-anchor="middle" font-size="11" fill="#b91c1c">小 Parquet × N + equality-delete × N</text>
+      <text x="605" y="110" text-anchor="middle" font-size="11" fill="#b91c1c">manifest 每次重写 → 元数据爆炸</text>
+      <rect x="790" y="56" width="170" height="70" rx="9" fill="#f1f5f9" stroke="#64748b" stroke-width="1.4"/>
+      <text x="875" y="86" text-anchor="middle" font-weight="600">查询引擎</text>
+      <text x="875" y="106" text-anchor="middle" font-size="11" fill="#64748b">读时关联 delete，越读越慢</text>
+      <rect x="960" y="140" width="170" height="64" rx="9" fill="#fef3c7" stroke="#ca8a04" stroke-width="1.4"/>
+      <text x="1045" y="164" text-anchor="middle" font-weight="600" fill="#713f12">Spark Compaction 作业</text>
+      <text x="1045" y="182" text-anchor="middle" font-size="11" fill="#854d0e">常驻运维 · 抢占资源</text>
+      <line x1="180" y1="91" x2="250" y2="91" stroke="#64748b" stroke-width="1.6" marker-end="url(#a11)"/>
+      <line x1="420" y1="91" x2="490" y2="91" stroke="#64748b" stroke-width="1.6" marker-end="url(#a11)"/>
+      <line x1="720" y1="91" x2="790" y2="91" stroke="#64748b" stroke-width="1.6" marker-end="url(#a11)"/>
+      <path d="M 640 132 C 700 165 830 175 960 170" fill="none" stroke="#ca8a04" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#a11)"/>
+      <text x="330" y="152" font-size="11.5" fill="#b91c1c">痛点：分钟级延迟 · 小文件 · 元数据膨胀 · 读放大 · 额外合并运维</text>
+    </g>
+    <line x1="30" y1="232" x2="1130" y2="232" stroke="#e2e8f0" stroke-width="2"/>
+
+    <!-- moonlink lane -->
+    <text x="30" y="272" font-size="15" font-weight="700" fill="#16a34a">Moonlink 管线：NVMe 缓冲 + 受控文件 + v3 删除向量</text>
+    <g font-size="12.5">
+      <rect x="30" y="292" width="150" height="70" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+      <text x="105" y="322" text-anchor="middle" font-weight="600" fill="#1e3a8a">PostgreSQL</text>
+      <text x="105" y="342" text-anchor="middle" font-size="11" fill="#3b5ba9">逻辑复制 CDC</text>
+      <rect x="250" y="280" width="240" height="94" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.6"/>
+      <text x="370" y="304" text-anchor="middle" font-weight="700" fill="#14532d">Moonlink（本地 NVMe）</text>
+      <text x="370" y="324" text-anchor="middle" font-size="11" fill="#166534">内存列缓冲 MemSlice + 主键双层索引</text>
+      <text x="370" y="342" text-anchor="middle" font-size="11" fill="#166534">删除 → 内存位图（不写 delete 文件）</text>
+      <text x="370" y="360" text-anchor="middle" font-size="11" fill="#166534">攒够 131072 行 / 128MiB 才落盘</text>
+      <rect x="560" y="286" width="230" height="82" rx="10" fill="#f3e8ff" stroke="#7c3aed" stroke-width="1.5"/>
+      <text x="675" y="310" text-anchor="middle" font-weight="700" fill="#4c1d95">Iceberg v3 表</text>
+      <text x="675" y="330" text-anchor="middle" font-size="11" fill="#6d28d9">大小受控 Parquet（≈128–512MiB）</text>
+      <text x="675" y="348" text-anchor="middle" font-size="11" fill="#6d28d9">puffin 删除向量（position delete 语义）</text>
+      <rect x="860" y="292" width="150" height="70" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+      <text x="935" y="322" text-anchor="middle" font-weight="600" fill="#1e3a8a">查询引擎</text>
+      <text x="935" y="342" text-anchor="middle" font-size="11" fill="#3b5ba9">Spark / DuckDB / Trino</text>
+      <rect x="860" y="396" width="150" height="70" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+      <text x="935" y="426" text-anchor="middle" font-weight="600" fill="#1e3a8a">实时查询</text>
+      <text x="935" y="446" text-anchor="middle" font-size="11" fill="#3b5ba9">pg_mooncake / DataFusion</text>
+      <line x1="180" y1="327" x2="250" y2="327" stroke="#16a34a" stroke-width="1.8" marker-end="url(#a12)"/>
+      <line x1="490" y1="327" x2="560" y2="327" stroke="#16a34a" stroke-width="1.8" marker-end="url(#a12)"/>
+      <line x1="790" y1="327" x2="860" y2="327" stroke="#16a34a" stroke-width="1.8" marker-end="url(#a12)"/>
+      <line x1="900" y1="362" x2="920" y2="396" stroke="#2563eb" stroke-width="1.6" marker-end="url(#a12)"/>
+      <text x="330" y="408" font-size="11.5" fill="#166534">收益：毫秒级可见（内存态直读）· 文件数与提交解耦 · 删除只需读位图 · 后台自动 compaction</text>
+      <text x="330" y="432" font-size="11.5" fill="#64748b">对应源码：内存态 = MooncakeTable（CH03/04）· 落盘 = DiskSliceWriter（CH03）</text>
+      <text x="330" y="456" font-size="11.5" fill="#64748b">提交 = IcebergTableSyncer（CH06）</text>
+    </g>
+    <g font-size="12" fill="#475569">
+      <text x="30" y="512">本质：Moonlink 把「写 Iceberg 的频率」与「数据到达的频率」解耦——内存里实时可见，磁盘上攒大再提交。</text>
+      <text x="30" y="536">这与 LSM-Tree 把「写入」与「读盘优化」解耦是同构的思想（CH03 详述），所以常被称作「为 Iceberg 定制的 LSM 变种」。</text>
+    </g>
+  </svg>
+</div>
+
+<h2>1.2 物理部署架构</h2>
+<p class="lead">生产形态下，Moonlink 是<b>单个 Rust 二进制进程</b>，监听 4 个端口，向下挂三种物理存储。记住这张图，后面每一章都在这张图上展开。</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 1-2</span> · 物理部署架构图（进程 · 端口 · 存储 · 协议）</div>
+  <div class="fig-desc">中心是 moonlink 进程（src/moonlink_service）。左侧数据源，右侧湖仓三件套：Catalog、对象存储、查询引擎。底部是进程本地 NVMe 磁盘。</div>
+  <svg viewBox="0 0 1160 880" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="a21" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+      <marker id="a22" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2563eb"/></marker>
+      <marker id="a23" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#7c3aed"/></marker>
+    </defs>
+
+    <!-- ================= LEFT: sources ================= -->
+    <text x="30" y="34" font-size="15" font-weight="700" fill="#2563eb">数据源</text>
+    <rect x="30" y="50" width="270" height="210" rx="12" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+    <rect x="46" y="66" width="238" height="84" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+    <text x="165" y="90" text-anchor="middle" font-weight="700" fill="#1e3a8a">PostgreSQL 15+</text>
+    <text x="165" y="110" text-anchor="middle" font-size="11.5" fill="#3b5ba9">replication slot：moonlink_slot</text>
+    <text x="165" y="128" text-anchor="middle" font-size="11.5" fill="#3b5ba9">publication：moonlink_pub</text>
+    <text x="165" y="143" text-anchor="middle" font-size="10.5" fill="#64748b">postgres_source.rs / clients/postgres.rs</text>
+    <rect x="46" y="162" width="238" height="82" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+    <text x="165" y="186" text-anchor="middle" font-weight="700" fill="#1e3a8a">REST / Kafka (Avro)</text>
+    <text x="165" y="206" text-anchor="middle" font-size="11.5" fill="#3b5ba9">POST /ingest/{t} · /ingestpb/{t}</text>
+    <text x="165" y="224" text-anchor="middle" font-size="11.5" fill="#3b5ba9">/kafka/{t}/ingest · /upload/{t}</text>
+    <text x="165" y="239" text-anchor="middle" font-size="10.5" fill="#64748b">rest_ingest/ · rest_api.rs</text>
+
+    <!-- clients -->
+    <rect x="30" y="300" width="270" height="180" rx="12" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+    <text x="165" y="326" text-anchor="middle" font-size="14" font-weight="700" fill="#0d9488">查询客户端（实时读）</text>
+    <text x="165" y="350" text-anchor="middle" font-size="12" fill="#475569">pg_mooncake（PG 扩展）</text>
+    <text x="165" y="372" text-anchor="middle" font-size="12" fill="#475569">duckdb_mooncake（DuckDB 扩展）</text>
+    <text x="165" y="394" text-anchor="middle" font-size="12" fill="#475569">moonlink_datafusion（REPL）</text>
+    <text x="165" y="424" text-anchor="middle" font-size="11" fill="#64748b">通过 RPC scan_table_begin/end</text>
+    <text x="165" y="442" text-anchor="middle" font-size="11" fill="#64748b">拿 ReadState 直接读 Parquet（CH07）</text>
+
+    <!-- ================= CENTER: process ================= -->
+    <text x="390" y="34" font-size="15" font-weight="700" fill="#16a34a">moonlink 进程（单二进制）</text>
+    <rect x="390" y="50" width="400" height="560" rx="14" fill="#f0fdf4" stroke="#16a34a" stroke-width="2"/>
+    <!-- ports -->
+    <g font-size="11" font-weight="700">
+      <rect x="404" y="64" width="110" height="30" rx="15" fill="#2563eb"/><text x="459" y="83" text-anchor="middle" fill="#fff">REST :3030</text>
+      <rect x="524" y="64" width="110" height="30" rx="15" fill="#0d9488"/><text x="579" y="83" text-anchor="middle" fill="#fff">RPC :3031</text>
+      <rect x="644" y="64" width="66" height="30" rx="15" fill="#7c3aed"/><text x="677" y="83" text-anchor="middle" fill="#fff">:3435</text>
+      <rect x="716" y="64" width="60" height="30" rx="15" fill="#94a3b8"/><text x="746" y="83" text-anchor="middle" fill="#fff">:5050</text>
+    </g>
+    <g font-size="10.5" fill="#64748b">
+      <text x="404" y="108">axum REST API</text><text x="524" y="108">bincode RPC（TCP/unix）</text><text x="644" y="108">OTLP/HTTP</text><text x="716" y="108">/ready</text>
+    </g>
+    <!-- connectors -->
+    <rect x="404" y="126" width="372" height="96" rx="10" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+    <text x="590" y="148" text-anchor="middle" font-weight="700" fill="#115e59">接入层 moonlink_connectors（CH02）</text>
+    <text x="590" y="170" text-anchor="middle" font-size="12" fill="#0f766e">PostgresSource → CdcEvent → MoonlinkSink</text>
+    <text x="590" y="190" text-anchor="middle" font-size="12" fill="#0f766e">RestSource → MoonlinkRestSink</text>
+    <text x="590" y="210" text-anchor="middle" font-size="11.5" fill="#0f766e">统一翻译为 TableEvent（table_notify.rs）</text>
+    <!-- control -->
+    <rect x="404" y="236" width="372" height="76" rx="10" fill="#e2e8f0" stroke="#64748b" stroke-width="1.4"/>
+    <text x="590" y="258" text-anchor="middle" font-weight="700" fill="#334155">控制面 moonlink_backend（CH08）</text>
+    <text x="590" y="280" text-anchor="middle" font-size="12" fill="#475569">create/drop_table · scan_table · recover_all_tables</text>
+    <text x="590" y="298" text-anchor="middle" font-size="12" fill="#475569">元数据仓：SQLite / PostgreSQL（表清单+WAL 状态）</text>
+    <!-- engine -->
+    <rect x="404" y="326" width="372" height="160" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.6"/>
+    <text x="590" y="350" text-anchor="middle" font-weight="700" fill="#14532d">核心引擎 src/moonlink（CH03/09）</text>
+    <g font-size="11.5" fill="#166534">
+      <text x="424" y="376">· MemSlice：Arrow 列式写缓冲（131072 行阈值）</text>
+      <text x="424" y="396">· MemIndex + GlobalIndex：主键双层哈希索引（CH04）</text>
+      <text x="424" y="416">· BatchDeletionVector：Roaring 位图（CH04）</text>
+      <text x="424" y="436">· WalManager：JSON WAL 缓冲（CH05）</text>
+      <text x="424" y="456">· SnapshotTableState：快照演进（CH03）</text>
+      <text x="424" y="476">· 后台任务：flush / compaction / iceberg 提交（CH03/06）</text>
+    </g>
+    <!-- read -->
+    <rect x="404" y="500" width="372" height="94" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+    <text x="590" y="524" text-anchor="middle" font-weight="700" fill="#1e3a8a">读路径 ReadStateManager（CH07）</text>
+    <text x="590" y="546" text-anchor="middle" font-size="12" fill="#3b5ba9">union read：磁盘 Parquet ∪ 内存临时 Parquet − 删除</text>
+    <text x="590" y="566" text-anchor="middle" font-size="12" fill="#3b5ba9">输出 ReadState（bincode）→ 客户端自读文件</text>
+    <text x="590" y="586" text-anchor="middle" font-size="11.5" fill="#64748b">ObjectStorageCache：pin/unpin 引用计数缓存</text>
+
+    <!-- ================= RIGHT: lakehouse ================= -->
+    <text x="860" y="34" font-size="15" font-weight="700" fill="#7c3aed">湖仓侧</text>
+    <rect x="860" y="50" width="270" height="96" rx="12" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+    <rect x="874" y="64" width="242" height="68" rx="9" fill="#f3e8ff" stroke="#7c3aed" stroke-width="1.4"/>
+    <text x="995" y="86" text-anchor="middle" font-weight="700" fill="#4c1d95">Iceberg Catalog（CH06）</text>
+    <text x="995" y="106" text-anchor="middle" font-size="11.5" fill="#6d28d9">File（自研 Hadoop 风格）/ REST / Glue</text>
+    <text x="995" y="123" text-anchor="middle" font-size="10.5" fill="#7c3aed">iceberg_table_syncer.rs 提交 metadata.json</text>
+
+    <rect x="860" y="170" width="270" height="240" rx="12" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+    <text x="995" y="196" text-anchor="middle" font-size="14" font-weight="700" fill="#ea580c">对象存储 S3 / GCS / HDFS / 本地FS</text>
+    <text x="995" y="214" text-anchor="middle" font-size="10.5" fill="#64748b">经 opendal 统一抽象（storage/filesystem/）</text>
+    <g font-size="11.5">
+      <rect x="880" y="228" width="230" height="34" rx="7" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="995" y="250" text-anchor="middle" fill="#7c2d12">data/{file_id}.parquet（≈128–512MiB）</text>
+      <rect x="880" y="270" width="230" height="34" rx="7" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="995" y="292" text-anchor="middle" fill="#7c2d12">puffin 文件：删除向量 blob + 文件索引 blob</text>
+      <rect x="880" y="312" width="230" height="34" rx="7" fill="#f3e8ff" stroke="#7c3aed"/>
+      <text x="995" y="334" text-anchor="middle" fill="#4c1d95">metadata/v{n}.metadata.json · manifest</text>
+      <rect x="880" y="354" width="230" height="34" rx="7" fill="#f1f5f9" stroke="#94a3b8"/>
+      <text x="995" y="376" text-anchor="middle" fill="#334155">version-hint.text（File catalog）</text>
+    </g>
+
+    <rect x="860" y="434" width="270" height="110" rx="12" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+    <text x="995" y="460" text-anchor="middle" font-size="14" font-weight="700" fill="#2563eb">Iceberg 计算引擎</text>
+    <text x="995" y="484" text-anchor="middle" font-size="12" fill="#475569">Spark · Trino · DuckDB · Athena</text>
+    <text x="995" y="506" text-anchor="middle" font-size="11.5" fill="#64748b">经 Catalog 发现表 → 直读对象存储</text>
+    <text x="995" y="524" text-anchor="middle" font-size="11.5" fill="#64748b">v3 规范消费 puffin 删除向量</text>
+
+    <rect x="860" y="568" width="270" height="42" rx="9" fill="#fef3c7" stroke="#ca8a04" stroke-width="1.3"/>
+    <text x="995" y="595" text-anchor="middle" font-size="12" fill="#713f12">可选：data_server_uri 路径重映射（存算分离）</text>
+
+    <!-- ================= BOTTOM: NVMe ================= -->
+    <text x="390" y="650" font-size="15" font-weight="700" fill="#ea580c">进程本地 NVMe 磁盘</text>
+    <rect x="390" y="664" width="400" height="180" rx="12" fill="#fff7ed" stroke="#ea580c" stroke-width="1.8"/>
+    <g font-size="12">
+      <rect x="410" y="684" width="170" height="60" rx="8" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="495" y="708" text-anchor="middle" font-weight="600" fill="#7c2d12">_wal/&lt;table_id&gt;/</text>
+      <text x="495" y="728" text-anchor="middle" font-size="11" fill="#9a3412">wal_1.json · metadata_wal.json</text>
+      <rect x="600" y="684" width="170" height="60" rx="8" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="685" y="708" text-anchor="middle" font-weight="600" fill="#7c2d12">表数据目录（write-through 缓存）</text>
+      <text x="685" y="728" text-anchor="middle" font-size="11" fill="#9a3412">data_*.parquet 本地副本</text>
+      <rect x="410" y="756" width="170" height="60" rx="8" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="495" y="780" text-anchor="middle" font-weight="600" fill="#7c2d12">/tmp/moonlink_temp_file</text>
+      <text x="495" y="800" text-anchor="middle" font-size="11" fill="#9a3412">union read 内存批临时 Parquet</text>
+      <rect x="600" y="756" width="170" height="60" rx="8" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="685" y="780" text-anchor="middle" font-weight="600" fill="#7c2d12">日志目录（可选）</text>
+      <text x="685" y="800" text-anchor="middle" font-size="11" fill="#9a3412">flexi_logger / tracing</text>
+    </g>
+
+    <!-- ============ arrows ============ -->
+    <!-- PG CDC -->
+    <line x1="300" y1="108" x2="404" y2="158" stroke="#2563eb" stroke-width="2" marker-end="url(#a22)"/>
+    <text x="302" y="118" font-size="10.5" fill="#2563eb" font-weight="600">逻辑复制协议</text>
+    <text x="302" y="133" font-size="10.5" fill="#2563eb" font-weight="600">pgoutput 复制流</text>
+    <line x1="404" y1="196" x2="300" y2="132" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#a21)"/>
+    <text x="314" y="172" font-size="10.5" fill="#64748b">standby ACK</text>
+    <!-- REST -->
+    <line x1="300" y1="196" x2="404" y2="182" stroke="#2563eb" stroke-width="2" marker-end="url(#a22)"/>
+    <text x="304" y="216" font-size="10.5" fill="#2563eb" font-weight="600">HTTP/Avro/PB</text>
+    <!-- query clients -->
+    <line x1="300" y1="386" x2="404" y2="520" stroke="#0d9488" stroke-width="2" marker-end="url(#a21)"/>
+    <text x="308" y="452" font-size="10.5" fill="#0d9488" font-weight="600">scan RPC</text>
+    <!-- process to catalog -->
+    <line x1="790" y1="98" x2="874" y2="98" stroke="#7c3aed" stroke-width="2" marker-end="url(#a23)"/>
+    <text x="832" y="86" text-anchor="middle" font-size="10.5" fill="#7c3aed" font-weight="600">提交快照</text>
+    <!-- process to object storage -->
+    <line x1="790" y1="330" x2="860" y2="300" stroke="#ea580c" stroke-width="2" marker-end="url(#a21)"/>
+    <text x="822" y="316" text-anchor="middle" font-size="10.5" fill="#ea580c" font-weight="600">PUT 文件</text>
+    <!-- process to NVMe -->
+    <line x1="560" y1="610" x2="560" y2="664" stroke="#ea580c" stroke-width="2" marker-end="url(#a21)"/>
+    <text x="570" y="642" font-size="10.5" fill="#ea580c" font-weight="600">WAL JSON · write-through 缓存 · 临时文件</text>
+    <!-- engines read -->
+    <line x1="1000" y1="146" x2="1000" y2="170" stroke="#7c3aed" stroke-width="1.6" marker-end="url(#a23)"/>
+    <line x1="1060" y1="410" x2="1020" y2="434" stroke="#7c3aed" stroke-width="1.8" marker-end="url(#a23)"/>
+    <text x="1032" y="428" font-size="10.5" fill="#7c3aed" font-weight="600">发现表</text>
+    <line x1="1100" y1="480" x2="1120" y2="300" stroke="#94a3b8" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#a21)"/>
+    <text x="1108" y="404" font-size="10.5" fill="#64748b" transform="rotate(-83 1108 404)">直读 parquet + puffin</text>
+  </svg>
+  <div class="legend">
+    <span><i style="background:#dbeafe"></i>数据源/客户端</span>
+    <span><i style="background:#dcfce7"></i>moonlink 进程内部</span>
+    <span><i style="background:#ffedd5"></i>物理存储</span>
+    <span><i style="background:#f3e8ff"></i>Iceberg 生态</span>
+    <span>蓝实线 = 写入，紫实线 = 元数据提交，灰虚线 = 读/ACK</span>
+  </div>
+</div>
+
+<div class="callout"><b>端口速记</b>：3030 给「数据进来」（REST），3031 给「查询进来」（RPC），3435 给「指标进来」（OTLP 自吞摄取，CH08），5050 给「K8s 探活」。WAL 与缓存都在本地盘，真正的表数据在对象存储——moonlink 进程本身是<b>无状态可恢复</b>的（CH05）。</div>
+
+<h2>1.3 端到端数据流：一条 INSERT 的旅程</h2>
+<p class="lead">以「PG 里一条 INSERT 经 CDC 进入 moonlink，最终成为 Iceberg 表里可查询的数据」为例，全链路分 7 步。这是贯穿全系列的主线索，后面每章展开其中一环。</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 1-3</span> · 一条 INSERT 的端到端生命周期（附关键源码入口）</div>
+  <div class="fig-desc">横向时间流。绿色阶段在内存中毫秒级完成；橙色阶段是异步后台任务，不影响写延迟。</div>
+  <svg viewBox="0 0 1160 560" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="a31" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    </defs>
+    <line x1="40" y1="90" x2="1120" y2="90" stroke="#cbd5e1" stroke-width="3"/>
+    <g font-size="12">
+      <circle cx="80" cy="90" r="8" fill="#2563eb"/><text x="80" y="66" text-anchor="middle" font-weight="700" fill="#1e3a8a">① CDC</text>
+      <circle cx="240" cy="90" r="8" fill="#2563eb"/><text x="240" y="66" text-anchor="middle" font-weight="700" fill="#1e3a8a">② 事件化</text>
+      <circle cx="400" cy="90" r="8" fill="#16a34a"/><text x="400" y="66" text-anchor="middle" font-weight="700" fill="#14532d">③ 内存可见</text>
+      <circle cx="560" cy="90" r="8" fill="#16a34a"/><text x="560" y="66" text-anchor="middle" font-weight="700" fill="#14532d">④ 提交</text>
+      <circle cx="720" cy="90" r="8" fill="#ea580c"/><text x="720" y="66" text-anchor="middle" font-weight="700" fill="#7c2d12">⑤ flush</text>
+      <circle cx="880" cy="90" r="8" fill="#7c3aed"/><text x="880" y="66" text-anchor="middle" font-weight="700" fill="#4c1d95">⑥ Iceberg 提交</text>
+      <circle cx="1040" cy="90" r="8" fill="#0d9488"/><text x="1040" y="66" text-anchor="middle" font-weight="700" fill="#115e59">⑦ 可查询</text>
+    </g>
+    <g font-size="11.5">
+      <!-- step cards -->
+      <rect x="30" y="120" width="150" height="180" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+      <text x="105" y="142" text-anchor="middle" font-weight="700" fill="#1e3a8a">PG WAL → 复制流</text>
+      <text x="40" y="164" font-size="10" fill="#1e293b">PostgresSource 收流</text>
+      <text x="40" y="182" font-size="10" fill="#1e293b">解码为 CdcEvent</text>
+      <text x="40" y="200" font-size="10" fill="#1e293b">Insert/Update/Delete</text>
+      <text x="40" y="224" font-size="9.5" fill="#64748b">postgres_source.rs</text>
+      <text x="40" y="242" font-size="9.5" fill="#64748b">CdcEventConverter</text>
+      <text x="40" y="272" font-size="10" fill="#3b5ba9">延迟：网络+解码</text>
+
+      <rect x="190" y="120" width="150" height="180" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+      <text x="265" y="142" text-anchor="middle" font-weight="700" fill="#1e3a8a">Sink → TableEvent</text>
+      <text x="200" y="164" font-size="10" fill="#1e293b">MoonlinkSink 翻译</text>
+      <text x="200" y="182" font-size="10" fill="#1e293b">→ TableEvent::Append</text>
+      <text x="200" y="200" font-size="10" fill="#1e293b">UPDATE=Delete+Append</text>
+      <text x="200" y="224" font-size="9.5" fill="#64748b">moonlink_sink.rs</text>
+      <text x="200" y="242" font-size="9.5" fill="#64748b">mpsc 队列(32768)→actor</text>
+      <text x="200" y="272" font-size="10" fill="#3b5ba9">同时 push 进 WAL 缓冲</text>
+
+      <rect x="350" y="120" width="150" height="180" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+      <text x="425" y="142" text-anchor="middle" font-weight="700" fill="#14532d">写 MemSlice</text>
+      <text x="360" y="164" font-size="10" fill="#1e293b">行 → Arrow 列缓冲</text>
+      <text x="360" y="182" font-size="10" fill="#1e293b">满 4096 行成一批</text>
+      <text x="360" y="200" font-size="10" fill="#1e293b">主键 → MemIndex</text>
+      <text x="360" y="224" font-size="9.5" fill="#64748b">mem_slice.rs</text>
+      <text x="360" y="242" font-size="9.5" fill="#64748b">data_batches.rs</text>
+      <text x="360" y="272" font-size="10" fill="#166534">union read 已可见</text>
+
+      <rect x="510" y="120" width="150" height="180" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+      <text x="585" y="142" text-anchor="middle" font-weight="700" fill="#14532d">Commit(lsn)</text>
+      <text x="520" y="164" font-size="10" fill="#1e293b">推进 commit point</text>
+      <text x="520" y="182" font-size="10" fill="#1e293b">删除记录 committed</text>
+      <text x="520" y="200" font-size="10" fill="#1e293b">LsnState watch 通知</text>
+      <text x="520" y="224" font-size="9.5" fill="#64748b">mooncake_table.rs</text>
+      <text x="520" y="242" font-size="9.5" fill="#64748b">lsn_state.rs</text>
+      <text x="520" y="272" font-size="10" fill="#166534">边界 = PG commit LSN</text>
+
+      <rect x="670" y="120" width="150" height="180" rx="10" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="745" y="142" text-anchor="middle" font-weight="700" fill="#7c2d12">flush 后台任务</text>
+      <text x="680" y="164" font-size="10" fill="#1e293b">≥131072 行触发</text>
+      <text x="680" y="182" font-size="10" fill="#1e293b">MemSlice → Parquet 文件</text>
+      <text x="680" y="200" font-size="10" fill="#1e293b">MemIndex→GlobalIndex</text>
+      <text x="680" y="224" font-size="9.5" fill="#64748b">disk_slice.rs / DiskSliceWriter</text>
+      <text x="680" y="242" font-size="9.5" fill="#64748b">FlushResult 事件回投</text>
+      <text x="680" y="272" font-size="10" fill="#9a3412">不阻塞写入线程</text>
+
+      <rect x="830" y="120" width="150" height="180" rx="10" fill="#f3e8ff" stroke="#7c3aed"/>
+      <text x="905" y="142" text-anchor="middle" font-weight="700" fill="#4c1d95">Iceberg 快照</text>
+      <text x="840" y="164" font-size="10" fill="#1e293b">mooncake 快照攒批</text>
+      <text x="840" y="182" font-size="10" fill="#1e293b">上传 parquet+puffin</text>
+      <text x="840" y="200" font-size="10" fill="#1e293b">fast_append 提交</text>
+      <text x="840" y="224" font-size="9.5" fill="#64748b">iceberg_table_syncer.rs</text>
+      <text x="840" y="242" font-size="9.5" fill="#64748b">summary 记 flush LSN</text>
+      <text x="840" y="272" font-size="10" fill="#6d28d9">此后外部引擎可见</text>
+
+      <rect x="990" y="120" width="150" height="180" rx="10" fill="#ccfbf1" stroke="#0d9488"/>
+      <text x="1065" y="142" text-anchor="middle" font-weight="700" fill="#115e59">查询合并读</text>
+      <text x="1000" y="164" font-size="10" fill="#1e293b">直读对象存储文件</text>
+      <text x="1000" y="182" font-size="10" fill="#1e293b">文件 + puffin 位图过滤</text>
+      <text x="1000" y="200" font-size="10" fill="#1e293b">未 flush 行=临时文件</text>
+      <text x="1000" y="224" font-size="9.5" fill="#64748b">union_read/（CH07）</text>
+      <text x="1000" y="242" font-size="9.5" fill="#64748b">read_state_manager.rs</text>
+      <text x="1000" y="272" font-size="10" fill="#0f766e">端到端：毫秒～秒级</text>
+    </g>
+    <g font-size="12.5" fill="#475569">
+      <text x="40" y="348">关键点 1：③④ 之前数据「只活在内存 + WAL 缓冲」，查询已经能看到（union read 的内存部分），这就是「实时」的来源。</text>
+      <text x="40" y="374">关键点 2：⑤⑥ 是异步的、可失败的 —— 失败后从 WAL 重放（CH05），所以写路径从不等待对象存储。</text>
+      <text x="40" y="400">关键点 3：每一步都由 TableEvent 事件驱动，事件循环是每表单线程 actor（CH09），天然免锁、天然有序。</text>
+    </g>
+    <g font-size="12">
+      <rect x="40" y="430" width="520" height="100" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+      <text x="60" y="456" font-weight="700" fill="#334155">删除/更新怎么办？（对照 CH04）</text>
+      <text x="60" y="480" font-size="12">DELETE：按主键查双层索引定位 → (batch_id, row_offset) → 打上删除位图/删除日志</text>
+      <text x="60" y="504" font-size="12">UPDATE：= DELETE + INSERT（在 sink 层展开），旧位置打标，新值走 INSERT 旅程</text>
+      <rect x="600" y="430" width="520" height="100" rx="10" fill="#f8fafc" stroke="#cbd5e1"/>
+      <text x="620" y="456" font-weight="700" fill="#334155">文件什么时候变「大」？（对照 CH06）</text>
+      <text x="620" y="480" font-size="12">flush 出的文件 ≤128MiB；后台 compaction 挑「小文件/高删除率」的 16–32 个</text>
+      <text x="620" y="504" font-size="12">重写成 ≈512MiB 大文件，并把受影响的索引一并合并（index merge）</text>
+    </g>
+  </svg>
+</div>
+
+<h2>1.4 技术栈与关键依赖</h2>
+<table>
+  <thead><tr><th>层次</th><th>选型</th><th>为什么</th></tr></thead>
+  <tbody>
+    <tr><td>运行时</td><td>Tokio 1.48（多线程调度）</td><td>每表 actor + 后台任务全异步；跨线程只靠 mpsc/watch 通道</td></tr>
+    <tr><td>列式内存</td><td>Apache Arrow v56</td><td>MemSlice 直接攒 RecordBatch，落盘零转换；查询侧（DataFusion/DuckDB）同构</td></tr>
+    <tr><td>文件格式</td><td>Parquet（AsyncArrowWriter）</td><td>flush 直接产出列存文件，谓词/统计下推友好</td></tr>
+    <tr><td>表格式</td><td>Apache Iceberg v3（fork iceberg-rust @4a6ea15a）</td><td>需要 v3 deletion vector 支持，上游尚未合入，故锁 rev</td></tr>
+    <tr><td>删除位图</td><td>roaring 0.11（RoaringTreemap）</td><td>DV 的标准序列化格式，稀疏/稠密自适应</td></tr>
+    <tr><td>查询引擎</td><td>DataFusion v50（可选嵌入）</td><td>moonlink_datafusion 提供 TableProvider + REPL</td></tr>
+    <tr><td>CDC</td><td>Mooncake fork rust-postgres（pgoutput）</td><td>逻辑复制协议 + 流式大事务（STREAM_*）支持</td></tr>
+    <tr><td>存储抽象</td><td>opendal 0.54（fs/s3/gcs + throttle 层）</td><td>一套 FileSystemAccessor 抽象跑遍本地/S3/GCS</td></tr>
+    <tr><td>服务</td><td>axum 0.8（REST）+ 自研 bincode RPC</td><td>REST 管数据、RPC 管查询；协议见 moonlink_rpc 的 rpcs! 宏</td></tr>
+    <tr><td>缓存/索引</td><td>moka 0.12（元数据缓存）· fastbloom（布隆）· hashbrown HashTable</td><td>索引哈希表自研以控制内存布局</td></tr>
+  </tbody>
+</table>
+
+<h2>1.5 核心设计原则（读源码前先记住）</h2>
+<div class="callout good"><b>原则一：单写者 + 单线程事件循环。</b>每张表一个 TableHandler actor 串行处理所有事件（写入/flush/快照/compaction 结果），重活 spawn 给后台任务再以事件形式回投。因此表内状态（Snapshot/MemSlice）几乎无锁。</div>
+<div class="callout good"><b>原则二：一切靠 LSN 排序。</b>commit LSN / flush LSN / iceberg snapshot LSN / replication LSN 构成一条单调时间线，写入可见性、恢复点、读一致性全部由「LSN 大小关系」推导（CH09）。</div>
+<div class="callout good"><b>原则三：Iceberg 是唯一持久真相，WAL 是崩溃恢复补丁。</b>已提交到 Iceberg 的数据永不丢；Iceberg 提交点之后、WAL 持久点之前的数据靠 WAL 重放补齐。</div>
+<div class="callout warn"><b>原则四：删除永不改写数据文件。</b>所有删除都是「位图/日志」，读时过滤；数据文件只在 compaction 时才被重写——这是写放大与读放大之间的取舍，参数全部可配（CH06）。</div>
+
+<div class="footer">
+  <a href="index.html">← 总导航</a>
+  <a href="02-ingestion.html">下一章：02 数据摄入 →</a>
+</div>
+</div>
+</body>
+</html>

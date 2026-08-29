@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>06 · 生命周期钩子与 Tracing — Apache Burr 源码剖析</title>
+<style>
+:root{
+  --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --line:#e2e8f0;
+  --blue:#2563eb; --blue-bg:#eff6ff; --green:#16a34a; --green-bg:#f0fdf4;
+  --amber:#d97706; --amber-bg:#fffbeb; --purple:#9333ea; --purple-bg:#faf5ff;
+  --red:#dc2626; --red-bg:#fef2f2; --code-bg:#0f172a;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.75}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.94);backdrop-filter:blur(6px);color:#e2e8f0;display:flex;gap:12px;align-items:center;padding:10px 24px;font-size:13px;flex-wrap:wrap}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:3px 8px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav .brand{font-weight:700;color:#fff;font-size:14px;letter-spacing:.5px;margin-right:8px}
+.topnav .brand span{color:#60a5fa}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+.hero{background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:40px 0;margin-bottom:28px}
+.hero h1{margin:0 0 8px;font-size:28px}
+.hero p{margin:0;color:#cbd5e1;font-size:14.5px;max-width:880px}
+main{padding-bottom:64px}
+h2{font-size:23px;border-left:5px solid var(--blue);padding-left:12px;margin:42px 0 10px}
+h3{font-size:18px;margin:26px 0 6px;color:#1d4ed8}
+h4{font-size:15.5px;margin:18px 0 6px}
+p,li{color:#334155;font-size:14.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:16px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.grid{display:grid;gap:16px}
+.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:860px){.grid.c2,.grid.c3{grid-template-columns:1fr}}
+figure{margin:20px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;overflow-x:auto}
+figcaption{font-size:13px;color:var(--muted);text-align:center;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+figcaption b{color:#1d4ed8}
+pre{background:var(--code-bg);color:#e2e8f0;padding:16px 18px;border-radius:10px;overflow-x:auto;font-size:12.8px;line-height:1.65}
+code{font-family:"SF Mono",Menlo,Consolas,"Courier New",monospace}
+p code,li code,td code,h3 code,h4 code,figcaption code{background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:5px;font-size:.9em}
+pre code{background:none;color:inherit;padding:0}
+.c-key{color:#7dd3fc}.c-str{color:#fbbf24}.c-com{color:#94a3b8;font-style:italic}.c-fn{color:#a5b4fc}.c-num{color:#f472b6}.c-dec{color:#fde047}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:#fff}
+th{background:#1e293b;color:#fff;text-align:left;padding:8px 12px;font-weight:600}
+td{border:1px solid var(--line);padding:7px 12px;vertical-align:top}
+tr:nth-child(even) td{background:#f8fafc}
+.path{font-family:monospace;background:#f1f5f9;border:1px solid var(--line);padding:1px 7px;border-radius:5px;font-size:12.5px;color:#0f766e;word-break:break-all}
+.note{border-left:4px solid var(--amber);background:var(--amber-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.note b{color:#92400e}
+.tip{border-left:4px solid var(--green);background:var(--green-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.tip b{color:#166534}
+.warn{border-left:4px solid var(--red);background:var(--red-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.pager{display:flex;justify-content:space-between;margin:40px 0 8px}
+.pager a{background:#fff;border:1px solid var(--line);padding:10px 18px;border-radius:10px;text-decoration:none;color:var(--ink);font-size:14px}
+.pager a:hover{border-color:var(--blue);color:var(--blue)}
+footer.foot{text-align:center;color:#94a3b8;font-size:12.5px;padding:24px 0 40px}
+svg text{font-family:inherit}
+svg .t{fill:#1e293b;font-size:13px}
+svg .tb{fill:#fff;font-weight:700;font-size:13px}
+svg .ts{fill:#475569;font-size:11px}
+svg .tt{fill:#0f172a;font-weight:700;font-size:15px}
+svg .tc{fill:#64748b;font-size:11px;font-family:Menlo,monospace}
+svg .lbl{fill:#334155;font-size:11.5px}
+svg .ar{stroke:#64748b;stroke-width:1.5;fill:none}
+svg .ar-b{stroke:#2563eb;stroke-width:1.8;fill:none}
+svg .ar-dash{stroke:#94a3b8;stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+svg .zone{fill:#f8fafc;stroke:#cbd5e1;stroke-dasharray:6 4}
+svg .bx{stroke-width:1.5}
+svg .b-blue{fill:#eff6ff;stroke:#3b82f6}
+svg .b-blue-d{fill:#dbeafe;stroke:#2563eb}
+svg .b-green{fill:#f0fdf4;stroke:#22c55e}
+svg .b-green-d{fill:#dcfce7;stroke:#16a34a}
+svg .b-amber{fill:#fffbeb;stroke:#f59e0b}
+svg .b-purple{fill:#faf5ff;stroke:#a855f7}
+svg .b-red{fill:#fef2f2;stroke:#ef4444}
+svg .b-slate{fill:#f1f5f9;stroke:#94a3b8}
+svg .b-dark{fill:#1e293b;stroke:#0f172a}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">Apache&nbsp;Burr<span>·源码深度剖析</span></span>
+  <a href="index.html">总导航</a><a href="01-overview.html">项目全景</a>
+  <a href="02-core-state.html">State</a><a href="03-core-action.html">Action</a>
+  <a href="04-core-application.html">运行时</a><a href="05-graph-builder.html">Graph/Builder</a>
+  <a href="06-lifecycle-hooks.html"><b>Hooks/Tracing</b></a><a href="07-persistence.html">持久化</a>
+  <a href="08-parallelism.html">并行</a><a href="09-tracking.html">追踪系统</a>
+  <a href="10-ui-frontend.html">遥测 UI</a><a href="11-integrations.html">集成生态</a>
+  <a href="12-execution-flow.html">端到端全景</a>
+</nav>
+
+<header class="hero"><div class="wrap">
+  <h1>06 · 生命周期钩子与 Tracing：一个扩展点统治观测</h1>
+  <p>源码：<span class="path">burr/lifecycle/base.py</span>（518 行）+ <span class="path">internal.py</span>（214 行）+ <span class="path">default.py</span> + <span class="path">burr/visibility/tracing.py</span>（490 行）。追踪、持久化、并行级联全部构建在这套钩子协议上。</p>
+</div></header>
+
+<main class="wrap">
+
+<h2>6.1 Hook 协议：11 个事件 × 同步/异步双版本</h2>
+<div class="card">
+<p>每个钩子是一个 <b>ABC</b>，用 <code>@lifecycle.base_hook("&lt;事件名&gt;")</code> 装饰注册（<span class="path">internal.py:80</span>）。装饰器同时做签名校验 <code>validate_hook_fn</code>（<span class="path">internal.py:42</span>）：钩子方法必须 <b>kwarg-only</b> 且带 <code>**future_kwargs</code>——这保证了协议可以向前演进而不破坏旧钩子。</p>
+<table>
+<tr><th>阶段</th><th>钩子（Sync/Async 成对）</th><th>触发时机</th></tr>
+<tr><td rowspan="2">应用级</td><td><code>PostApplicationCreateHook</code></td><td>Application 构造完成（写 graph.json/metadata）</td></tr>
+<tr><td><code>Pre/PostApplicationExecuteCallHook</code></td><td>每个公共入口（run/step/...）前后，恰好一次</td></tr>
+<tr><td rowspan="2">步骤级</td><td><code>PreRunStepHook / PostRunStepHook</code></td><td>每步前后；post 带 <code>exception</code>、<code>result</code>、新 state</td></tr>
+<tr><td><code>DoLogAttributeHook</code></td><td>action 内 <code>tracer.log_attributes(...)</code> 时</td></tr>
+<tr><td rowspan="3">Span 级</td><td><code>PreStartSpanHook / PostEndSpanHook</code></td><td>子 span 开/关（LLM 调用等细粒度）</td></tr>
+<tr><td colspan="2" style="color:var(--muted)">（span 由 TracerFactory 经 contextvar 触达，见 6.4）</td></tr>
+</table>
+<p style="font-size:13.5px;color:var(--muted)">另有流式三件套：<code>PreStartStreamHook / PostStreamItemHook / PostEndStreamHook</code>（<span class="path">base.py:382-462</span>）。全部定义见 lifecycle/base.py，<code>LifecycleAdapter</code> 是这 11 个类的 Union 别名（:497）。</p>
+</div>
+
+<h2>6.2 全周期触发点全景</h2>
+<figure>
+<svg viewBox="0 0 1060 400" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<line x1="60" y1="60" x2="1020" y2="60" style="stroke:#2563eb" style="stroke-width:3" marker-end="url(#arr)"/>
+<text class="tt" x="60" y="40">Application 生命周期 →</text>
+<circle cx="120" cy="60" r="8" style="fill:#1d4ed8"/><text class="tc" x="70" y="90">build 完成</text><text class="tc" x="52" y="106">post_application_create</text>
+<circle cx="250" cy="60" r="8" style="fill:#0ea5e9"/><text class="tc" x="196" y="90">run() 进入</text><text class="tc" x="190" y="106">pre_run_execute_call</text>
+<circle cx="375" cy="60" r="8" style="fill:#16a34a"/><text class="tc" x="330" y="90">步骤 N 开始</text><text class="tc" x="320" y="106">pre_run_step</text>
+<circle cx="490" cy="60" r="8" style="fill:#a855f7"/><text class="tc" x="452" y="90">action 内部</text><text class="tc" x="418" y="106">pre_start_span / do_log_attributes</text>
+<circle cx="490" cy="140" r="8" style="fill:#a855f7"/><text class="tc" x="420" y="166">（LLM 子调用等）</text><text class="tc" x="430" y="182">post_end_span</text>
+<line x1="470" y1="72" x2="470" y2="132" style="stroke:#a855f7" style="stroke-dasharray:4 3"/>
+<circle cx="620" cy="60" r="8" style="fill:#dc2626"/><text class="tc" x="580" y="90">步骤 N 结束</text><text class="tc" x="566" y="106">post_run_step（finally，含异常）</text>
+<circle cx="760" cy="60" r="8" style="fill:#16a34a"/><text class="tc" x="716" y="90">流式时</text><text class="tc" x="702" y="106">pre_start_stream / post_stream_item</text>
+<circle cx="760" cy="140" r="8" style="fill:#dc2626"/><text class="tc" x="716" y="166">容器 finally 兜底</text><text class="tc" x="722" y="182">post_end_stream</text>
+<line x1="740" y1="72" x2="740" y2="132" style="stroke:#a855f7" style="stroke-dasharray:4 3"/>
+<circle cx="920" cy="60" r="8" style="fill:#0ea5e9"/><text class="tc" x="880" y="90">run() 退出</text><text class="tc" x="866" y="106">post_run_execute_call</text>
+<rect class="bx b-green" x="60" y="230" width="460" height="130" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="80" y="256" font-weight="700">内置示例（lifecycle/default.py）</text>
+<text class="tc" x="80" y="282">StateAndResultsFullLogger —— post_run_step 把</text>
+<text class="tc" x="80" y="300">state+result+耗时写成 JSONL（调试利器）</text>
+<text class="tc" x="80" y="326">SlowDownHook —— pre_run_step 里 time.sleep，</text>
+<text class="tc" x="80" y="344">人肉演示时逐步慢放</text>
+<rect class="bx b-purple" x="560" y="230" width="470" height="130" rx="10" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="t" x="580" y="256" font-weight="700">谁是钩子的用户？</text>
+<text class="tc" x="580" y="282">LocalTrackingClient（09 篇）· PersisterHook（07 篇）</text>
+<text class="tc" x="580" y="302">TracerFactoryContextHook（04 篇）· OpenTelemetryBridge（11 篇）</text>
+<text class="tc" x="580" y="322">并行级联 _cascade_adapter（08 篇）· 你自己的任意观测代码</text>
+</svg>
+<figcaption><b>图 6-1 · 钩子触发点时间轴</b> —— 红点钩子在 finally 中触发（异常也保证）；execute-call 钩子经 contextvar 哨兵去重；流式钩子由容器 finally 兜底保证恰好一次。</figcaption>
+</figure>
+
+<h2>6.3 LifecycleAdapterSet：MRO 爬取式派发</h2>
+<div class="grid c2">
+<div class="card">
+<h3>注册：爬 MRO 而非显式声明</h3>
+<p>适配器加入集合时，<code>LifecycleAdapterSet</code>（<span class="path">internal.py:109</span>）遍历它的 <b>MRO</b>（:132-150），发现它实现了哪些钩子 ABC，就把它登记进对应事件的桶：</p>
+<pre><code><span class="c-com"># 伪代码（internal.py:132-150）</span>
+<span class="c-key">for</span> klass <span class="c-key">in</span> type(adapter).__mro__:
+    <span class="c-key">if</span> hasattr(klass, <span class="c-str">"hooks"</span>):      <span class="c-com"># 装饰器打的标签</span>
+        event = klass.hooks
+        <span class="c-key">if</span> issubclass(适配器, AsyncXxx):
+            async_buckets[event].append(...)
+        <span class="c-key">else</span>:
+            sync_buckets[event].append(...)</code></pre>
+<p>效果：<b>实现即注册</b>。你写一个只实现 <code>PostRunStepHook</code> 的类，传给 <code>with_hooks()</code> 就自动只收步骤结束事件。</p>
+</div>
+<div class="card">
+<h3>派发：三个入口</h3>
+<ul>
+<li><code>call_all_lifecycle_hooks_sync(event, **kw)</code>（:174）—— 同步引擎用；</li>
+<li><code>..._async</code>（:185）—— <code>asyncio.gather</code> 并发跑全部 async 钩子；</li>
+<li><code>..._sync_and_async</code>（:200）—— 同步+异步钩子都要发时（如 astep 遇混合适配器）。</li>
+</ul>
+<div class="note"><b>为什么 async 用 gather？</b>钩子之间无序（观测不该有顺序依赖），并发派发让慢的追踪器不拖慢执行关键路径。钩子抛异常会向上传播——追踪器自身应当吞掉并记录自己的错误。</div>
+</div>
+</div>
+
+<h2>6.4 visibility/tracing：进程内的 span 树</h2>
+<div class="card">
+<p>钩子解决「步骤级」观测；<b>span</b> 解决「动作内部」观测（LLM 调用、检索、工具执行…）。实现三件套（<span class="path">visibility/tracing.py</span>）：</p>
+<table>
+<tr><th>类</th><th>职责</th><th>源码</th></tr>
+<tr><td><code>ActionSpan</code></td><td>一个 span：唯一 id（<code>create_span_id</code> 时间戳+熵）、begin/end 时间、属性字典、子 span 列表</td><td><span class="path">:34</span></td></tr>
+<tr><td><code>ActionSpanTracer</code></td><td>上下文管理器工厂：<code>with tracer("openai", span_type="llm"):</code> 开子 span；结束时自动回填</td><td><span class="path">:98</span></td></tr>
+<tr><td><code>TracerFactory</code></td><td>每步一个，生产 ActionSpanTracer；持有 lifecycle_adapters 以便把 span 事件发给钩子</td><td><span class="path">:283</span></td></tr>
+</table>
+<p>传递链路：<code>TracerFactoryContextHook</code>（04 篇）在 pre_run_step 把工厂放进 <code>contextvar</code> → 业务代码任意深度 <code>trace(...)</code> 或声明 <code>__tracer</code> 参数拿到工厂 → 开子 span → post_run_step 复位。span 数据最终经钩子流入 LocalTrackingClient 的 <code>pre_start_span/post_end_span/do_log_attributes</code>，写进 log.jsonl。</p>
+</div>
+<figure>
+<svg viewBox="0 0 1060 420" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#64748b"/></marker></defs>
+<text class="tt" x="40" y="40">一个应用步骤的 span 树（与 UI 时间线视图同构）</text>
+<rect class="bx b-blue-d" x="60" y="70" width="900" height="46" rx="8" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="80" y="98" font-weight="700">step span · action=answer_question · sequence_id=7（begin_entry … end_entry 之间的所有事件都挂在它下面）</text>
+<rect class="bx b-purple" x="100" y="132" width="360" height="44" rx="8" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="tc" x="116" y="158">span: openai.chat（span_type="llm"）</text>
+<rect class="bx b-purple" x="140" y="190" width="280" height="40" rx="8" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="tc" x="156" y="214">span: prompt_render</text>
+<rect class="bx b-purple" x="490" y="132" width="300" height="44" rx="8" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="tc" x="506" y="158">span: retrieve（向量检索）</text>
+<rect class="bx b-amber" x="100" y="246" width="720" height="40" rx="8" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="tc" x="116" y="270">attributes: model="gpt-4o" · latency_ms=812 · prompt_tokens=1320 · completion_tokens=96（do_log_attributes 事件）</text>
+<rect class="bx b-green" x="60" y="310" width="900" height="70" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="80" y="336" font-weight="700">落盘形态：log.jsonl 里是一串扁平事件（09 篇）</text>
+<text class="tc" x="80" y="360">begin_entry → begin_span(root) → begin_span(openai.chat) → attribute → end_span → … → end_entry</text>
+<text class="ts" x="80" y="376">服务端/前端读取时按 span_id + parent_id 重建成树 —— 存储扁平、展示成树，这是典型的「事件溯源」设计</text>
+</svg>
+<figcaption><b>图 6-2 · span 树与落盘形态</b> —— 执行期是内存树（ActionSpan.children），存储期是扁平事件流，读取期按 id 重建树。UI 的步骤详情/Insights 视图直接消费这棵树。</figcaption>
+</figure>
+
+<h2>6.5 写一个自己的钩子</h2>
+<div class="card">
+<pre><code><span class="c-key">from</span> burr.lifecycle <span class="c-key">import</span> PostRunStepHook, LifecycleAdapter
+
+<span class="c-key">class</span> <span class="c-fn">MetricsHook</span>(PostRunStepHook):
+    <span class="c-str">"""每个动作结束后打点 —— 实现即注册"""</span>
+    <span class="c-key">def</span> <span class="c-fn">post_run_step</span>(self, *, app_id, partition_key, action,
+                      state, result, sequence_id, exception, **future_kwargs):
+        status = <span class="c-str">"failed"</span> <span class="c-key">if</span> exception <span class="c-key">else</span> <span class="c-str">"completed"</span>
+        statsd.increment(<span class="c-str">"burr.step"</span>, tags=[<span class="c-str">f"action:{action.name}"</span>, status])
+
+app = (ApplicationBuilder()
+    ...
+    .with_hooks(MetricsHook())      <span class="c-com"># 可叠加任意多个钩子</span>
+    .build())</code></pre>
+<div class="warn"><b>签名纪律：</b>钩子方法必须全部 kwarg-only 并以 <code>**future_kwargs</code> 结尾——<code>validate_hook_fn</code> 会在注册时强制检查（internal.py:42-64），否则直接报错。这是框架「协议可演进」的代价与保障。</div>
+</div>
+
+<div class="tip"><b>本篇要点：</b>① 11 个钩子事件覆盖 应用/入口/步骤/span/属性/流式 六个层级，sync/async 成对；② 实现即注册（MRO 爬取），派发支持 gather 并发；③ execute-call 与流式的结束钩子都有「恰好一次」的兜底机制；④ span 树是步骤内的细粒度观测，经 contextvar 触达业务代码，最终以扁平事件流落盘。</div>
+
+<div class="pager"><a href="05-graph-builder.html">← 05 Graph/Builder</a><a href="07-persistence.html">下一篇：07 持久化 →</a></div>
+</main>
+<footer class="foot">Apache Burr 源码学习笔记 · 06 Hooks 与 Tracing · 基于 v0.42.0</footer>
+</body>
+</html>

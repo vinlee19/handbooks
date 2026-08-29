@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>07 · 查询路径 — Moonlink 源码深度解析</title>
+<style>
+:root{
+  --blue:#2563eb;--green:#16a34a;--orange:#ea580c;--purple:#7c3aed;--gray:#64748b;--red:#dc2626;
+  --ink:#1e293b;--muted:#64748b;--bg:#f6f8fa;--card:#fff;--line:#e2e8f0;--code-bg:#0d1117;--code-ink:#e6edf3;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.8}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.97);display:flex;flex-wrap:wrap;gap:2px;padding:8px 16px;font-size:13px}
+.topnav .brand{color:#fbbf24;font-weight:700;margin-right:10px;padding:4px 6px}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:4px 10px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav a.active{background:var(--blue);color:#fff}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 20px 80px}
+.page-head{background:linear-gradient(135deg,#0f172a,#134e4a);border-radius:14px;color:#f1f5f9;padding:30px 34px;margin-bottom:26px}
+.page-head h1{font-size:28px;margin-bottom:6px}
+.page-head p{color:#cbd5e1;font-size:14.5px}
+h2{font-size:23px;margin:40px 0 12px;padding-left:12px;border-left:5px solid var(--blue)}
+h3{font-size:18px;margin:24px 0 8px;color:#0f172a}
+p{margin:10px 0;color:#334155}
+.lead{font-size:15.5px;color:#475569}
+.figure{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin:20px 0}
+.fig-title{font-weight:700;font-size:14.5px;color:#0f172a;margin-bottom:4px}
+.fig-title .fno{color:var(--blue)}
+.fig-desc{font-size:13px;color:var(--muted);margin-bottom:10px}
+svg{width:100%;height:auto;display:block}
+code{background:#eef2f7;border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:.88em;color:#be185d}
+pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:16px 18px;overflow-x:auto;font-size:13px;line-height:1.6;margin:14px 0}
+pre code{background:none;border:none;color:inherit;padding:0}
+.k{color:#ff7b72}.t{color:#79c0ff}.s{color:#a5d6ff}.c{color:#8b949e;font-style:italic}.n{color:#ffa657}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px;background:var(--card)}
+th{background:#f1f5f9;text-align:left}
+th,td{border:1px solid var(--line);padding:8px 12px;vertical-align:top}
+tbody tr:nth-child(even){background:#fafbfc}
+.callout{border-left:4px solid var(--blue);background:#eff6ff;border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0;font-size:14px}
+.callout.warn{border-color:var(--orange);background:#fff7ed}
+.callout.good{border-color:var(--green);background:#f0fdf4}
+.callout b{color:#0f172a}
+.footer{display:flex;justify-content:space-between;margin-top:60px;padding-top:18px;border-top:1px solid var(--line);font-size:14px}
+.footer a{color:var(--blue);text-decoration:none;font-weight:600}
+ul,ol{margin:8px 0 8px 24px}
+li{margin:4px 0}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">🥮 Moonlink 源码解析</span>
+  <a href="index.html">总导航</a>
+  <a href="01-overview.html">01 总体架构</a>
+  <a href="02-ingestion.html">02 数据摄入</a>
+  <a href="03-core-engine.html">03 存储引擎</a>
+  <a href="04-index-dv.html">04 索引与 DV</a>
+  <a href="05-wal-recovery.html">05 WAL 与恢复</a>
+  <a href="06-iceberg.html">06 Iceberg 集成</a>
+  <a class="active" href="07-query.html">07 查询路径</a>
+  <a href="08-control-plane.html">08 控制面</a>
+  <a href="09-concurrency-lsn.html">09 并发模型</a>
+</nav>
+
+<div class="wrap">
+<div class="page-head">
+  <h1>Chapter 07 · 查询路径：union read 与三个引擎生态</h1>
+  <p>查询的本质是一道集合运算：磁盘文件 ∪ 内存数据 − 删除。moonlink 的聪明之处在于把「内存数据」现场物化成临时 Parquet，于是所有引擎看到的都是「纯 Parquet + 位图」这一种形态。</p>
+</div>
+
+<h2>7.1 union read：一道集合运算</h2>
+<p class="lead">SnapshotTableState::request_read()（mooncake_table/snapshot_read.rs）在一次调用里完成合并视图的构造：</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 7-1</span> · union read 概念：三种数据来源合并成一个读视图</div>
+  <svg viewBox="0 0 1160 520" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="g11" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0d9488"/></marker>
+    </defs>
+    <!-- sources -->
+    <g font-size="12">
+      <rect x="30" y="60" width="300" height="140" rx="10" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="180" y="86" text-anchor="middle" font-weight="700" fill="#7c2d12">来源 A · 磁盘 data files</text>
+      <text x="180" y="112" text-anchor="middle" font-size="11" fill="#9a3412">已 flush 的 Parquet（缓存命中直读本地）</text>
+      <text x="180" y="134" text-anchor="middle" font-size="11" fill="#9a3412">每个文件挂 DV：puffin blob（已持久化）</text>
+      <text x="180" y="156" text-anchor="middle" font-size="11" fill="#9a3412">+ committed_deletion_vector（未持久化）</text>
+      <text x="180" y="182" text-anchor="middle" font-size="10.5" fill="#b45309">remote 路径经 read_state_filepath_remap</text>
+
+      <rect x="30" y="230" width="300" height="140" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+      <text x="180" y="256" text-anchor="middle" font-weight="700" fill="#14532d">来源 B · 内存批（commit 后未 flush）</text>
+      <text x="180" y="282" text-anchor="middle" font-size="11" fill="#166534">现场物化：inmemory_{table}_{id}_{version}.parquet</text>
+      <text x="180" y="304" text-anchor="middle" font-size="11" fill="#166534">写到 /tmp/moonlink_temp_file（uncompressed）</text>
+      <text x="180" y="326" text-anchor="middle" font-size="11" fill="#166534">作为 TemporaryDataFile 参与读</text>
+      <text x="180" y="352" text-anchor="middle" font-size="10.5" fill="#15803d">代价：物化一次；收益：所有引擎同构读</text>
+
+      <rect x="30" y="400" width="300" height="100" rx="10" fill="#fee2e2" stroke="#dc2626"/>
+      <text x="180" y="426" text-anchor="middle" font-weight="700" fill="#7f1d1d">来源 C · 删除</text>
+      <text x="180" y="450" text-anchor="middle" font-size="11" fill="#b91c1c">position_deletes（committed 未持久化部分）</text>
+      <text x="180" y="472" text-anchor="middle" font-size="11" fill="#b91c1c">+ 各文件的 DV 位图</text>
+    </g>
+    <!-- merge -->
+    <rect x="430" y="150" width="280" height="220" rx="14" fill="#ccfbf1" stroke="#0d9488" stroke-width="2"/>
+    <text x="570" y="182" text-anchor="middle" font-weight="700" fill="#115e59" font-size="14">union read 视图</text>
+    <g font-family="Menlo,monospace" font-size="12" fill="#0f766e">
+      <text x="570" y="216" text-anchor="middle">MooncakeTableMetadata{</text>
+      <text x="570" y="240" text-anchor="middle">　data_files: A + B,</text>
+      <text x="570" y="264" text-anchor="middle">　puffin_files, deletion_vectors,</text>
+      <text x="570" y="288" text-anchor="middle">　position_deletes: C</text>
+      <text x="570" y="312" text-anchor="middle">}</text>
+    </g>
+    <text x="570" y="344" text-anchor="middle" font-size="10.5" fill="#15803d">bincode 序列化 → ReadState.data（图 7-3）</text>
+    <line x1="330" y1="130" x2="430" y2="200" stroke="#ea580c" stroke-width="1.8" marker-end="url(#g11)"/>
+    <line x1="330" y1="300" x2="430" y2="270" stroke="#16a34a" stroke-width="1.8" marker-end="url(#g11)"/>
+    <line x1="330" y1="450" x2="430" y2="330" stroke="#dc2626" stroke-width="1.8" marker-end="url(#g11)"/>
+    <!-- consumers -->
+    <rect x="790" y="90" width="340" height="120" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+    <text x="960" y="118" text-anchor="middle" font-weight="700" fill="#1e3a8a">moonlink_datafusion / pg_mooncake / duckdb</text>
+    <text x="960" y="144" text-anchor="middle" font-size="11.5" fill="#3b5ba9">RPC scan_table_begin 拿到 ReadState</text>
+    <text x="960" y="166" text-anchor="middle" font-size="11.5" fill="#3b5ba9">自行读 parquet + 位图过滤（图 7-4）</text>
+    <text x="960" y="192" text-anchor="middle" font-size="10.5" fill="#3b5ba9">查询结束 scan_table_end 清理临时文件</text>
+    <rect x="790" y="240" width="340" height="100" rx="10" fill="#f3e8ff" stroke="#7c3aed"/>
+    <text x="960" y="268" text-anchor="middle" font-weight="700" fill="#4c1d95">Spark / Trino（iceberg 路径）</text>
+    <text x="960" y="294" text-anchor="middle" font-size="11.5" fill="#6d28d9">不经 RPC —— 经 catalog 读 iceberg 表，</text>
+    <text x="960" y="316" text-anchor="middle" font-size="11.5" fill="#6d28d9">看到的是「已提交快照」，无内存实时部分</text>
+    <line x1="710" y1="260" x2="790" y2="150" stroke="#0d9488" stroke-width="1.8" marker-end="url(#g11)"/>
+    <line x1="710" y1="270" x2="790" y2="290" stroke="#7c3aed" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#g11)"/>
+    <text x="750" y="230" text-anchor="middle" font-size="10.5" fill="#0d9488">RPC</text>
+  </svg>
+</div>
+
+<div class="callout good"><b>为什么把内存物化成临时文件，而不是让引擎读内存？</b>① 免去跨语言/跨进程共享内存的复杂性；② 内存批生命周期短（随时 flush），物化后引用稳定；③ 引擎侧逻辑统一：只需要「parquet + 位图」一种抽象 —— pg_mooncake（C++）、duckdb 扩展、DataFusion（Rust）三种实现共享同一协议。临时文件的代价由 <code>scan_table_end</code> 时的 Drop 清理兜底。</div>
+
+<h2>7.2 可读判定：LSN 视角的读一致性</h2>
+<p class="lead">ReadStateManager::try_read(requested_lsn)（union_read/read_state_manager.rs）是读侧的「一致点等待器」。核心判定逻辑值得逐行读：</p>
+
+<pre><code><span class="c">// read_state_manager.rs（摘录）</span>
+<span class="k">fn</span> <span class="t">can_satisfy_read_from_snapshot</span>(&amp;<span class="k">self</span>, requested_lsn, snapshot_lsn, replication_lsn, commit_lsn) -&gt; <span class="t">bool</span> {
+    <span class="c">// 读侧不变式断言：iceberg snapshot LSN ≤ mooncake snapshot LSN ≤ commit LSN ≤ replication LSN</span>
+    <span class="k">if</span> snapshot_lsn != NO_SNAPSHOT_LSN &amp;&amp; commit_lsn != NO_COMMIT_LSN {
+        <span class="t">assert_le!</span>(snapshot_lsn, commit_lsn);
+    }
+    <span class="t">assert_le!</span>(commit_lsn, replication_lsn);
+
+    <span class="k">let</span> is_snapshot_clean = <span class="t">Self</span>::snapshot_is_clean(snapshot_lsn, commit_lsn);  <span class="c">// snapshot_lsn == commit_lsn</span>
+    <span class="t">match</span> requested_lsn {
+        <span class="t">None</span> =&gt; <span class="k">true</span>,                            <span class="c">// 读最新：总是可读</span>
+        <span class="t">Some</span>(req) =&gt; {
+            <span class="c">// 可读 ⇔ ① 快照已覆盖请求 LSN；或 ② 请求被复制流覆盖 且 快照干净（无未反映的提交）</span>
+            is_snapshot_initialized &amp;&amp; req &lt;= snapshot_lsn
+                || (req &lt;= replication_lsn &amp;&amp; is_snapshot_clean)
+        }
+    }
+}</code></pre>
+<p>条件②是点睛之笔：快照「干净」（snapshot LSN == commit LSN）意味着内存里没有未纳入快照的提交，此时磁盘快照 + 复制水位就足以保证读到 <code>replication_lsn</code> 的一致状态——不必等下一个 500ms 快照。<b>缓存命中也用同一个 clean 判定</b>（should_use_cache），所以重复读同一 LSN 几乎零成本。</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 7-2</span> · scan_table_begin 端到端时序（含引用计数与清理）</div>
+  <svg viewBox="0 0 1160 500" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="g21" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#0d9488"/></marker>
+    </defs>
+    <g font-size="11.5">
+      <rect x="30" y="20" width="220" height="44" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+      <text x="140" y="47" text-anchor="middle" font-weight="700" fill="#1e3a8a">查询引擎（pg_mooncake 等）</text>
+      <line x1="140" y1="64" x2="140" y2="470" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="6 5"/>
+      <rect x="330" y="20" width="220" height="44" rx="10" fill="#ccfbf1" stroke="#0d9488"/>
+      <text x="440" y="47" text-anchor="middle" font-weight="700" fill="#115e59">moonlink RPC 服务（:3031）</text>
+      <line x1="440" y1="64" x2="440" y2="470" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="6 5"/>
+      <rect x="620" y="20" width="240" height="44" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+      <text x="740" y="47" text-anchor="middle" font-weight="700" fill="#14532d">ReadStateManager / 表 actor</text>
+      <line x1="740" y1="64" x2="740" y2="470" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="6 5"/>
+      <rect x="930" y="20" width="200" height="44" rx="10" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="1030" y="47" text-anchor="middle" font-weight="700" fill="#7c2d12">对象存储缓存</text>
+      <line x1="1030" y1="64" x2="1030" y2="470" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="6 5"/>
+
+      <line x1="140" y1="100" x2="440" y2="100" stroke="#0d9488" stroke-width="1.7" marker-end="url(#g21)"/>
+      <text x="290" y="92" text-anchor="middle" fill="#0f766e">RPC scan_table_begin(db, table, lsn)（get_table_schema 先取 Arrow IPC schema）</text>
+      <line x1="440" y1="136" x2="740" y2="136" stroke="#0d9488" stroke-width="1.7" marker-end="url(#g21)"/>
+      <text x="590" y="128" text-anchor="middle" fill="#0f766e">backend.scan_table → try_read(lsn)</text>
+      <line x1="740" y1="170" x2="740" y2="192" stroke="#16a34a" stroke-width="0"/>
+      <text x="740" y="184" text-anchor="middle" fill="#14532d">等待条件满足（watch 复制 LSN / 快照 LSN）→ request_read()</text>
+      <line x1="740" y1="216" x2="1030" y2="216" stroke="#ea580c" stroke-width="1.6" marker-end="url(#g21)"/>
+      <text x="885" y="208" text-anchor="middle" fill="#b45309">为 data files 建 NonEvictableHandle（pin，防查询中被驱逐）</text>
+      <line x1="740" y1="252" x2="440" y2="252" stroke="#0d9488" stroke-width="1.7" stroke-dasharray="5 3" marker-end="url(#g21)"/>
+      <text x="590" y="244" text-anchor="middle" fill="#0f766e">ReadState{data: bincode 元数据, associated_files}</text>
+      <text x="590" y="270" text-anchor="middle" fill="#64748b" font-size="10.5">服务端按连接持有（HashMap&lt;(db,table), state&gt;），直到 scan_table_end</text>
+      <line x1="440" y1="306" x2="140" y2="306" stroke="#0d9488" stroke-width="1.7" stroke-dasharray="5 3" marker-end="url(#g21)"/>
+      <text x="290" y="298" text-anchor="middle" fill="#0f766e">返回 Vec&lt;u8&gt;（bincode MooncakeTableMetadata）</text>
+      <text x="140" y="342" text-anchor="middle" fill="#1e3a8a" font-weight="600">引擎本地执行：读 parquet + DV 过滤（图 7-4）</text>
+      <text x="140" y="366" text-anchor="middle" font-size="10.5" fill="#3b5ba9">（数据不经过 moonlink 进程 —— 存算分离）</text>
+      <line x1="140" y1="396" x2="440" y2="396" stroke="#0d9488" stroke-width="1.7" marker-end="url(#g21)"/>
+      <text x="290" y="388" text-anchor="middle" fill="#0f766e">RPC scan_table_end（scan 结束/Drop 触发）</text>
+      <line x1="440" y1="428" x2="1030" y2="428" stroke="#ea580c" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#g21)"/>
+      <text x="735" y="420" text-anchor="middle" fill="#b45309">unpin 句柄 · 删除 union read 临时文件 · 引用计数归零可驱逐</text>
+    </g>
+  </svg>
+</div>
+
+<h2>7.3 ReadState 的跨语言二进制布局</h2>
+<p class="lead">moonlink_table_metadata/src/table_metadata.rs 手写 bincode Encode/Decode，注释明说：<b>为 C++/DuckDB 扩展的指针直读而设计</b>——文件路径集中放尾部、前面只放偏移量表（native-endian u32），decode 侧可以直接按 <code>uint32_t*</code> 解析，零拷贝。</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 7-3</span> · MooncakeTableMetadata 的 bincode 内存布局（示意）</div>
+  <svg viewBox="0 0 1160 430" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <g font-size="11" font-family="Menlo,monospace">
+      <rect x="30" y="40" width="640" height="46" fill="#dbeafe" stroke="#2563eb"/>
+      <text x="42" y="68" fill="#1e3a8a">[data_files.len][off_0][off_1]…[end_off]</text>
+      <rect x="670" y="40" width="460" height="46" fill="#ccfbf1" stroke="#0d9488"/>
+      <text x="682" y="68" fill="#115e59">[puffin_files.len][off_0]…[end_off]</text>
+      <rect x="30" y="86" width="640" height="46" fill="#fee2e2" stroke="#dc2626"/>
+      <text x="42" y="114" fill="#7f1d1d">[deletion_vectors.len][{file_no,puffin_no,offset,size}]×N</text>
+      <rect x="670" y="86" width="460" height="46" fill="#fef3c7" stroke="#ca8a04"/>
+      <text x="682" y="114" fill="#713f12">[position_deletes.len][{file_no,row_no}]×M</text>
+      <rect x="30" y="132" width="1100" height="42" fill="#f1f5f9" stroke="#94a3b8"/>
+      <text x="42" y="158" fill="#334155">[字符串区：所有 data/puffin 路径连续存放]　←　偏移量表指到这里</text>
+      <text x="30" y="204" font-family="-apple-system,sans-serif" fill="#475569" font-size="12">关键设计：</text>
+      <text x="130" y="204" font-family="-apple-system,sans-serif" fill="#475569" font-size="12">① 偏移量表集中（decode 一次连续读）② 字符串区拖尾（C++ 可 mmap 后按指针切）③ DV 按 data_file_number 有序（encode 时 assert_ge 校验）→ 读侧可二分。</text>
+      <text x="30" y="232" font-family="-apple-system,sans-serif" fill="#475569" font-size="12">DeletionVector{data_file_number, puffin_file_number, offset, size}  —— 4×u32 紧凑结构；PositionDelete{data_file_number, data_file_row_number} 2×u32。</text>
+    </g>
+    <g font-size="12" fill="#475569">
+      <rect x="30" y="260" width="1100" height="140" rx="10" fill="#f0fdf4" stroke="#16a34a"/>
+      <text x="55" y="288" font-weight="700" fill="#14532d">这条协议同时服务三类读者，却没有人「共享代码」</text>
+      <text x="55" y="316">· Rust（moonlink_datafusion）：bincode decode —— 连接池（connection_pool.rs：每 URI 上限 30、30s idle）复用 RPC 连接；</text>
+      <text x="55" y="344">· C++（pg_mooncake）：按上述布局手解 —— 该 crate 的注释就是给扩展开发者看的「协议文档」；</text>
+      <text x="55" y="372">· 任何语言：照布局实现即可 —— 对比 gRPC/protobuf 方案，省一次反序列化与一跳数据搬运。</text>
+    </g>
+  </svg>
+</div>
+
+<h2>7.4 DataFusion 执行：下推到 parquet reader</h2>
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 7-4</span> · MooncakeTableProvider（table_provider.rs）的扫描流水线</div>
+  <svg viewBox="0 0 1160 560" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="g41" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2563eb"/></marker>
+    </defs>
+    <g font-size="11.5">
+      <rect x="30" y="50" width="260" height="120" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+      <text x="160" y="76" text-anchor="middle" font-weight="700" fill="#1e3a8a">DataFusion 查询计划</text>
+      <text x="160" y="100" text-anchor="middle" font-size="11" fill="#3b5ba9">filters → create_physical_expr</text>
+      <text x="160" y="120" text-anchor="middle" font-size="11" fill="#3b5ba9">supports_filters_pushdown = Inexact</text>
+      <text x="160" y="146" text-anchor="middle" font-size="10.5" fill="#3b5ba9">catalog：mooncake.&lt;db&gt;.&lt;table&gt;</text>
+      <rect x="340" y="50" width="250" height="120" rx="10" fill="#ccfbf1" stroke="#0d9488"/>
+      <text x="465" y="76" text-anchor="middle" font-weight="700" fill="#115e59">scan_table_begin → 元数据</text>
+      <text x="465" y="100" text-anchor="middle" font-size="11" fill="#0f766e">MooncakeTableMetadata 解析</text>
+      <text x="465" y="120" text-anchor="middle" font-size="11" fill="#0f766e">每个 data file → PartitionedFile</text>
+      <text x="465" y="146" text-anchor="middle" font-size="10.5" fill="#15803d">MooncakeTableScan::Drop → scan_table_end</text>
+      <rect x="640" y="50" width="250" height="120" rx="10" fill="#fee2e2" stroke="#dc2626"/>
+      <text x="765" y="76" text-anchor="middle" font-weight="700" fill="#7f1d1d">删除 → RowSelection</text>
+      <text x="765" y="100" text-anchor="middle" font-size="11" fill="#b91c1c">puffin seek(offset+8) → RoaringTreemap</text>
+      <text x="765" y="120" text-anchor="middle" font-size="11" fill="#b91c1c">+ position_deletes 合并</text>
+      <text x="765" y="146" text-anchor="middle" font-size="10.5" fill="#b91c1c">连续区间 → skip/select（run-length）</text>
+      <rect x="930" y="50" width="200" height="120" rx="10" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="1030" y="76" text-anchor="middle" font-weight="700" fill="#7c2d12">ParquetAccessPlan</text>
+      <text x="1030" y="100" text-anchor="middle" font-size="11" fill="#9a3412">按行组注入选择器</text>
+      <text x="1030" y="120" text-anchor="middle" font-size="11" fill="#9a3412">整组已删 → 跳过整组</text>
+      <text x="1030" y="146" text-anchor="middle" font-size="10.5" fill="#b45309">+ footer 统计/谓词裁剪</text>
+      <line x1="290" y1="110" x2="340" y2="110" stroke="#2563eb" stroke-width="1.7" marker-end="url(#g41)"/>
+      <line x1="590" y1="110" x2="640" y2="110" stroke="#2563eb" stroke-width="1.7" marker-end="url(#g41)"/>
+      <line x1="890" y1="110" x2="930" y2="110" stroke="#2563eb" stroke-width="1.7" marker-end="url(#g41)"/>
+      <rect x="30" y="210" width="1100" height="100" rx="10" fill="#dcfce7" stroke="#16a34a"/>
+      <text x="580" y="238" text-anchor="middle" font-weight="700" fill="#14532d">MooncakeParquetFileReaderFactory → DataSourceExec（DataFusion 原生执行）</text>
+      <text x="580" y="264" text-anchor="middle" font-size="11.5" fill="#166534">本地缓存命中直读；未命中经 opendal 拉取并写穿缓存 —— 查询的 IO 全部走缓存层，天然支持重复查询加速</text>
+      <text x="580" y="290" text-anchor="middle" font-size="11.5" fill="#166534">列裁剪（projection pushdown）+ 谓词下推 + 行组跳过 + 行选择 全部在 reader 层生效，无中间物化</text>
+      <rect x="30" y="340" width="530" height="190" rx="10" fill="#eff6ff" stroke="#2563eb"/>
+      <text x="55" y="368" font-weight="700" fill="#1e3a8a">与 iceberg 引擎读的分工</text>
+      <text x="55" y="396" font-size="12" fill="#1e293b">· 实时读（RPC 路径）：能看到内存部分 → 亚秒级新鲜度；</text>
+      <text x="55" y="422" font-size="12" fill="#1e293b">· 批式读（catalog 路径）：只看到已提交快照 → 完全标准；</text>
+      <text x="55" y="448" font-size="12" fill="#1e293b">· 两者读同一批物理文件 → 缓存对两类读者都生效；</text>
+      <text x="55" y="474" font-size="12" fill="#1e293b">· pg_mooncake 里 SQL 经 PG 优化器 → 扫描下发给 moonlink。</text>
+      <rect x="600" y="340" width="530" height="190" rx="10" fill="#fef9c3" stroke="#ca8a04"/>
+      <text x="625" y="368" font-weight="700" fill="#713f12">缓存句柄的生命周期（cache/object_storage/）</text>
+      <text x="625" y="396" font-size="12" fill="#854d0e">NonEvictableHandle = 引用计数 pin：查询期间文件绝不被驱逐；</text>
+      <text x="625" y="422" font-size="12" fill="#854d0e">表目录即 write-through 缓存（写 flush 时已落本地）；</text>
+      <text x="625" y="448" font-size="12" fill="#854d0e">驱逐后不立即删文件，发 EvictedFilesToDelete 事件</text>
+      <text x="625" y="474" font-size="12" fill="#854d0e">由 actor 确认无读者后异步删除 —— 防「删了正在读的文件」。</text>
+    </g>
+  </svg>
+</div>
+
+<h2>7.5 本章速查</h2>
+<table>
+  <thead><tr><th>问题</th><th>答案</th></tr></thead>
+  <tbody>
+    <tr><td>内存数据怎么被读到？</td><td>request_read() 现场物化为临时 parquet（/tmp/moonlink_temp_file），与磁盘文件并列输出</td></tr>
+    <tr><td>什么时候能读到 lsn=X？</td><td>X ≤ snapshot_lsn，或（X ≤ replication_lsn 且快照 clean）—— 图 7-2 判定 + watch 等待</td></tr>
+    <tr><td>删除怎么生效？</td><td>DV 位图（puffin）+ position_deletes → RowSelector skip/select → parquet reader 行级裁剪</td></tr>
+    <tr><td>协议怎么跨语言？</td><td>手写 bincode 布局：偏移量集中 + 字符串拖尾 + 有序 DV —— C++ 可指针直读</td></tr>
+    <tr><td>查询会拖垮写入吗？</td><td>不会：读只 pin 缓存与快照副本（Snapshot 可 Clone），actor 仅在 scan_table_begin/end 参与一下</td></tr>
+  </tbody>
+</table>
+
+<div class="footer">
+  <a href="06-iceberg.html">← 06 Iceberg 集成</a>
+  <a href="08-control-plane.html">下一章：08 控制面 →</a>
+</div>
+</div>
+</body>
+</html>

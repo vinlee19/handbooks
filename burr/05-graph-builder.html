@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>05 · Graph 与 ApplicationBuilder — Apache Burr 源码剖析</title>
+<style>
+:root{
+  --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --line:#e2e8f0;
+  --blue:#2563eb; --blue-bg:#eff6ff; --green:#16a34a; --green-bg:#f0fdf4;
+  --amber:#d97706; --amber-bg:#fffbeb; --purple:#9333ea; --purple-bg:#faf5ff;
+  --red:#dc2626; --red-bg:#fef2f2; --code-bg:#0f172a;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.75}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.94);backdrop-filter:blur(6px);color:#e2e8f0;display:flex;gap:12px;align-items:center;padding:10px 24px;font-size:13px;flex-wrap:wrap}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:3px 8px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav .brand{font-weight:700;color:#fff;font-size:14px;letter-spacing:.5px;margin-right:8px}
+.topnav .brand span{color:#60a5fa}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+.hero{background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:40px 0;margin-bottom:28px}
+.hero h1{margin:0 0 8px;font-size:28px}
+.hero p{margin:0;color:#cbd5e1;font-size:14.5px;max-width:880px}
+main{padding-bottom:64px}
+h2{font-size:23px;border-left:5px solid var(--blue);padding-left:12px;margin:42px 0 10px}
+h3{font-size:18px;margin:26px 0 6px;color:#1d4ed8}
+h4{font-size:15.5px;margin:18px 0 6px}
+p,li{color:#334155;font-size:14.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:16px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.grid{display:grid;gap:16px}
+.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:860px){.grid.c2,.grid.c3{grid-template-columns:1fr}}
+figure{margin:20px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;overflow-x:auto}
+figcaption{font-size:13px;color:var(--muted);text-align:center;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+figcaption b{color:#1d4ed8}
+pre{background:var(--code-bg);color:#e2e8f0;padding:16px 18px;border-radius:10px;overflow-x:auto;font-size:12.8px;line-height:1.65}
+code{font-family:"SF Mono",Menlo,Consolas,"Courier New",monospace}
+p code,li code,td code,h3 code,h4 code,figcaption code{background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:5px;font-size:.9em}
+pre code{background:none;color:inherit;padding:0}
+.c-key{color:#7dd3fc}.c-str{color:#fbbf24}.c-com{color:#94a3b8;font-style:italic}.c-fn{color:#a5b4fc}.c-num{color:#f472b6}.c-dec{color:#fde047}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:#fff}
+th{background:#1e293b;color:#fff;text-align:left;padding:8px 12px;font-weight:600}
+td{border:1px solid var(--line);padding:7px 12px;vertical-align:top}
+tr:nth-child(even) td{background:#f8fafc}
+.path{font-family:monospace;background:#f1f5f9;border:1px solid var(--line);padding:1px 7px;border-radius:5px;font-size:12.5px;color:#0f766e;word-break:break-all}
+.note{border-left:4px solid var(--amber);background:var(--amber-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.note b{color:#92400e}
+.tip{border-left:4px solid var(--green);background:var(--green-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.tip b{color:#166534}
+.warn{border-left:4px solid var(--red);background:var(--red-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.pager{display:flex;justify-content:space-between;margin:40px 0 8px}
+.pager a{background:#fff;border:1px solid var(--line);padding:10px 18px;border-radius:10px;text-decoration:none;color:var(--ink);font-size:14px}
+.pager a:hover{border-color:var(--blue);color:var(--blue)}
+footer.foot{text-align:center;color:#94a3b8;font-size:12.5px;padding:24px 0 40px}
+svg text{font-family:inherit}
+svg .t{fill:#1e293b;font-size:13px}
+svg .tb{fill:#fff;font-weight:700;font-size:13px}
+svg .ts{fill:#475569;font-size:11px}
+svg .tt{fill:#0f172a;font-weight:700;font-size:15px}
+svg .tc{fill:#64748b;font-size:11px;font-family:Menlo,monospace}
+svg .lbl{fill:#334155;font-size:11.5px}
+svg .ar{stroke:#64748b;stroke-width:1.5;fill:none}
+svg .ar-b{stroke:#2563eb;stroke-width:1.8;fill:none}
+svg .ar-dash{stroke:#94a3b8;stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+svg .zone{fill:#f8fafc;stroke:#cbd5e1;stroke-dasharray:6 4}
+svg .bx{stroke-width:1.5}
+svg .b-blue{fill:#eff6ff;stroke:#3b82f6}
+svg .b-blue-d{fill:#dbeafe;stroke:#2563eb}
+svg .b-green{fill:#f0fdf4;stroke:#22c55e}
+svg .b-green-d{fill:#dcfce7;stroke:#16a34a}
+svg .b-amber{fill:#fffbeb;stroke:#f59e0b}
+svg .b-purple{fill:#faf5ff;stroke:#a855f7}
+svg .b-red{fill:#fef2f2;stroke:#ef4444}
+svg .b-slate{fill:#f1f5f9;stroke:#94a3b8}
+svg .b-dark{fill:#1e293b;stroke:#0f172a}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">Apache&nbsp;Burr<span>·源码深度剖析</span></span>
+  <a href="index.html">总导航</a><a href="01-overview.html">项目全景</a>
+  <a href="02-core-state.html">State</a><a href="03-core-action.html">Action</a>
+  <a href="04-core-application.html">运行时</a><a href="05-graph-builder.html"><b>Graph/Builder</b></a>
+  <a href="06-lifecycle-hooks.html">Hooks/Tracing</a><a href="07-persistence.html">持久化</a>
+  <a href="08-parallelism.html">并行</a><a href="09-tracking.html">追踪系统</a>
+  <a href="10-ui-frontend.html">遥测 UI</a><a href="11-integrations.html">集成生态</a>
+  <a href="12-execution-flow.html">端到端全景</a>
+</nav>
+
+<header class="hero"><div class="wrap">
+  <h1>05 · Graph 与 ApplicationBuilder：从声明到可运行</h1>
+  <p>源码：<span class="path">burr/core/graph.py</span>（385 行）+ <span class="path">burr/core/application.py:2201-2875</span>（Builder）。图是纯数据结构，Builder 是「收集器 + 校验器 + 装配器」——本篇讲清一次 <code>build()</code> 里发生的全部事情。</p>
+</div></header>
+
+<main class="wrap">
+
+<h2>5.1 图模型：Graph / Transition / Condition</h2>
+<div class="card">
+<p><code>Graph</code>（<span class="path">graph.py:114</span>）是一个 dataclass，只有两个公开字段 <code>actions: List[Action]</code> 与 <code>transitions: List[Transition]</code>，全部「索引」都在 <code>__post_init__</code>（<span class="path">:122-126</span>）一次建好：</p>
+<ul>
+<li><code>_action_map</code>：名字 → Action；</li>
+<li><code>_adjacency_map</code>：源动作名 → <b>有序</b>列表 <code>[(目标名, Condition), ...]</code>（<span class="path">:128-135</span>）——有序是条件路由的根基；</li>
+<li><code>_action_tag_map</code>：tag → 动作列表（配合 <code>halt_after=["@tag:..."]</code>）。</li>
+</ul>
+<p><code>Transition</code>（<span class="path">:33-38</span>）= <code>from_ + to + condition</code> 三元组。图本身<b>不含状态、不可执行</b>——它是纯粹的静态拓扑；执行所需的 entrypoint 由外层 <code>ApplicationGraph</code>（<span class="path">application.py:599-607</span>）补充。</p>
+</div>
+
+<h2>5.2 get_next_node：条件路由的完整决策</h2>
+<figure>
+<svg viewBox="0 0 1060 430" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<ellipse cx="130" cy="80" rx="95" ry="34" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="66" y="76" font-weight="700">get_next_node(</text>
+<text class="tc" x="66" y="94">prior_step, state,</text>
+<text class="tc" x="86" y="110">entrypoint)</text>
+<ellipse cx="130" cy="190" rx="90" ry="30" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="72" y="186" font-weight="700">prior_step 是</text><text class="t" x="72" y="204" font-weight="700">None ?</text>
+<rect class="bx b-green" x="300" y="40" width="250" height="70" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tc" x="316" y="68">是 → 返回 entrypoint 动作</text>
+<text class="ts" x="316" y="90">（第一步；graph.py:154-155）</text>
+<rect class="bx b-blue" x="300" y="150" width="250" height="96" rx="10" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="tc" x="316" y="176">否 → 取 adjacency[prior_step]</text>
+<text class="tc" x="316" y="196">for (name, cond) in 有序列表:</text>
+<text class="tc" x="316" y="216">  cond.run(state)["PROCEED"]?</text>
+<text class="tc" x="316" y="236">  （graph.py:156-159，first-match）</text>
+<rect class="bx b-purple" x="620" y="150" width="200" height="70" rx="10" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="tc" x="636" y="178">命中 → 返回该动作</text>
+<text class="ts" x="636" y="200">短路，后面边不再求值</text>
+<rect class="bx b-red" x="620" y="260" width="200" height="70" rx="10" style="fill:#fef2f2" style="stroke:#ef4444"/>
+<text class="tc" x="636" y="288">全不中 → 返回 None</text>
+<text class="ts" x="636" y="310">引擎视为「无下一步」= 应用终点</text>
+<rect class="bx b-amber" x="300" y="290" width="250" height="110" rx="10" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="316" y="316" font-weight="700">default 的角色</text>
+<text class="ts" x="316" y="340">恒真条件；放最后当兜底；</text>
+<text class="ts" x="316" y="358">同一源节点两条 default 直接</text>
+<text class="ts" x="316" y="376">报错（_validate_transitions</text>
+<text class="ts" x="316" y="394">graph.py:57-79）</text>
+<path class="ar-b" d="M210 90 L298 74" marker-end="url(#arr)"/>
+<path class="ar-b" d="M212 196 L298 198" marker-end="url(#arr)"/>
+<path class="ar-b" d="M550 180 L618 182" marker-end="url(#arr)"/>
+<path class="ar-b" d="M550 230 L618 285" marker-end="url(#arr)"/>
+<text class="ts" x="20" y="415">注意：条件求值拿的是「当前步刚提交的完整 state」，因此条件里能引用刚写出的键——这是「上一轮的结果决定下一轮去向」的标准模式。</text>
+</svg>
+<figcaption><b>图 5-1 · get_next_node 决策流</b> —— 首步走 entrypoint，此后在邻接表里按声明顺序短路求值；全部不满足即自然终止。没有任何隐藏的「路由器」。</figcaption>
+</figure>
+
+<h2>5.3 GraphBuilder：轻量校验器</h2>
+<div class="grid c2">
+<div class="card">
+<h3>三个收集方法</h3>
+<ul>
+<li><code>with_actions(*args, **kwargs)</code>（<span class="path">graph.py:286-312</span>）：kwargs 键作为动作名，经 <code>create_action</code> 统一「摘属性 + 命名」；重名直接报错。</li>
+<li><code>with_transitions(*tuples)</code>（<span class="path">:314-345</span>）：支持 <code>(from, to)</code>（自动 default）与 <code>(from, to, condition)</code>；<code>from</code> 还可以是<b>列表</b>实现多源合流（fan-in）。</li>
+<li><code>with_graph(graph)</code>（<span class="path">:347-364</span>）：合并已有图（组合复用大图）。</li>
+</ul>
+</div>
+<div class="card">
+<h3>build() 的校验</h3>
+<ul>
+<li><code>_validate_actions</code>（<span class="path">:41-54</span>）：至少一个动作、名字唯一；</li>
+<li><code>_validate_transitions</code>（<span class="path">:57-79</span>）：边的两端必须都在动作集里；同一源只允许一条 default。</li>
+</ul>
+<div class="note"><b>不校验的事：</b>可达性（存在孤儿动作不报错）、死锁、缺少终点——图保持最大自由度，执行期的 halt 条件才是「终点」的真正来源。</div>
+</div>
+</div>
+
+<h2>5.4 ApplicationBuilder 全方法地图</h2>
+<div class="card">
+<table>
+<tr><th>方法</th><th>作用</th><th>源码（application.py）</th></tr>
+<tr><td><code>with_identifiers(app_id, partition_key, sequence_id)</code></td><td>应用身份；app_id 缺省 uuid4</td><td><span class="path">:2226</span>（uuid 默认 :2206）</td></tr>
+<tr><td><code>with_actions / with_transitions / with_graph</code></td><td>转发给内部 GraphBuilder</td><td><span class="path">:2373 / :2390 / :2298</span></td></tr>
+<tr><td><code>with_entrypoint(name)</code></td><td>起始动作（与 initialize_from 互斥）</td><td><span class="path">:2356</span></td></tr>
+<tr><td><code>with_state(**kw | State)</code></td><td>初始状态 / 状态覆盖</td><td><span class="path">:2258</span></td></tr>
+<tr><td><code>with_typing(system)</code></td><td>替换 TypingSystem</td><td><span class="path">:2246</span></td></tr>
+<tr><td><code>with_hooks(*adapters)</code></td><td>注册生命周期钩子</td><td><span class="path">:2412</span></td></tr>
+<tr><td><code>with_tracker("local", project, params, use_otel_tracing)</code></td><td>建 LocalTrackingClient；otel 包装可选项</td><td><span class="path">:2422</span></td></tr>
+<tr><td><code>with_state_persister(persister)</code></td><td>包装成 PersisterHook 注册</td><td><span class="path">:2521 / :2565-2588</span></td></tr>
+<tr><td><code>with_parallel_executor(factory)</code></td><td>替换并行执行器（Ray 等）</td><td><span class="path">:2325</span></td></tr>
+<tr><td><code>with_spawning_parent(...)</code></td><td>标记 spawn 血缘</td><td><span class="path">:2544</span></td></tr>
+<tr><td><code>initialize_from(initializer, resume_at_next_action, default_state, default_entrypoint, fork_from_*)</code></td><td>从持久层装载/分叉</td><td><span class="path">:2472</span></td></tr>
+<tr><td><code>build() / abuild()</code></td><td>装配（sync/async persister 两条路）</td><td><span class="path">:2787 / :2826</span></td></tr>
+</table>
+</div>
+
+<h2>5.5 build() 装配流水线与断点恢复决策</h2>
+<figure>
+<svg viewBox="0 0 1060 700" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<rect class="bx b-blue-d" x="380" y="20" width="300" height="56" rx="10" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="400" y="44" font-weight="700">build()（:2787）</text>
+<text class="tc" x="400" y="64">① _set_sync_state_persister（:2565）</text>
+<rect class="bx b-green" x="40" y="120" width="280" height="120" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="56" y="146" font-weight="700">persister → PersisterHook</text>
+<text class="ts" x="56" y="170">BaseStateSaver 被包装成</text>
+<text class="ts" x="56" y="188">PostRunStepHook 注册进钩子集——</text>
+<text class="ts" x="56" y="206">持久化对引擎就是普通钩子</text>
+<text class="tc" x="56" y="228">(persistence.py:214-234)</text>
+<rect class="bx b-amber" x="380" y="120" width="300" height="120" rx="10" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="396" y="146" font-weight="700">② _load_from_sync_persister（:2691）</text>
+<text class="ts" x="396" y="170">校验 initializer 同步性 →</text>
+<text class="ts" x="396" y="188">_identify_state_to_load(:2615):</text>
+<text class="ts" x="396" y="206">fork_from_* 有值 → 用 fork 身份查；</text>
+<text class="ts" x="396" y="226">否则用自己的 (partition, app_id, seq)</text>
+<rect class="bx b-blue" x="40" y="280" width="980" height="180" rx="12" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="tt" x="60" y="308">③ _init_state_from_persister（:2635-2689）—— 断点恢复的全部决策树</text>
+<rect class="bx b-red" x="80" y="330" width="250" height="100" rx="10" style="fill:#fef2f2" style="stroke:#ef4444"/>
+<text class="t" x="96" y="356" font-weight="700" style="fill:#7f1d1d">load_result == None</text>
+<text class="ts" x="96" y="378">首次运行 → 用 default_state</text>
+<text class="ts" x="96" y="398">填充；sequence_id=None；</text>
+<text class="ts" x="96" y="418">若显式 fork 却查无记录 → 警告并回落默认</text>
+<rect class="bx b-green" x="370" y="330" width="300" height="100" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="386" y="356" font-weight="700">有记录 且 status == "completed"</text>
+<text class="ts" x="386" y="378">载入 state + sequence_id；</text>
+<text class="ts" x="386" y="398">resume_at_next_action=True 时：</text>
+<text class="tc" x="386" y="418">state[PRIOR_STEP] = last_position（从下步续跑）</text>
+<rect class="bx b-amber" x="710" y="330" width="290" height="100" rx="10" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="726" y="356" font-weight="700">有记录 且 status == "failed"</text>
+<text class="ts" x="726" y="378">把 entrypoint 设为失败动作、</text>
+<text class="ts" x="726" y="398">清 __PRIOR_STEP（reset_to_entrypoint）</text>
+<text class="ts" x="726" y="418">→ 从失败的那一步原地重试</text>
+<rect class="bx b-purple" x="380" y="500" width="300" height="110" rx="10" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="t" x="396" y="526" font-weight="700">④ _build_common（:2747-2785）</text>
+<text class="ts" x="396" y="548">graph_builder.build() + _validate_start(entrypoint)</text>
+<text class="ts" x="396" y="566">应用 TypingSystem；组装 ParentPointer；</text>
+<text class="ts" x="396" y="584">new Application(graph, state, entrypoint,</text>
+<text class="ts" x="396" y="602">adapter_set, fork/spawn pointers…)</text>
+<rect class="bx b-blue-d" x="720" y="500" width="280" height="110" rx="10" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="736" y="526" font-weight="700">⑤ Application.__init__ 收尾</text>
+<text class="ts" x="736" y="548">自动追加 TracerFactoryContextHook；</text>
+<text class="ts" x="736" y="566">触发 post_application_create 钩子</text>
+<text class="ts" x="736" y="584">→ 追踪器此刻写下 graph.json/metadata.json</text>
+<text class="ts" x="40" y="660">abuild() 走 _set_async_state_persister / _load_from_async_persister 对称路径（:2590-2733），并在 async 上下文中校验 sync/async 匹配，给出精确报错。</text>
+<path class="ar-b" d="M530 76 L530 118" marker-end="url(#arr2)"/>
+<path class="ar-b" d="M380 180 L322 180" marker-end="url(#arr2)"/>
+<path class="ar-b" d="M530 240 L530 278" marker-end="url(#arr2)"/>
+<path class="ar-b" d="M530 460 L530 498" marker-end="url(#arr2)"/>
+<path class="ar-b" d="M680 555 L718 555" marker-end="url(#arr2)"/>
+</svg>
+<figcaption><b>图 5-2 · build() 装配流水线</b> —— 持久化先被「钩子化」；装载按 fork/own 身份查询；恢复策略由 status 与 resume_at_next_action 共同决定（completed 续下一步 / failed 重试当前步）。注意一个反直觉点：<b>断点恢复发生在 build 时而非 run 时</b>。</figcaption>
+</figure>
+
+<h2>5.6 实例：多模态聊天机器人的条件路由</h2>
+<p><span class="path">examples/multi-modal-chatbot/application.py</span> 展示了 Builder 的高阶用法——<code>bind</code> 复用动作、<code>when</code> 条件扇出：</p>
+<figure>
+<svg viewBox="0 0 1060 460" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#64748b"/></marker></defs>
+<rect class="bx b-blue-d" x="440" y="30" width="150" height="46" rx="10" style="fill:#dbeafe" style="stroke:#2563eb"/><text class="t" x="472" y="58" font-weight="700">prompt</text>
+<rect class="bx b-slate" x="440" y="110" width="150" height="46" rx="10" style="fill:#f1f5f9" style="stroke:#94a3b8"/><text class="t" x="448" y="132" font-weight="700" font-size="12">check_openai_key</text><text class="tc" x="448" y="148" font-size="10">失败→prompt(可重试)</text>
+<rect class="bx b-slate" x="440" y="190" width="150" height="46" rx="10" style="fill:#f1f5f9" style="stroke:#94a3b8"/><text class="t" x="462" y="212" font-weight="700" font-size="12">check_safety</text><text class="tc" x="448" y="228" font-size="10">moderation API</text>
+<rect class="bx b-purple" x="430" y="266" width="170" height="46" rx="10" style="fill:#faf5ff" style="stroke:#a855f7"/><text class="t" x="466" y="288" font-weight="700" font-size="12">decide_mode</text><text class="tc" x="440" y="304" font-size="10">LLM 判 intent→mode</text>
+<rect class="bx b-green" x="90" y="360" width="150" height="46" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/><text class="t" x="104" y="382" font-weight="700" font-size="12">generate_image</text><text class="tc" x="96" y="398" font-size="10">mode == "image"</text>
+<rect class="bx b-green" x="280" y="360" width="140" height="46" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/><text class="t" x="296" y="382" font-weight="700" font-size="12">generate_code</text><text class="tc" x="288" y="398" font-size="10">mode == "code"</text>
+<rect class="bx b-green" x="460" y="360" width="150" height="46" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/><text class="t" x="478" y="382" font-weight="700" font-size="12">answer_question</text><text class="tc" x="466" y="398" font-size="10">mode == "answer"</text>
+<rect class="bx b-amber" x="650" y="360" width="150" height="46" rx="10" style="fill:#fffbeb" style="stroke:#f59e0b"/><text class="t" x="672" y="382" font-weight="700" font-size="12">prompt_for_more</text><text class="tc" x="660" y="398" font-size="10">mode == "wrong-input"</text>
+<rect class="bx b-blue" x="850" y="360" width="150" height="46" rx="10" style="fill:#eff6ff" style="stroke:#3b82f6"/><text class="t" x="886" y="382" font-weight="700">response</text><text class="tc" x="858" y="398" font-size="10">汇总 → 回到 prompt</text>
+<path class="ar" d="M515 76 L515 108" marker-end="url(#arr3)"/>
+<path class="ar" d="M515 156 L515 188" marker-end="url(#arr3)"/>
+<path class="ar" d="M515 236 L515 264" marker-end="url(#arr3)"/>
+<path class="ar" d="M470 312 L180 358" marker-end="url(#arr3)"/>
+<path class="ar" d="M490 312 L360 358" marker-end="url(#arr3)"/>
+<path class="ar" d="M515 312 L533 358" marker-end="url(#arr3)"/>
+<path class="ar" d="M560 312 L710 358" marker-end="url(#arr3)"/>
+<path class="ar-dash" d="M470 320 L400 358" marker-end="url(#arr3)"/>
+<text class="ts" x="300" y="330">when(mode=...) 四路扇出（声明顺序即优先级）</text>
+<path class="ar" d="M165 406 C 165 448, 460 448, 480 408" marker-end="url(#arr3)"/>
+<path class="ar" d="M350 406 C 350 444, 470 446, 490 408" marker-end="url(#arr3)"/>
+<path class="ar" d="M535 406 L535 408" marker-end="url(#arr3)"/>
+<path class="ar" d="M725 406 C 725 448, 520 448, 510 408" marker-end="url(#arr3)"/>
+<path class="ar" d="M925 406 C 925 430, 560 452, 540 410" marker-end="url(#arr3)"/>
+<text class="ts" x="560" y="440">全部回答类动作 → response →（default）回到 prompt：人机循环闭环</text>
+<text class="ts" x="90" y="46">同一动作函数可 bind 多份：chat_response.bind(prepend_prompt=...) 复用为 image/code/answer 三个节点</text>
+</svg>
+<figcaption><b>图 5-3 · multi-modal-chatbot 状态机</b> —— 条件扇出 + 默认兜底 + 回边闭环。这张图与 UI 里渲染的 reactflow 视图同构（10 篇）。</figcaption>
+</figure>
+
+<div class="tip"><b>本篇要点：</b>① 图是纯静态数据，邻接表有序是条件路由的根基；② GraphBuilder 只做收集与两项校验，不保证可达性；③ ApplicationBuilder 是「薄壳」：动作/边转给 GraphBuilder，其余收集应用关切；④ build() 五步流水线中，<b>断点恢复在 build 时完成</b>——completed 续下步、failed 重试当前步；⑤ fan-in 用列表源、复用用 bind、兜底用 default。</div>
+
+<div class="pager"><a href="04-core-application.html">← 04 运行时</a><a href="06-lifecycle-hooks.html">下一篇：06 Hooks 与 Tracing →</a></div>
+</main>
+<footer class="foot">Apache Burr 源码学习笔记 · 05 Graph 与 Builder · 基于 v0.42.0</footer>
+</body>
+</html>

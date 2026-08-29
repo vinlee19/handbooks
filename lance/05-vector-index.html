@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>05 · 向量索引：IVF · PQ · SQ · HNSW 全解</title>
+<style>
+  :root{--bg:#f7f8fb;--card:#fff;--ink:#1a2233;--muted:#5b6472;--accent:#3b5bdb;--accent2:#7048e8;--teal:#0ca678;--orange:#e8590c;--red:#e03131;--line:#dde3ee;--code-bg:#f1f3f9}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.78}
+  header{background:linear-gradient(135deg,#087f5b,#0ca678 55%,#38d9a9);color:#fff;padding:44px 8% 36px}
+  header h1{font-size:28px}header p{opacity:.95;font-size:15px;max-width:920px;margin-top:8px}
+  nav.top{background:#101832;padding:10px 8%;font-size:13.5px}
+  nav.top a{color:#9db8ff;text-decoration:none;margin-right:18px}
+  nav.top a.cur{color:#fff;font-weight:700}
+  main{max-width:1150px;margin:0 auto;padding:34px 4% 90px}
+  h2{font-size:23px;margin:42px 0 14px;padding-left:14px;border-left:5px solid #0ca678}
+  h3{font-size:18px;margin:26px 0 10px;color:#087f5b}
+  p{margin:10px 0}.lead{color:var(--muted);font-size:15.5px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px 26px;margin:16px 0;box-shadow:0 1px 3px rgba(30,42,90,.05)}
+  code{font-family:"SF Mono",Menlo,Consolas,monospace;background:var(--code-bg);border-radius:5px;padding:1px 7px;font-size:.92em;color:#0b3a8f}
+  pre{background:#0f1730;color:#dbe4ff;border-radius:10px;padding:16px 20px;overflow-x:auto;font-size:13px;line-height:1.6;margin:14px 0}
+  pre .c{color:#7d8bb0}.k{color:#82aaff}.s{color:#c3e88d}.t2{color:#ffcb6b}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}
+  th{background:#e6fbf2;color:#087f5b;text-align:left;padding:8px 12px;border:1px solid var(--line)}
+  td{padding:7px 12px;border:1px solid var(--line);vertical-align:top}
+  .svgwrap{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;margin:20px 0;overflow-x:auto}
+  .svgwrap .cap{text-align:center;color:var(--muted);font-size:13px;margin-top:8px}
+  .note{border-left:4px solid var(--orange);background:#fff4ec;border-radius:0 8px 8px 0;padding:11px 16px;margin:13px 0;font-size:14px}
+  .tip{border-left:4px solid #3b5bdb;background:#eef2ff;border-radius:0 8px 8px 0;padding:11px 16px;margin:13px 0;font-size:14px}
+  svg text{font-family:-apple-system,PingFang SC,sans-serif}
+</style>
+</head>
+<body>
+<header>
+  <h1>05 · 向量索引：从 K-means 到 HNSW 图遍历</h1>
+  <p>Lance 的向量索引体系（rust/lance-index/src/vector/，含 ivf/pq/sq/bq/hnsw/flat/graph/v3 子模块）是"ANN 加速器"。本章从数学原理到源码实现全链路解析：训练、量化、建图、三级复合索引、查询执行计划。</p>
+</header>
+<nav class="top">
+  <a href="index.html">总览</a><a href="01-physical-layout.html">01 物理布局</a><a href="02-encoding.html">02 编码体系</a><a href="03-read-path.html">03 读路径</a><a href="04-write-path.html">04 写路径与提交</a><a class="cur" href="05-vector-index.html">05 向量索引</a><a href="06-scalar-index.html">06 标量索引/FTS</a><a href="07-linalg-simd.html">07 SIMD</a><a href="08-bindings-ecosystem.html">08 生态</a>
+</nav>
+<main>
+
+<h2>1. 索引家族全景</h2>
+<div class="card">
+<table>
+<tr><th>索引</th><th>原理</th><th>召回/速度定位</th><th>源码位置</th></tr>
+<tr><td><b>FLAT</b></td><td>暴力全扫（SIMD 距离）</td><td>100% 召回基线；小数据/精确检索</td><td><code>vector/flat.rs</code></td></tr>
+<tr><td><b>IVF_FLAT</b></td><td>K-means 分区 + 分区内暴力</td><td>低内存；中等规模</td><td><code>vector/ivf/</code></td></tr>
+<tr><td><b>IVF_PQ</b></td><td>分区 + 乘积量化编码</td><td>十亿级向量主力；有损</td><td><code>vector/pq/</code></td></tr>
+<tr><td><b>IVF_SQ</b></td><td>分区 + 标量量化(f32→i8/f16)</td><td>高召回、速度居中</td><td><code>vector/sq/</code></td></tr>
+<tr><td><b>IVF_HNSW(×PQ/SQ)</b></td><td>分区 + 图索引 + 量化（v3 复合）</td><td>最高 QPS 的组合</td><td><code>vector/v3/</code></td></tr>
+<tr><td><b>HNSW 单体</b></td><td>多层邻近图</td><td>高召回、构建较慢</td><td><code>vector/hnsw/</code></td></tr>
+<tr><td><b>BQ（二值量化）</b></td><td>符号位压缩 + 汉明距离</td><td>内存 32×↓，配合 rerank</td><td><code>vector/bq.rs</code></td></tr>
+<tr><td>RaBitQ 类</td><td>理论有界随机量化</td><td>实验/企业版延伸</td><td><code>vector/bq/</code></td></tr>
+</table>
+<p style="font-size:13.5px;color:#5b6472">所有索引共享统一抽象：<code>Index</code> trait（加载/查询/statis）+ <code>VectorIndex</code>（ANN 专用）+ 存储层 <code>IvfQuantizationStorage&lt;Q&gt;</code>（v3：分区存储 + 量化码）。</p>
+</div>
+
+<h2>2. IVF：倒排文件分区</h2>
+<p class="lead">IVF 的本质是把向量空间切成 <code>num_partitions</code> 个 Voronoi 胞腔，查询只探最近的 <code>nprobes</code> 个分区，扫描量从 N 降到 N×nprobes/K。</p>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1080 400" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 5-1 · IVF 构建流程（ivf/builder.rs + kmeans.rs）</text>
+  <g font-size="12">
+    <rect x="50" y="56" width="210" height="90" rx="9" fill="#e7f7f1" stroke="#0ca678"/>
+    <text x="155" y="82" text-anchor="middle" font-weight="700" fill="#087f5b">① 采样训练集</text>
+    <text x="65" y="106" font-size="11.5">256×num_partitions 上限 64 万行</text>
+    <text x="65" y="126" font-size="11.5">（shuffle 后随机采样）</text>
+
+    <rect x="310" y="56" width="230" height="90" rx="9" fill="#eef2ff" stroke="#3b5bdb"/>
+    <text x="425" y="82" text-anchor="middle" font-weight="700" fill="#243b8a">② K-means 训练质心</text>
+    <text x="325" y="106" font-size="11.5">MiniBatch KMeans / 多轮重分配</text>
+    <text x="325" y="126" font-size="11.5">距离内核=07 篇的 SIMD</text>
+
+    <rect x="590" y="56" width="220" height="90" rx="9" fill="#fff4ec" stroke="#e8590c"/>
+    <text x="700" y="82" text-anchor="middle" font-weight="700" fill="#a34700">③ 分配（assign）</text>
+    <text x="605" y="106" font-size="11.5">compute_partitions()：</text>
+    <text x="605" y="126" font-size="11.5">每向量 → 最近质心 id</text>
+
+    <rect x="860" y="56" width="180" height="90" rx="9" fill="#f3ecff" stroke="#7048e8"/>
+    <text x="950" y="82" text-anchor="middle" font-weight="700" fill="#4c1d95">④ Shuffle 落盘</text>
+    <text x="875" y="106" font-size="11.5">按分区重排后写入</text>
+    <text x="875" y="126" font-size="11.5">索引存储页</text>
+
+    <line x1="260" y1="100" x2="306" y2="100" stroke="#5b6472" stroke-width="1.8"/>
+    <line x1="540" y1="100" x2="586" y2="100" stroke="#5b6472" stroke-width="1.8"/>
+    <line x1="810" y1="100" x2="856" y2="100" stroke="#5b6472" stroke-width="1.8"/>
+
+    <text x="540" y="190" text-anchor="middle" font-size="13" fill="#5b6472">分区数推荐公式（builder.rs:145 recommended_num_partitions）：</text>
+    <rect x="240" y="204" width="600" height="46" rx="8" fill="#0f1730"/>
+    <text x="540" y="233" text-anchor="middle" fill="#9db8ff" font-size="14" font-family="Menlo,monospace">num_partitions ≈ √(num_rows / target_partition_size)</text>
+
+    <text x="540" y="286" text-anchor="middle" font-size="12.5" fill="#5b6472">查询时：query → 与全部质心算距离（1 次 SIMD 批量）→ 取最近 nprobes 个分区 →</text>
+    <text x="540" y="310" text-anchor="middle" font-size="12.5" fill="#5b6472">对选中分区并行下发子查询（ANNIvfPartitionExec → ANNIvfSubIndexExec）→ 合并 top-k</text>
+    <text x="540" y="348" text-anchor="middle" font-size="11.5" fill="#8a93a6">质心表常驻内存（页缓存），分区数据按需从 _indices/{uuid}/ 读取；分区大小/倾斜可从 IvfBuildParams 调</text>
+  </g>
+</svg>
+<div class="cap">图 5-1 · IVF 构建四步。Shuffler（ivf/shuffler.rs）用外部排序避免 OOM。</div>
+</div>
+
+<h2>3. PQ 乘积量化：把 768 维压成 96 字节</h2>
+<p class="lead">PQ（<code>vector/pq/builder.rs</code>，ProductQuantizer）把向量切成 <code>M = num_sub_vectors</code> 段，每段独立 K-means 出 <code>2^num_bits</code>（通常 256）个质心。向量→每段一个码字 → 存 <b>M 字节</b>（768 维 f32 的 96×压缩）。</p>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1080 430" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 5-2 · PQ 编码与 ADC 查询（不对称距离计算）</text>
+  <g font-size="12">
+    <text x="70" y="60" font-weight="700" fill="#087f5b">编码（离线）</text>
+    <rect x="70" y="70" width="420" height="66" rx="7" fill="#e7f7f1" stroke="#0ca678"/>
+    <text x="85" y="94">向量 x = [x₀…x₆₃ | x₆₄…x₁₂₇ | … | x₇₀₄…x₇₆₇]</text>
+    <text x="85" y="118" font-size="11.5" fill="#5b6472">切成 M=12 段（每段 64 维），每段找最近子质心 → 码 u8</text>
+    <rect x="70" y="146" width="420" height="44" rx="7" fill="#fff" stroke="#0ca678"/>
+    <text x="85" y="173" font-family="Menlo,monospace">code(x) = [0x3f, 0xa1, 0x07, …, 0x52]　(M 字节)</text>
+
+    <text x="70" y="228" font-weight="700" fill="#243b8a">码本训练</text>
+    <text x="70" y="252" font-size="11.5" fill="#5b6472">每段子空间独立 K-means（256 个质心/段）</text>
+    <text x="70" y="272" font-size="11.5" fill="#5b6472">码本常驻内存：M × 256 × 子维度 × 4B</text>
+    <text x="70" y="300" font-size="11.5" fill="#c92a2a">残差选项：先做 residual（向量−分区质心）再 PQ，</text>
+    <text x="70" y="318" font-size="11.5" fill="#c92a2a">显著提升 IVF_PQ 召回（vector/residual.rs）</text>
+
+    <rect x="560" y="56" width="480" height="330" rx="10" fill="#eef2ff" stroke="#3b5bdb"/>
+    <text x="800" y="84" text-anchor="middle" font-weight="700" fill="#243b8a">查询（在线 ADC）</text>
+    <text x="580" y="112">① 预计算距离表 LUT（pq/distance.rs build_dist_table）</text>
+    <rect x="580" y="122" width="440" height="86" rx="7" fill="#fff" stroke="#3b5bdb"/>
+    <text x="595" y="146" font-family="Menlo,monospace" font-size="11.5">LUT[m][c] = ‖qₘ − centroidₘ,c‖²</text>
+    <text x="595" y="166" font-size="11.5" fill="#5b6472">M×256 个 f32 —— 查询向量与所有子质心的距离</text>
+    <text x="595" y="188" font-size="11.5" fill="#5b6472">一次算好，后续每候选向量只查表</text>
+    <text x="580" y="238">② 对每个码字向量：</text>
+    <rect x="580" y="248" width="440" height="56" rx="7" fill="#0f1730"/>
+    <text x="595" y="270" fill="#9db8ff" font-family="Menlo,monospace" font-size="12">d̂(q, code) = Σₘ LUT[m][ code[m] ]</text>
+    <text x="595" y="292" fill="#7d8bb0" font-size="11">12 次查表+加法 ≈ 24ns（对比 768 维暴力 ≈ 1μs）</text>
+    <text x="580" y="330" font-size="11.5" fill="#5b6472">③ top-k(×refine_factor) 候选 → 用原始向量精确距离 rerank</text>
+    <text x="580" y="352" font-size="11.5" fill="#5b6472">④ dist_table 批量模式：一条 SIMD 指令查 8 码字（07 篇）</text>
+    <text x="580" y="376" font-size="11" fill="#8a93a6">QueryScratch 池化复用（storage.rs:158），避免每查询分配</text>
+  </g>
+</svg>
+<div class="cap">图 5-2 · PQ 两阶段。ADC 的名字来自"不对称"：查询用原向量、库中向量用量化码。</div>
+</div>
+
+<h3>3.1 SQ / BQ 一览</h3>
+<div class="card">
+<table>
+<tr><th>量化器</th><th>变换</th><th>距离计算</th><th>适用</th></tr>
+<tr><td><b>SQ</b>（ScalarQuantizer）</td><td>每维 min-max/f16 归一到 i8（4× 压缩）或 f16（2×）</td><td>整数 SIMD 或 f16 SIMD，近似 L2/内积</td><td>追求高召回（PQ 有码本偏置时 SQ 更稳）</td></tr>
+<tr><td><b>BQ</b>（BinaryQuantizer）</td><td>取符号位 → bit 串（32× 压缩）</td><td>popcount 汉明距离（07 篇 hamming.rs）</td><td>超高维、可接受 rerank 的场景</td></tr>
+</table>
+</div>
+
+<h2>4. HNSW：多层跳表式邻近图（源码级）</h2>
+<p class="lead">HNSW（<code>vector/hnsw/builder.rs</code> + <code>online.rs</code>）默认参数：<b>max_level=7、M=20、ef_construction=150</b>。它把"跳表"思想搬到度量空间：上层稀疏长边加速导航，第 0 层稠密短边保证精度。</p>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1080 470" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 5-3 · HNSW 图结构与搜索路径</text>
+  <!-- layers -->
+  <g font-size="12">
+    <rect x="90" y="60" width="640" height="70" rx="8" fill="#f3ecff" stroke="#7048e8"/>
+    <text x="105" y="84" font-weight="700" fill="#4c1d95">Level 2（最稀疏）</text>
+    <circle cx="200" cy="102" r="9" fill="#7048e8"/><circle cx="420" cy="95" r="9" fill="#7048e8"/><circle cx="620" cy="105" r="9" fill="#7048e8"/>
+    <line x1="209" y1="100" x2="411" y2="96" stroke="#7048e8" stroke-width="1.6"/>
+    <line x1="429" y1="96" x2="611" y2="103" stroke="#7048e8" stroke-width="1.6"/>
+
+    <rect x="90" y="150" width="640" height="80" rx="8" fill="#eef2ff" stroke="#3b5bdb"/>
+    <text x="105" y="174" font-weight="700" fill="#243b8a">Level 1</text>
+    <circle cx="160" cy="196" r="9" fill="#3b5bdb"/><circle cx="300" cy="188" r="9" fill="#3b5bdb"/><circle cx="450" cy="198" r="9" fill="#3b5bdb"/><circle cx="590" cy="186" r="9" fill="#3b5bdb"/><circle cx="680" cy="200" r="9" fill="#3b5bdb"/>
+    <line x1="169" y1="194" x2="291" y2="189" stroke="#3b5bdb" stroke-width="1.3"/>
+    <line x1="309" y1="189" x2="441" y2="196" stroke="#3b5bdb" stroke-width="1.3"/>
+    <line x1="459" y1="196" x2="581" y2="187" stroke="#3b5bdb" stroke-width="1.3"/>
+
+    <rect x="90" y="250" width="640" height="110" rx="8" fill="#e7f7f1" stroke="#0ca678"/>
+    <text x="105" y="274" font-weight="700" fill="#087f5b">Level 0（全部向量，M₀≈2M 连接）</text>
+    <circle cx="140" cy="322" r="8" fill="#0ca678"/><circle cx="200" cy="308" r="8" fill="#0ca678"/><circle cx="260" cy="330" r="8" fill="#0ca678"/><circle cx="320" cy="306" r="8" fill="#0ca678"/><circle cx="380" cy="326" r="8" fill="#0ca678"/><circle cx="440" cy="304" r="8" fill="#0ca678"/><circle cx="500" cy="328" r="8" fill="#0ca678"/><circle cx="560" cy="308" r="8" fill="#0ca678"/><circle cx="620" cy="330" r="8" fill="#0ca678"/><circle cx="680" cy="310" r="8" fill="#0ca678"/>
+    <line x1="148" y1="320" x2="192" y2="310" stroke="#0ca678" stroke-width="1"/>
+    <line x1="208" y1="310" x2="252" y2="327" stroke="#0ca678" stroke-width="1"/>
+    <line x1="268" y1="328" x2="312" y2="308" stroke="#0ca678" stroke-width="1"/>
+    <line x1="328" y1="308" x2="372" y2="323" stroke="#0ca678" stroke-width="1"/>
+    <line x1="388" y1="324" x2="432" y2="306" stroke="#0ca678" stroke-width="1"/>
+    <line x1="448" y1="306" x2="492" y2="325" stroke="#0ca678" stroke-width="1"/>
+    <line x1="508" y1="326" x2="552" y2="310" stroke="#0ca678" stroke-width="1"/>
+    <line x1="568" y1="310" x2="612" y2="327" stroke="#0ca678" stroke-width="1"/>
+
+    <!-- entry point -->
+    <circle cx="200" cy="102" r="14" fill="none" stroke="#e03131" stroke-width="2.2"/>
+    <text x="140" y="66" fill="#e03131" font-weight="700" font-size="11.5">entry_point(原子变量)</text>
+    <!-- search path -->
+    <path d="M 200 102 L 420 95 L 590 186 L 440 304" fill="none" stroke="#e03131" stroke-width="2.2" stroke-dasharray="6 4"/>
+    <circle cx="440" cy="304" r="13" fill="none" stroke="#e03131" stroke-width="2"/>
+    <text x="455" y="296" fill="#e03131" font-size="11.5" font-weight="700">最近邻（贪心下行）</text>
+
+    <!-- right panel -->
+    <rect x="770" y="60" width="270" height="360" rx="10" fill="#fff" stroke="#dde3ee"/>
+    <text x="905" y="86" text-anchor="middle" font-weight="700" font-size="13" fill="#1a2233">search_basic 算法（builder.rs:451）</text>
+    <g font-size="11.5" fill="#333">
+      <text x="786" y="112">cur = entry_point, ef 候选堆</text>
+      <text x="786" y="136">for level in (top..=target).rev():</text>
+      <text x="800" y="160">　贪心：扩展邻接 → 未访问者</text>
+      <text x="800" y="182">　算距离(07篇 SIMD) → 更新堆</text>
+      <text x="800" y="204">　直到堆顶 ≥ 最近的未探索</text>
+      <text x="786" y="228">第 0 层：ef 控制候选宽度</text>
+      <text x="786" y="250">　返回 top-k</text>
+      <text x="786" y="282" fill="#7048e8" font-weight="700">VisitedGenerator 池：</text>
+      <text x="786" y="304" fill="#7048e8">ArrayQueue 复用 visited 位图，</text>
+      <text x="786" y="326" fill="#7048e8">并发查询零分配（builder.rs:238）</text>
+      <text x="786" y="354" fill="#0ca678" font-weight="700">search_acorn 变体：</text>
+      <text x="786" y="376" fill="#0ca678">遍历时用过滤位图剪枝，</text>
+      <text x="786" y="398" fill="#0ca678">支持高选择性 prefilter</text>
+    </g>
+  </g>
+</svg>
+<div class="cap">图 5-3 · HNSW。构建采用 online.rs 的流式插入（InsertBuilder 逐向量 add + select_neighbors_heuristic 启发式裁边），适合增量场景。</div>
+</div>
+
+<h2>5. 三级复合索引：IVF_HNSW_PQ</h2>
+<p>生产推荐配置把三种技术叠起来：<b>IVF 管分区 → HNSW 管分区内导航 → PQ 管内存压缩</b>。索引文件（v3，<code>vector/v3/</code> + <code>storage.rs</code>）物理形态：</p>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1080 480" font-family="-apple-system,PingFang SC,sans-serif">
+  <text x="540" y="26" text-anchor="middle" font-size="17" font-weight="700">图 5-4 · 索引目录物理布局与查询时的数据流</text>
+  <g font-size="12">
+    <rect x="50" y="52" width="380" height="210" rx="10" fill="#f3ecff" stroke="#7048e8"/>
+    <text x="240" y="78" text-anchor="middle" font-weight="700" fill="#4c1d95">_indices/{index_uuid}/</text>
+    <text x="70" y="106" font-family="Menlo,monospace" font-size="11.5">├─ idx.0  <tspan fill="#8a93a6">(IVF 元数据: 质心/偏移表)</tspan></text>
+    <text x="70" y="130" font-family="Menlo,monospace" font-size="11.5">├─ idx.1 … idx.P  <tspan fill="#8a93a6">(每分区一页/多页)</tspan></text>
+    <text x="85" y="152" font-size="11" fill="#5b6472">页内：PQ 码流(PART_ID + PQ_CODE 列)</text>
+    <text x="70" y="178" font-family="Menlo,monospace" font-size="11.5">├─ hnsw/  <tspan fill="#8a93a6">(图结构: 邻接表+层级)</tspan></text>
+    <text x="70" y="204" font-family="Menlo,monospace" font-size="11.5">└─ auxiliary/ <tspan fill="#8a93a6">(行地址/统计)</tspan></text>
+    <text x="70" y="240" font-size="11.5" fill="#087f5b">用 Lance 文件格式本身存索引数据！</text>
+    <text x="70" y="256" font-size="11.5" fill="#087f5b">→ 复用列裁剪/页调度/缓存全套基建</text>
+
+    <rect x="490" y="52" width="550" height="210" rx="10" fill="#eef2ff" stroke="#3b5bdb"/>
+    <text x="765" y="78" text-anchor="middle" font-weight="700" fill="#243b8a">查询数据流（ANNIvf* 执行算子内部）</text>
+    <text x="510" y="106">① q 与 K 个质心算距离 → 选 nprobes 分区</text>
+    <text x="510" y="132">② 每分区（并行 task）：加载该分区 HNSW 图</text>
+    <text x="510" y="158">③ 图上贪心遍历；距离=ADC 查表(码)或精确 SIMD</text>
+    <text x="510" y="184">④ 候选×refine_factor → 取原始向量 rerank</text>
+    <text x="510" y="210" font-size="11.5" fill="#5b6472">prefilter（标量索引/删除掩码）在 ②③ 以位图介入</text>
+    <text x="510" y="236" font-size="11.5" fill="#5b6472">分区级并行度 = nprobes；分区内 HNSW 遍历单线程访存</text>
+
+    <rect x="50" y="286" width="990" height="160" rx="10" fill="#fff4ec" stroke="#e8590c"/>
+    <text x="545" y="312" text-anchor="middle" font-weight="700" fill="#a34700">索引与数据的一致性：fragment_bitmap</text>
+    <text x="70" y="340">IndexMetadata.fragment_bitmap（RoaringBitmap）= "索引建成了哪些 fragment"。查询时：</text>
+    <text x="70" y="366" font-size="12.5" font-family="Menlo,monospace">covered = fragments ∩ bitmap　→ 走 ANN</text>
+    <text x="70" y="392" font-size="12.5" font-family="Menlo,monospace">uncovered = fragments − bitmap → FLAT 暴力扫（新 append 的数据绝不漏查！）</text>
+    <text x="70" y="422" font-size="11.5" fill="#8a93a6">Compaction 改变行地址 → rewritten_indices 携带映射；create_index 可选 delta 更新（index_maintenance.rs）</text>
+  </g>
+</svg>
+<div class="cap">图 5-4 · 索引存储与一致性模型。"covered/uncovered 双路查询"是 Lance ANN 结果永远完整的关键。</div>
+</div>
+
+<h2>6. ANN 查询在执行计划中的物理形态</h2>
+<pre><code><span class="c">// scanner.rs 中 ANN 查询生成的计划（简化）</span>
+StreamingTableFunc          <span class="c">// 输出流</span>
+└─ TakeExec                 <span class="c">// 用 ANN 结果 row_addr 取回列数据</span>
+   └─ ANNIvfPartitionExec   <span class="c">// 每个 nprobe 分区一个并行子计划</span>
+      ├─ ANNIvfSubIndexExec <span class="c">// 分区内 HNSW/PQ 检索（可再切 subindex 并行）</span>
+      └─ KNNVectorDistanceExec <span class="c">// 残余部分(未覆盖 fragment)的暴力 SIMD 距离</span>
+         └─ MultivectorScoringExec <span class="c">// 多向量(MaxSim)时打分</span></code></pre>
+
+<div class="card">
+<h3 style="margin-top:0">性能参数速查（默认值来自源码）</h3>
+<table>
+<tr><th>参数</th><th>默认</th><th>作用</th></tr>
+<tr><td><code>num_partitions</code></td><td>√N 启发式</td><td>IVF 分区数；太小→每区太大，太大→质心表查找开销↑</td></tr>
+<tr><td><code>num_sub_vectors</code></td><td>dim/16</td><td>PQ 段数；必须整除维度</td></tr>
+<tr><td><code>HNSW.m</code></td><td>20</td><td>节点连接数，≥4；越大召回↑内存↑</td></tr>
+<tr><td><code>HNSW.ef_construction</code></td><td>150</td><td>建图候选宽度；质量主参数</td></tr>
+<tr><td><code>ef</code>（查询）</td><td>=limit</td><td>查询候选宽度；召回的头号旋钮</td></tr>
+<tr><td><code>refine_factor</code></td><td>1</td><td>rerank 倍数；量化索引建议 ≥5</td></tr>
+<tr><td><code>nprobes</code></td><td>20</td><td>探测分区数；召回第二旋钮</td></tr>
+</table>
+</div>
+
+<div class="tip"><b>选型决策树：</b>数据 &lt; 100 万且要精确 → FLAT。1~1000 万、内存宽裕 → IVF_SQ 或 IVF_HNSW_SQ。亿级 → IVF_HNSW_PQ + refine_factor≥5。超低延迟在线服务 → HNSW（未分区）或 v3 复合 + 提高内存缓存。若做过滤检索（filter+ANN）→ 关注 search_acorn 与 prefilter 融合。</div>
+
+</main>
+<nav class="top" style="text-align:center">
+  <a href="04-write-path.html">« 04 写路径与提交</a> · <a href="06-scalar-index.html">06 标量索引/FTS »</a>
+</nav>
+</body>
+</html>

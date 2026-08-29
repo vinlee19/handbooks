@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>10 · React 遥测 UI — Apache Burr 源码剖析</title>
+<style>
+:root{
+  --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --line:#e2e8f0;
+  --blue:#2563eb; --blue-bg:#eff6ff; --green:#16a34a; --green-bg:#f0fdf4;
+  --amber:#d97706; --amber-bg:#fffbeb; --purple:#9333ea; --purple-bg:#faf5ff;
+  --red:#dc2626; --red-bg:#fef2f2; --code-bg:#0f172a;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.75}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.94);backdrop-filter:blur(6px);color:#e2e8f0;display:flex;gap:12px;align-items:center;padding:10px 24px;font-size:13px;flex-wrap:wrap}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:3px 8px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav .brand{font-weight:700;color:#fff;font-size:14px;letter-spacing:.5px;margin-right:8px}
+.topnav .brand span{color:#60a5fa}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+.hero{background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:40px 0;margin-bottom:28px}
+.hero h1{margin:0 0 8px;font-size:28px}
+.hero p{margin:0;color:#cbd5e1;font-size:14.5px;max-width:880px}
+main{padding-bottom:64px}
+h2{font-size:23px;border-left:5px solid var(--blue);padding-left:12px;margin:42px 0 10px}
+h3{font-size:18px;margin:26px 0 6px;color:#1d4ed8}
+h4{font-size:15.5px;margin:18px 0 6px}
+p,li{color:#334155;font-size:14.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:16px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.grid{display:grid;gap:16px}
+.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:860px){.grid.c2,.grid.c3{grid-template-columns:1fr}}
+figure{margin:20px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;overflow-x:auto}
+figcaption{font-size:13px;color:var(--muted);text-align:center;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+figcaption b{color:#1d4ed8}
+pre{background:var(--code-bg);color:#e2e8f0;padding:16px 18px;border-radius:10px;overflow-x:auto;font-size:12.8px;line-height:1.65}
+code{font-family:"SF Mono",Menlo,Consolas,"Courier New",monospace}
+p code,li code,td code,h3 code,h4 code,figcaption code{background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:5px;font-size:.9em}
+pre code{background:none;color:inherit;padding:0}
+.c-key{color:#7dd3fc}.c-str{color:#fbbf24}.c-com{color:#94a3b8;font-style:italic}.c-fn{color:#a5b4fc}.c-num{color:#f472b6}.c-dec{color:#fde047}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:#fff}
+th{background:#1e293b;color:#fff;text-align:left;padding:8px 12px;font-weight:600}
+td{border:1px solid var(--line);padding:7px 12px;vertical-align:top}
+tr:nth-child(even) td{background:#f8fafc}
+.path{font-family:monospace;background:#f1f5f9;border:1px solid var(--line);padding:1px 7px;border-radius:5px;font-size:12.5px;color:#0f766e;word-break:break-all}
+.note{border-left:4px solid var(--amber);background:var(--amber-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.note b{color:#92400e}
+.tip{border-left:4px solid var(--green);background:var(--green-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.tip b{color:#166534}
+.warn{border-left:4px solid var(--red);background:var(--red-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.pager{display:flex;justify-content:space-between;margin:40px 0 8px}
+.pager a{background:#fff;border:1px solid var(--line);padding:10px 18px;border-radius:10px;text-decoration:none;color:var(--ink);font-size:14px}
+.pager a:hover{border-color:var(--blue);color:var(--blue)}
+footer.foot{text-align:center;color:#94a3b8;font-size:12.5px;padding:24px 0 40px}
+svg text{font-family:inherit}
+svg .t{fill:#1e293b;font-size:13px}
+svg .tb{fill:#fff;font-weight:700;font-size:13px}
+svg .ts{fill:#475569;font-size:11px}
+svg .tt{fill:#0f172a;font-weight:700;font-size:15px}
+svg .tc{fill:#64748b;font-size:11px;font-family:Menlo,monospace}
+svg .lbl{fill:#334155;font-size:11.5px}
+svg .ar{stroke:#64748b;stroke-width:1.5;fill:none}
+svg .ar-b{stroke:#2563eb;stroke-width:1.8;fill:none}
+svg .ar-dash{stroke:#94a3b8;stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+svg .zone{fill:#f8fafc;stroke:#cbd5e1;stroke-dasharray:6 4}
+svg .bx{stroke-width:1.5}
+svg .b-blue{fill:#eff6ff;stroke:#3b82f6}
+svg .b-blue-d{fill:#dbeafe;stroke:#2563eb}
+svg .b-green{fill:#f0fdf4;stroke:#22c55e}
+svg .b-green-d{fill:#dcfce7;stroke:#16a34a}
+svg .b-amber{fill:#fffbeb;stroke:#f59e0b}
+svg .b-purple{fill:#faf5ff;stroke:#a855f7}
+svg .b-red{fill:#fef2f2;stroke:#ef4444}
+svg .b-slate{fill:#f1f5f9;stroke:#94a3b8}
+svg .b-dark{fill:#1e293b;stroke:#0f172a}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">Apache&nbsp;Burr<span>·源码深度剖析</span></span>
+  <a href="index.html">总导航</a><a href="01-overview.html">项目全景</a>
+  <a href="02-core-state.html">State</a><a href="03-core-action.html">Action</a>
+  <a href="04-core-application.html">运行时</a><a href="05-graph-builder.html">Graph/Builder</a>
+  <a href="06-lifecycle-hooks.html">Hooks/Tracing</a><a href="07-persistence.html">持久化</a>
+  <a href="08-parallelism.html">并行</a><a href="09-tracking.html">追踪系统</a>
+  <a href="10-ui-frontend.html"><b>遥测 UI</b></a><a href="11-integrations.html">集成生态</a>
+  <a href="12-execution-flow.html">端到端全景</a>
+</nav>
+
+<header class="hero"><div class="wrap">
+  <h1>10 · React 遥测 UI：把执行历史变成可探索的产品</h1>
+  <p>源码：<span class="path">telemetry/ui/</span>（React 18 + TypeScript + Vite 6 + Tailwind）。这一篇覆盖：技术栈与路由、五个核心视图、API 客户端生成、构建发布链路、demo 数据机制。</p>
+</div></header>
+
+<main class="wrap">
+
+<h2>10.1 技术栈与工程结构</h2>
+<div class="grid c2">
+<div class="card">
+<h3>选型一览</h3>
+<table>
+<tr><th>库</th><th>用途</th></tr>
+<tr><td>React 18 + TypeScript + Vite 6</td><td>主体（2025 年从 CRA 迁移到 Vite，commit 7f7fe34a）</td></tr>
+<tr><td>reactflow + dagre</td><td>状态机图视图与自动布局</td></tr>
+<tr><td>react-query v3</td><td>数据获取/缓存/轮询刷新</td></tr>
+<tr><td>react-router-dom v6</td><td>路由</td></tr>
+<tr><td>Tailwind + Headless UI + Heroicons</td><td>样式与组件</td></tr>
+<tr><td>react-syntax-highlighter / @uiw/react-json-view</td><td>源码与 JSON 展示</td></tr>
+<tr><td>fuse.js</td><td>客户端搜索</td></tr>
+</table>
+</div>
+<div class="card">
+<h3>API 客户端是「生成」的</h3>
+<p><span class="path">telemetry/ui/scripts/client-gen.sh</span> 启动后端取 <code>openapi.json</code>，用 <code>openapi-typescript-codegen</code> 生成 <span class="path">src/api/</span>（核心 <code>services/DefaultService.ts</code> 约 785 行）。前后端契约由 FastAPI 的 pydantic schema 单向推导，<b>永远不会漂移</b>。</p>
+<div class="note"><b>dev 体验：</b><code>vite.config.ts</code> 把 <code>/api</code> 代理到 <code>localhost:7241</code>，前端热更新 + 后端本地跑。</div>
+</div>
+</div>
+
+<h2>10.2 路由与视图结构</h2>
+<figure>
+<svg viewBox="0 0 1060 560" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<rect class="bx b-dark" x="360" y="20" width="340" height="50" rx="10" style="fill:#1e293b" style="stroke:#0f172a"/>
+<text class="tb" x="410" y="50" style="fill:#fff">src/App.tsx（路由表）</text>
+<rect class="bx b-blue" x="40" y="120" width="280" height="90" rx="10" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="t" x="56" y="146" font-weight="700">/projects · ProjectList</text>
+<text class="ts" x="56" y="168">项目（+分区）列表，创建时间/应用数</text>
+<text class="ts" x="56" y="188">数据：GET /api/v0/projects</text>
+<rect class="bx b-blue" x="390" y="120" width="280" height="90" rx="10" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="t" x="406" y="146" font-weight="700">/project/:id(/:partition)</text>
+<text class="ts" x="406" y="168">AppList：应用卡片（状态、最后活跃、</text>
+<text class="ts" x="406" y="188">步数、父子血缘图标），分页 + 搜索</text>
+<rect class="bx b-red" x="740" y="120" width="280" height="90" rx="10" style="fill:#fef2f2" style="stroke:#ef4444"/>
+<text class="t" x="756" y="146" font-weight="700">/admin · AdminView</text>
+<text class="ts" x="756" y="168">indexing_jobs（S3 后端的索引任务）</text>
+<text class="ts" x="756" y="188">版本信息 / ready 健康检查</text>
+<rect class="bx b-purple" x="210" y="260" width="640" height="240" rx="12" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="tt" x="230" y="288">/project/:p/:part/:appId · AppView（核心页面）</text>
+<rect class="bx b-green" x="240" y="310" width="130" height="46" rx="8" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="ts" x="252" y="330" font-weight="700">GraphView</text><text class="ts" x="252" y="346">reactflow 图</text>
+<rect class="bx b-green" x="385" y="310" width="130" height="46" rx="8" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="ts" x="397" y="330" font-weight="700">StepList</text><text class="ts" x="397" y="346">步骤时间线</text>
+<rect class="bx b-green" x="530" y="310" width="130" height="46" rx="8" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="ts" x="542" y="330" font-weight="700">DataView</text><text class="ts" x="542" y="346">State/结果 JSON</text>
+<rect class="bx b-green" x="675" y="310" width="150" height="46" rx="8" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="ts" x="687" y="330" font-weight="700">InsightsView</text><text class="ts" x="687" y="346">Token/成本/延迟表</text>
+<rect class="bx b-amber" x="240" y="370" width="130" height="46" rx="8" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="ts" x="252" y="390" font-weight="700">ActionView</text><text class="ts" x="252" y="406">动作源码</text>
+<rect class="bx b-amber" x="385" y="370" width="130" height="46" rx="8" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="ts" x="397" y="390" font-weight="700">ReproduceView</text><text class="ts" x="397" y="406">复现代码片段</text>
+<rect class="bx b-amber" x="530" y="370" width="140" height="46" rx="8" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="ts" x="542" y="390" font-weight="700">AnnotationsView</text><text class="ts" x="542" y="406">人工注释/标注</text>
+<text class="ts" x="240" y="446">StateMachine.tsx 组织这些 tab；步骤详情内嵌 span 树 + 流事件；</text>
+<text class="ts" x="240" y="466">另有独立路由 /annotations/:projectId（批量标注工作台）</text>
+<path class="ar-b" d="M180 110 L400 72" marker-end="url(#arr)"/>
+<path class="ar-b" d="M530 110 L530 72" marker-end="url(#arr)"/>
+<path class="ar-b" d="M880 110 L650 72" marker-end="url(#arr)"/>
+<path class="ar-b" d="M530 210 L530 258" marker-end="url(#arr)"/>
+</svg>
+<figcaption><b>图 10-1 · UI 路由与视图结构</b> —— 三级钻取（项目 → 应用列表 → 单应用），单应用页内七个视图 tab 协同：点图中节点 ⇄ 步骤列表 ⇄ 数据视图联动。</figcaption>
+</figure>
+
+<h2>10.3 两个最有代表性的视图</h2>
+<div class="grid c2">
+<div class="card">
+<h3>GraphView：状态机的活地图</h3>
+<ul>
+<li>数据源：应用的 <code>application_logs</code> 里第一步携带的<b>完整图结构</b>（graph.json 内容）+ 每步的 action 名；</li>
+<li>reactflow 渲染节点/边，dagre 自动布局；条件边显示条件名、虚线样式（与 graphviz 渲染约定一致）；</li>
+<li><b>当前步骤高亮</b>：读取最新 step 的 action，把对应节点着色——轮询刷新时你能实时看到指针在图上移动；</li>
+<li>节点点击 → 联动 StepList 定位到该动作的历史步骤。</li>
+</ul>
+</div>
+<div class="card">
+<h3>StepList / InsightsView：调试主战场</h3>
+<ul>
+<li>StepList（约 1864 行）按 sequence_id 倒序渲染每步：开始/结束时间、inputs 摘要、<b>span 树展开</b>、流式块计数、异常红标；</li>
+<li>DataView 展示该步前后的完整 state（JSON diff 视角）与 result；</li>
+<li>InsightsView 汇总每步的 LLM 调用：模型、token 数、按 <span class="path">src/components/common/modelCost.tsx</span>（内置价格表 + <span class="path">scripts/model_costs.json</span>）折算成本；</li>
+<li>AnnotationsView 写注释 → <code>annotations</code> API → 落盘 annotations.jsonl。</li>
+</ul>
+</div>
+</div>
+
+<h2>10.4 构建 → 打包 → 服务链路</h2>
+<figure>
+<svg viewBox="0 0 1060 330" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<rect class="bx b-blue" x="30" y="60" width="230" height="120" rx="10" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="t" x="50" y="86" font-weight="700">telemetry/ui/（源码）</text>
+<text class="tc" x="50" y="112">npm run build（vite build）</text>
+<text class="ts" x="50" y="136">产物 → telemetry/ui/build/</text>
+<text class="ts" x="50" y="156">index.html + assets/*</text>
+<rect class="bx b-amber" x="330" y="60" width="230" height="120" rx="10" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="350" y="86" font-weight="700">burr-admin-build-ui</text>
+<text class="ts" x="350" y="112">cli/__main__.py:129-150</text>
+<text class="ts" x="350" y="136">把 build/ 拷贝到</text>
+<text class="tc" x="350" y="156">burr/tracking/server/build/</text>
+<rect class="bx b-green" x="630" y="60" width="200" height="120" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="650" y="86" font-weight="700">flit 打包 wheel</text>
+<text class="ts" x="650" y="112">build/ 随包分发</text>
+<text class="ts" x="650" y="132">（git 里不存在，</text>
+<text class="ts" x="650" y="152">构建时生成）</text>
+<rect class="bx b-purple" x="880" y="60" width="150" height="120" rx="10" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="t" x="896" y="86" font-weight="700">burr 命令</text>
+<text class="ts" x="896" y="112">importlib.resources</text>
+<text class="ts" x="896" y="132">加载 build/ →</text>
+<text class="ts" x="896" y="152">uvicorn :7241</text>
+<path class="ar-b" d="M260 120 L328 120" marker-end="url(#arr2)"/>
+<path class="ar-b" d="M560 120 L628 120" marker-end="url(#arr2)"/>
+<path class="ar-b" d="M830 120 L878 120" marker-end="url(#arr2)"/>
+<text class="ts" x="30" y="240">运行时：FastAPI 挂 /assets 静态目录 + react_app() 兜底路由（SPA history 路由全部回退 index.html）；</text>
+<text class="ts" x="30" y="260">mount_burr_ui() 挂到子路径时注入 window.__BURR_BASE_PATH__，前端据此拼接 API 前缀 —— 这是 SPA 嵌入任意路径的标准解法。</text>
+<text class="ts" x="30" y="300">CI：ui.yml 在 Node 22 上跑 UI 测试；发布前 react-syntax-highlighter 等依赖的安全升级由 dependabot 维护。</text>
+</svg>
+<figcaption><b>图 10-2 · UI 构建发布链路</b> —— 源码工程与 Python 包物理分离，构建产物在打包阶段汇入 wheel；运行时由 FastAPI 以 SPA 模式托管。</figcaption>
+</figure>
+
+<h2>10.5 demo 数据与内嵌示例</h2>
+<div class="card">
+<p>UI 首次体验需要数据，Burr 的做法是「把示例的运行结果也打包」：</p>
+<ul>
+<li><span class="path">burr/tracking/server/demo_data/</span> 内置 4 个预生成项目：<code>demo_counter / demo_chatbot / demo_chatbot_with_traces / demo_conversational-rag</code>——每个都是标准三件套（graph.json/metadata.json/log.jsonl），<b>与真实运行产物格式完全一致</b>；</li>
+<li><code>burr-demo</code> 命令把它们拷入 <code>~/.burr</code> 后启动服务；</li>
+<li>server 还挂了 demo 路由（<code>/api/v0/{chatbot,email_assistant,streaming_chatbot,deep_researcher,counter}</code>），动态 import 包内 <span class="path">burr/examples/</span> 的五个示例应用，供 UI 的「演示」入口现场跑一个新应用。</li>
+</ul>
+<div class="tip"><b>源码学习技巧：</b>demo_data 是理解追踪数据格式的最佳样本——直接 <code>cat ~/.burr/demo_counter/*/log.jsonl</code> 对照 09 篇的事件模型，十分钟读懂全部字段。</div>
+</div>
+
+<h2>10.6 前后端交互时序</h2>
+<figure>
+<svg viewBox="0 0 1060 300" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<rect class="bx b-red" x="30" y="30" width="160" height="40" rx="8" style="fill:#fef2f2" style="stroke:#ef4444"/><text class="t" x="62" y="55" font-weight="700">浏览器</text>
+<rect class="bx b-blue" x="330" y="30" width="200" height="40" rx="8" style="fill:#eff6ff" style="stroke:#3b82f6"/><text class="t" x="356" y="55" font-weight="700">React 组件</text>
+<rect class="bx b-purple" x="640" y="30" width="180" height="40" rx="8" style="fill:#faf5ff" style="stroke:#a855f7"/><text class="t" x="662" y="55" font-weight="700">src/api 客户端</text>
+<rect class="bx b-green" x="890" y="30" width="140" height="40" rx="8" style="fill:#f0fdf4" style="stroke:#22c55e"/><text class="t" x="920" y="55" font-weight="700">FastAPI</text>
+<line x1="110" y1="70" x2="110" y2="270" style="stroke:#cbd5e1"/><line x1="430" y1="70" x2="430" y2="270" style="stroke:#cbd5e1"/>
+<line x1="730" y1="70" x2="730" y2="270" style="stroke:#cbd5e1"/><line x1="960" y1="70" x2="960" y2="270" style="stroke:#cbd5e1"/>
+<path class="ar-b" d="M430 100 L728 100" marker-end="url(#arr3)"/><text class="tc" x="470" y="92">useQuery(['applicationLogs'], () =&gt; DefaultService.getProjectAppPartitionAppsApi…)</text>
+<path class="ar-b" d="M730 130 L958 130" marker-end="url(#arr3)"/><text class="tc" x="760" y="122">GET /api/v0/{project}/{app}/{partition}/apps</text>
+<path class="ar" d="M960 165 L732 165" style="stroke-dasharray:4 3"/><text class="tc" x="770" y="157">ApplicationLogs（全部 step + span + 流事件）</text>
+<path class="ar" d="M730 195 L432 195" style="stroke-dasharray:4 3"/><text class="tc" x="500" y="187">react-query 缓存 + refetchInterval 轮询（进行中的应用自动刷新）</text>
+<rect x="120" y="215" width="600" height="44" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="ts" x="136" y="233">组件按需切片：GraphView 取图+最新 action；StepList 取 steps；InsightsView 聚合 span 里的 token 属性；</text>
+<text class="ts" x="136" y="251">一次请求喂饱整页 —— 简单、可缓存，代价是单应用数据全量传输（大应用可优化为增量端点）。</text>
+</svg>
+<figcaption><b>图 10-3 · 前后端数据流</b> —— 单一「应用日志」端点 + react-query 轮询构成全部实时性；没有 WebSocket，简单可靠优先。</figcaption>
+</figure>
+
+<div class="tip"><b>本篇要点：</b>① UI 是独立 Vite 工程，构建产物在打包期汇入 wheel、由 FastAPI 托管；② API 客户端由 OpenAPI 生成，契约零漂移；③ 核心页面七个视图围绕「一次全量日志请求 + 轮询」运转；④ demo 数据与真实数据同格式——学数据模型先看 demo_data。</div>
+
+<div class="pager"><a href="09-tracking.html">← 09 追踪系统</a><a href="11-integrations.html">下一篇：11 集成生态 →</a></div>
+</main>
+<footer class="foot">Apache Burr 源码学习笔记 · 10 遥测 UI · 基于 v0.42.0</footer>
+</body>
+</html>

@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>12 · 端到端执行全景 — Apache Burr 源码剖析</title>
+<style>
+:root{
+  --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --line:#e2e8f0;
+  --blue:#2563eb; --blue-bg:#eff6ff; --green:#16a34a; --green-bg:#f0fdf4;
+  --amber:#d97706; --amber-bg:#fffbeb; --purple:#9333ea; --purple-bg:#faf5ff;
+  --red:#dc2626; --red-bg:#fef2f2; --code-bg:#0f172a;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.75}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.94);backdrop-filter:blur(6px);color:#e2e8f0;display:flex;gap:12px;align-items:center;padding:10px 24px;font-size:13px;flex-wrap:wrap}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:3px 8px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav .brand{font-weight:700;color:#fff;font-size:14px;letter-spacing:.5px;margin-right:8px}
+.topnav .brand span{color:#60a5fa}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+.hero{background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:40px 0;margin-bottom:28px}
+.hero h1{margin:0 0 8px;font-size:28px}
+.hero p{margin:0;color:#cbd5e1;font-size:14.5px;max-width:880px}
+main{padding-bottom:64px}
+h2{font-size:23px;border-left:5px solid var(--blue);padding-left:12px;margin:42px 0 10px}
+h3{font-size:18px;margin:26px 0 6px;color:#1d4ed8}
+h4{font-size:15.5px;margin:18px 0 6px}
+p,li{color:#334155;font-size:14.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:16px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.grid{display:grid;gap:16px}
+.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:860px){.grid.c2,.grid.c3{grid-template-columns:1fr}}
+figure{margin:20px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;overflow-x:auto}
+figcaption{font-size:13px;color:var(--muted);text-align:center;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+figcaption b{color:#1d4ed8}
+pre{background:var(--code-bg);color:#e2e8f0;padding:16px 18px;border-radius:10px;overflow-x:auto;font-size:12.8px;line-height:1.65}
+code{font-family:"SF Mono",Menlo,Consolas,"Courier New",monospace}
+p code,li code,td code,h3 code,h4 code,figcaption code{background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:5px;font-size:.9em}
+pre code{background:none;color:inherit;padding:0}
+.c-key{color:#7dd3fc}.c-str{color:#fbbf24}.c-com{color:#94a3b8;font-style:italic}.c-fn{color:#a5b4fc}.c-num{color:#f472b6}.c-dec{color:#fde047}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:#fff}
+th{background:#1e293b;color:#fff;text-align:left;padding:8px 12px;font-weight:600}
+td{border:1px solid var(--line);padding:7px 12px;vertical-align:top}
+tr:nth-child(even) td{background:#f8fafc}
+.path{font-family:monospace;background:#f1f5f9;border:1px solid var(--line);padding:1px 7px;border-radius:5px;font-size:12.5px;color:#0f766e;word-break:break-all}
+.note{border-left:4px solid var(--amber);background:var(--amber-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.note b{color:#92400e}
+.tip{border-left:4px solid var(--green);background:var(--green-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.tip b{color:#166534}
+.warn{border-left:4px solid var(--red);background:var(--red-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.pager{display:flex;justify-content:space-between;margin:40px 0 8px}
+.pager a{background:#fff;border:1px solid var(--line);padding:10px 18px;border-radius:10px;text-decoration:none;color:var(--ink);font-size:14px}
+.pager a:hover{border-color:var(--blue);color:var(--blue)}
+footer.foot{text-align:center;color:#94a3b8;font-size:12.5px;padding:24px 0 40px}
+svg text{font-family:inherit}
+svg .t{fill:#1e293b;font-size:13px}
+svg .tb{fill:#fff;font-weight:700;font-size:13px}
+svg .ts{fill:#475569;font-size:11px}
+svg .tt{fill:#0f172a;font-weight:700;font-size:15px}
+svg .tc{fill:#64748b;font-size:11px;font-family:Menlo,monospace}
+svg .lbl{fill:#334155;font-size:11.5px}
+svg .ar{stroke:#64748b;stroke-width:1.5;fill:none}
+svg .ar-b{stroke:#2563eb;stroke-width:1.8;fill:none}
+svg .ar-dash{stroke:#94a3b8;stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+svg .zone{fill:#f8fafc;stroke:#cbd5e1;stroke-dasharray:6 4}
+svg .bx{stroke-width:1.5}
+svg .b-blue{fill:#eff6ff;stroke:#3b82f6}
+svg .b-blue-d{fill:#dbeafe;stroke:#2563eb}
+svg .b-green{fill:#f0fdf4;stroke:#22c55e}
+svg .b-green-d{fill:#dcfce7;stroke:#16a34a}
+svg .b-amber{fill:#fffbeb;stroke:#f59e0b}
+svg .b-purple{fill:#faf5ff;stroke:#a855f7}
+svg .b-red{fill:#fef2f2;stroke:#ef4444}
+svg .b-slate{fill:#f1f5f9;stroke:#94a3b8}
+svg .b-dark{fill:#1e293b;stroke:#0f172a}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">Apache&nbsp;Burr<span>·源码深度剖析</span></span>
+  <a href="index.html">总导航</a><a href="01-overview.html">项目全景</a>
+  <a href="02-core-state.html">State</a><a href="03-core-action.html">Action</a>
+  <a href="04-core-application.html">运行时</a><a href="05-graph-builder.html">Graph/Builder</a>
+  <a href="06-lifecycle-hooks.html">Hooks/Tracing</a><a href="07-persistence.html">持久化</a>
+  <a href="08-parallelism.html">并行</a><a href="09-tracking.html">追踪系统</a>
+  <a href="10-ui-frontend.html">遥测 UI</a><a href="11-integrations.html">集成生态</a>
+  <a href="12-execution-flow.html"><b>端到端全景</b></a>
+</nav>
+
+<header class="hero"><div class="wrap">
+  <h1>12 · 端到端执行全景：从一个 30 行示例走通全部机制</h1>
+  <p>本篇把前 11 篇的所有知识串成一条线：以 <span class="path">examples/hello-world-counter/application.py</span> 为主角逐行走读，再以多模态聊天机器人展示复杂形态，最后给出覆盖全部组件的端到端时序总结。</p>
+</div></header>
+
+<main class="wrap">
+
+<h2>12.1 主角：hello-world-counter（全文仅 30 行有效代码）</h2>
+<div class="card">
+<pre><code><span class="c-key">from</span> burr.core <span class="c-key">import</span> Application, Result, State, default, expr
+<span class="c-key">from</span> burr.core.action <span class="c-key">import</span> action
+<span class="c-key">from</span> burr.core.persistence <span class="c-key">import</span> SQLLitePersister
+
+<span class="c-dec">@action</span>(reads=[<span class="c-str">"counter"</span>], writes=[<span class="c-str">"counter"</span>])        <span class="c-com"># ← 03 篇：IO 契约声明</span>
+<span class="c-key">def</span> <span class="c-fn">counter</span>(state: State) -&gt; State:
+    result = {<span class="c-str">"counter"</span>: state[<span class="c-str">"counter"</span>] + 1}
+    <span class="c-key">print</span>(<span class="c-str">f"counted to {result['counter']}"</span>)
+    <span class="c-key">return</span> state.update(**result)                    <span class="c-com"># ← 02 篇：不可变更新 SetFields</span>
+
+<span class="c-key">def</span> <span class="c-fn">application</span>(count_up_to=10, partition_key=<span class="c-str">"demo-user"</span>, app_id=None, ...):
+    persister = SQLLitePersister(<span class="c-str">"demos.db"</span>, <span class="c-str">"counter"</span>,
+                                 connect_kwargs={<span class="c-str">"check_same_thread"</span>: <span class="c-key">False</span>})  <span class="c-com"># ← 07 篇</span>
+    persister.initialize()
+    <span class="c-key">return</span> (
+        ApplicationBuilder()
+        .with_actions(counter=counter, result=Result(<span class="c-str">"counter"</span>))   <span class="c-com"># 内置动作</span>
+        .with_transitions(
+            (<span class="c-str">"counter"</span>, <span class="c-str">"counter"</span>, expr(<span class="c-str">f"counter &lt; {count_up_to}"</span>)), <span class="c-com"># 自环！</span>
+            (<span class="c-str">"counter"</span>, <span class="c-str">"result"</span>, default))              <span class="c-com"># ← 03 篇条件 + 05 篇边</span>
+        .with_identifiers(partition_key=partition_key, app_id=app_id)
+        .initialize_from(persister, resume_at_next_action=<span class="c-key">True</span>,
+                         default_state={<span class="c-str">"counter"</span>: 0},
+                         default_entrypoint=<span class="c-str">"counter"</span>)    <span class="c-com"># ← 07 篇断点恢复</span>
+        .with_state_persister(persister)
+        .with_tracker(project=<span class="c-str">"demo_counter"</span>)              <span class="c-com"># ← 09 篇 LocalTrackingClient</span>
+        .build())                                          <span class="c-com"># ← 05 篇装配流水线</span>
+
+<span class="c-key">if</span> __name__ == <span class="c-str">"__main__"</span>:
+    app = application(app_id=<span class="c-str">"a7c8e525-..."</span>)   <span class="c-com"># 固定 app_id → 可断点恢复</span>
+    action, result, state = app.run(halt_after=[<span class="c-str">"result"</span>])  <span class="c-com"># ← 04 篇执行循环</span>
+    app.visualize(<span class="c-str">"statemachine.png"</span>, include_conditions=<span class="c-key">True</span>)</code></pre>
+</div>
+
+<h2>12.2 这 30 行代码构建出的状态机</h2>
+<figure>
+<svg viewBox="0 0 1060 340" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#64748b"/></marker></defs>
+<rect class="bx b-green" x="120" y="120" width="220" height="80" rx="12" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tt" x="170" y="150">counter</text>
+<text class="tc" x="140" y="176">reads:[counter] writes:[counter]</text>
+<rect class="bx b-blue" x="660" y="120" width="220" height="80" rx="12" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="tt" x="730" y="150">result</text>
+<text class="tc" x="680" y="176">Result("counter") — 读字段进结果</text>
+<circle cx="60" cy="160" r="16" style="fill:#dbeafe" style="stroke:#2563eb"/><text class="t" x="52" y="166" font-weight="700">▶</text>
+<path class="ar" d="M76 160 L118 160" marker-end="url(#arr)"/>
+<text class="tc" x="70" y="146">entrypoint</text>
+<path class="ar-b" d="M340 145 C 420 90, 480 90, 520 145 C 480 196, 420 196, 342 168" marker-end="url(#arr)" style="fill:none"/>
+<text class="tc" x="380" y="70">counter → counter（自环）</text>
+<text class="tc" x="380" y="88">cond: expr("counter &lt; 10")</text>
+<path class="ar-b" d="M340 190 C 420 240, 500 240, 658 172" marker-end="url(#arr)"/>
+<text class="tc" x="420" y="250">cond: default（恒真兜底）</text>
+<text class="ts" x="120" y="300">一次 run(halt_after=["result"]) 的轨迹：counter×10（每轮 state["counter"]+1）→ 条件不满足走 default → result 读出 counter 终值。</text>
+<text class="ts" x="120" y="320">若有持久化：中途杀进程，重启后 build() 会把 __PRIOR_STEP 恢复到最近一次完成的 counter，继续数下去。</text>
+</svg>
+<figcaption><b>图 12-1 · counter 状态机</b> —— 自环 + 条件出口 + 兜底边的最小完整案例；这正是 UI GraphView 渲染的图形（demo_counter 的数据就来自它）。</figcaption>
+</figure>
+
+<h2>12.3 端到端时序总图（前 11 篇知识收口）</h2>
+<figure>
+<svg viewBox="0 0 1060 760" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker><marker id="arr2g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#16a34a"/></marker></defs>
+<rect class="bx b-blue-d" x="20" y="20" width="290" height="700" rx="14" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="tt" x="40" y="48">用户进程</text>
+<text class="tc" x="40" y="76" font-weight="700">T0 构建阶段（05 篇）</text>
+<text class="ts" x="40" y="98">ApplicationBuilder 链式收集</text>
+<text class="ts" x="40" y="116">build(): persister→PersisterHook；</text>
+<text class="ts" x="40" y="134">load 断点 → 恢复 PRIOR_STEP；</text>
+<text class="ts" x="40" y="152">new Application + post_create 钩子</text>
+<text class="tc" x="40" y="186" font-weight="700">T1 执行阶段（04 篇）</text>
+<text class="ts" x="40" y="208">app.run(halt_after=["result"])</text>
+<text class="ts" x="40" y="226">→ iterate 循环 → step:</text>
+<text class="ts" x="40" y="250">① get_next_node（条件边）</text>
+<text class="ts" x="40" y="268">② _process_inputs（注入 __tracer/__context）</text>
+<text class="ts" x="40" y="286">③ pre_run_step 钩子</text>
+<text class="ts" x="40" y="310">④ counter(state) → state.update</text>
+<text class="ts" x="40" y="328">   （02 篇 SetFields/写校验）</text>
+<text class="ts" x="40" y="350">⑤ 盖 __PRIOR_STEP/自增 __SEQUENCE_ID</text>
+<text class="ts" x="40" y="368">⑥ _set_state 提交</text>
+<text class="ts" x="40" y="390">⑦ finally: post_run_step 钩子</text>
+<text class="ts" x="40" y="414">halt 判定 → 循环 ×10 → result 步</text>
+<text class="ts" x="40" y="438">→ 返回 (action,result,state)</text>
+<text class="tc" x="40" y="472" font-weight="700">钩子双雄（06 篇）</text>
+<text class="ts" x="40" y="494">LocalTrackingClient：</text>
+<text class="ts" x="40" y="512">create→写 graph/metadata；</text>
+<text class="ts" x="40" y="530">pre/post step→log.jsonl 追加</text>
+<text class="ts" x="40" y="554">PersisterHook：</text>
+<text class="ts" x="40" y="572">每步 save(seq, pos, state,</text>
+<text class="ts" x="40" y="590">completed/failed) → demos.db</text>
+<text class="ts" x="40" y="620">（若 use_otel_tracing 或 Langfuse：</text>
+<text class="ts" x="40" y="638">同一批事件再镜像到 OTel/远端</text>
+<text class="ts" x="40" y="656">—— 11 篇）</text>
+<text class="ts" x="40" y="690">整个过程中你的 action 只写业务</text>
+<text class="ts" x="40" y="706">代码——观测全部是旁路</text>
+<rect class="bx b-amber" x="350" y="20" width="280" height="700" rx="14" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="tt" x="370" y="48">本机数据层（09 篇）</text>
+<text class="ts" x="370" y="76">~/.burr/demo_counter/</text>
+<text class="ts" x="370" y="94">├── app-a7c8e525…/graph.json（含源码）</text>
+<text class="ts" x="370" y="112">├── metadata.json</text>
+<text class="ts" x="370" y="130">└── log.jsonl</text>
+<text class="ts" x="384" y="152">begin_entry(seq=1,action=counter)</text>
+<text class="ts" x="384" y="170">end_entry(state={counter:1},…)</text>
+<text class="ts" x="384" y="188">begin/end_entry ×10 …</text>
+<text class="ts" x="384" y="206">begin_entry(result)…end_entry</text>
+<text class="ts" x="370" y="238">demos.db（SQLite）</text>
+<text class="ts" x="384" y="260">seq=1..11 各一行快照</text>
+<text class="ts" x="384" y="278">position=counter…/result</text>
+<text class="ts" x="384" y="296">status=completed</text>
+<text class="ts" x="370" y="330">写入方式：客户端钩子里直接</text>
+<text class="ts" x="370" y="348">open(append) + jsonl 追加 ——</text>
+<text class="ts" x="370" y="366">没有网络、没有队列、没有中间件</text>
+<text class="ts" x="370" y="400">崩溃安全：每步一个 commit 点；</text>
+<text class="ts" x="370" y="418">失败步标 failed；children.jsonl</text>
+<text class="ts" x="370" y="436">仅在 fork/spawn 时出现</text>
+<text class="ts" x="370" y="470">Serde：counter 是 int 原样 JSON；</text>
+<text class="ts" x="370" y="488">若 state 有 DataFrame →</text>
+<text class="ts" x="370" y="506">{"__burr_serde__":…} 标记（02 篇）</text>
+<text class="ts" x="370" y="540">注释文件 annotations.jsonl</text>
+<text class="ts" x="370" y="558">由服务端在 UI 标注时写入</text>
+<rect class="bx b-green" x="670" y="20" width="370" height="340" rx="14" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tt" x="690" y="48">追踪服务进程（09/10 篇）</text>
+<text class="ts" x="690" y="76">burr 命令 → uvicorn :7241</text>
+<text class="tc" x="690" y="104">GET /api/v0/projects</text>
+<text class="ts" x="690" y="122">→ LocalBackend 列 ~/.burr 子目录</text>
+<text class="tc" x="690" y="150">GET /api/v0/demo_counter/null/</text>
+<text class="tc" x="690" y="168">  app-a7c8e525…/apps</text>
+<text class="ts" x="690" y="186">→ 逐行读 log.jsonl → pydantic 模型</text>
+<text class="ts" x="690" y="204">→ ApplicationLogs JSON</text>
+<text class="ts" x="690" y="232">SPA 托管：react_app() 兜底路由</text>
+<text class="ts" x="690" y="250">返回打包的 index.html/assets</text>
+<text class="ts" x="690" y="278">（也可以 mount_burr_ui 挂进</text>
+<text class="ts" x="690" y="296">你自己的 FastAPI 应用）</text>
+<text class="ts" x="690" y="324">与用户进程唯一的耦合 = 同一目录</text>
+<rect class="bx b-red" x="670" y="390" width="370" height="330" rx="14" style="fill:#fef2f2" style="stroke:#ef4444"/>
+<text class="tt" x="690" y="418">浏览器（10 篇）</text>
+<text class="ts" x="690" y="446">项目列表 → demo_counter →</text>
+<text class="ts" x="690" y="464">app-a7c8e525… → AppView：</text>
+<text class="ts" x="690" y="492">· GraphView：两节点图，</text>
+<text class="ts" x="690" y="510">  高亮游标当前所在节点</text>
+<text class="ts" x="690" y="534">· StepList：11 步时间线，</text>
+<text class="ts" x="690" y="552">  点开任一步看 inputs/state/result</text>
+<text class="ts" x="690" y="576">· DataView：counter 从 0→10 全程</text>
+<text class="ts" x="690" y="602">· InsightsView：无 LLM 调用则空；</text>
+<text class="ts" x="690" y="620">  换成 chatbot 则逐 span 统计 token 成本</text>
+<text class="ts" x="690" y="646">· Annotations：给某一步写注释</text>
+<text class="ts" x="690" y="670">· Reproduce：生成复现脚本</text>
+<path class="ar-b" d="M310 180 L348 180" marker-end="url(#arr2)"/>
+<text class="tc" x="306" y="168" style="fill:#2563eb">写</text>
+<path class="ar-b" d="M310 420 L348 420" marker-end="url(#arr2)"/>
+<text class="tc" x="300" y="408" style="fill:#2563eb">写</text>
+<path class="ar-b" d="M630 120 L668 120" marker-end="url(#arr2g)"/>
+<text class="tc" x="620" y="108" style="fill:#16a34a">读</text>
+<path class="ar-b" d="M855 360 L855 388" marker-end="url(#arr2g)"/>
+<text class="tc" x="862" y="378" style="fill:#16a34a">REST</text>
+</svg>
+<figcaption><b>图 12-2 · 端到端时序总图</b> —— 从 build 到浏览器呈现，全部组件各就各位。三列正好对应 index.html 物理架构图的三个区块：用户进程 / 数据层 / 服务与浏览器。</figcaption>
+</figure>
+
+<h2>12.4 进阶形态：多模态聊天机器人怎么用上这些机制</h2>
+<div class="grid c2">
+<div class="card">
+<h4>代码里的高级模式（05 篇图 5-3 的实现）</h4>
+<ul>
+<li><b>bind 复用</b>：同一个 <code>chat_response</code> 动作绑定三种 prompt 上下文（image/code/answer），构建出三个图节点；</li>
+<li><b>条件扇出</b>：<code>decide_mode</code> 用 LLM 输出 mode 字段，四条 <code>when(mode=...)</code> 边按声明顺序路由；</li>
+<li><b>流式回答</b>：response 相关动作用 <code>@streaming_action</code>，FastAPI 侧 <code>astream_result</code> 把块直接转发给前端 SSE（examples/streaming-fastapi）；</li>
+<li><b>追踪即持久化</b>：<code>initialize_from(tracker, ...)</code> 直接拿 LocalTrackingClient 当初始化器——聊天历史按 app_id 续接；</li>
+<li><b>span 标注</b>：动作内声明 <code>__tracer</code>，把「LLM 调用」「审核调用」开成子 span，UI 时间线层次分明。</li>
+</ul>
+</div>
+<div class="card">
+<h4>生产化路径（对应 examples/）</h4>
+<table>
+<tr><th>需求</th><th>示例/机制</th></tr>
+<tr><td>Web 服务接入</td><td><code>streaming-fastapi</code> / <code>mount_burr_ui</code></td></tr>
+<tr><td>多 Agent 协作</td><td><code>multi-agent-collaboration</code> + spawn 血缘</td></tr>
+<tr><td>RAG</td><td><code>conversational-rag</code> / <code>adaptive-crag</code></td></tr>
+<tr><td>工具调用</td><td><code>tool-calling</code></td></tr>
+<tr><td>人工介入</td><td><code>halt_before</code> + update_state 外部注入</td></tr>
+<tr><td>测试</td><td><code>burr-test-case</code> 把轨迹固化为 pytest</td></tr>
+<tr><td>分布式并行</td><td><code>RayExecutor</code> + 级联</td></tr>
+</table>
+</div>
+</div>
+
+<h2>12.5 全系列知识地图（收尾）</h2>
+<figure>
+<svg viewBox="0 0 1060 520" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<rect class="bx b-blue-d" x="380" y="20" width="300" height="90" rx="12" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="tt" x="400" y="48" style="fill:#1e3a8a">核心引擎（02/03/04/05 篇）</text>
+<text class="ts" x="400" y="72">State（不可变+Delta+serde）· Action（二分+流式+条件）</text>
+<text class="ts" x="400" y="90">Application（执行循环+游标）· Graph（条件路由）</text>
+<rect class="bx b-green" x="40" y="180" width="280" height="90" rx="12" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tt" x="60" y="208">扩展点（06 篇）</text>
+<text class="ts" x="60" y="232">11 类 Lifecycle Hook · MRO 实现即注册</text>
+<text class="ts" x="60" y="250">span 树 + contextvar 触达</text>
+<rect class="bx b-amber" x="380" y="180" width="300" height="90" rx="12" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="tt" x="400" y="208">能力层（07/08 篇）</text>
+<text class="ts" x="400" y="232">持久化（快照链+断点恢复+fork）</text>
+<text class="ts" x="400" y="250">并行（子应用 map-reduce + 级联）</text>
+<rect class="bx b-purple" x="740" y="180" width="280" height="90" rx="12" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="tt" x="760" y="208">观测产品（09/10 篇）</text>
+<text class="ts" x="760" y="232">JSONL 落盘 → FastAPI → React UI</text>
+<text class="ts" x="760" y="250">（S3/SQS 生产拓扑）</text>
+<rect class="bx b-slate" x="210" y="360" width="640" height="90" rx="12" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="tt" x="230" y="388">集成生态（11 篇）</text>
+<text class="ts" x="230" y="412">hamilton / bedrock / haystack / pydantic / opentelemetry / langfuse</text>
+<text class="ts" x="230" y="430">streamlit / notebook / ray / serde 插件 / persisters —— 全部懒加载、全部可插拔</text>
+<path class="ar-b" d="M230 178 L430 112" marker-end="url(#arr3)"/>
+<path class="ar-b" d="M530 178 L530 112" marker-end="url(#arr3)"/>
+<path class="ar-b" d="M830 178 L640 112" marker-end="url(#arr3)"/>
+<path class="ar-b" d="M400 268 L420 358" marker-end="url(#arr3)"/>
+<path class="ar-b" d="M660 268 L600 358" marker-end="url(#arr3)"/>
+<path class="ar-b" d="M860 270 L780 358" marker-end="url(#arr3)"/>
+<text class="ts" x="40" y="500">一句话总结：Burr = 不可变状态驱动的状态机引擎 + 钩子化的观测总线 + 文件即数据库的可视化产品。三条线各自简单，组合起来构成一个完整的 AI 应用开发闭环。</text>
+</svg>
+<figcaption><b>图 12-3 · 全系列知识地图</b> —— 13 篇文档的结构收敛于此。建议合上文档后，独立默画出这张图，检验是否真正吃透。</figcaption>
+</figure>
+
+<h2>12.6 动手验证清单</h2>
+<div class="card">
+<ol>
+<li><code>pip install "apache-burr[start]" && burr-demo</code> —— 打开 <code>http://localhost:7241</code> 对照 10 篇找视图；</li>
+<li><code>python examples/hello-world-counter/application.py</code> —— 跑两次（同 app_id），在 UI 看断点续跑（07 篇）；</li>
+<li><code>cat ~/.burr/demo_counter/*/log.jsonl</code> —— 对照 09 篇事件模型逐行读懂；</li>
+<li>给 counter 加一个 <code>PostRunStepHook</code> 打印耗时（06 篇），验证钩子时机；</li>
+<li>把 <code>expr(f"counter &lt; {n}")</code> 改成 <code>safe_expr("counter &lt; 10")</code>，再试试给 safe_expr 喂 <code>"().__class__"</code> 观察拦截（03 篇）；</li>
+<li>跑 <code>examples/multi-modal-chatbot</code>，在 UI 里看 bind 出的三节点与 span 树（11 篇）。</li>
+</ol>
+</div>
+
+<div class="tip"><b>结语：</b>读源码的终点不是「知道每个函数」，而是能在脑中运行整个系统。如果你能不看文档回答——「halt_before 命中时 stream_result 为什么返回空容器」「failed 状态为何从 entrypoint 重试」「children.jsonl 为什么写在父目录」——那这套 13 篇的剖析就完成它的使命了。</div>
+
+<div class="pager"><a href="11-integrations.html">← 11 集成生态</a><a href="index.html">返回总导航 ↑</a></div>
+</main>
+<footer class="foot">Apache Burr 源码学习笔记 · 12 端到端全景（完）· 基于 v0.42.0</footer>
+</body>
+</html>

@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>05 · 会话持久化与压缩 — Pi 源码深度剖析</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<nav class="topnav"><div class="topnav-inner">
+  <a class="brand" href="./index.html">pi deep-dive</a>
+  <a class="pg" href="./index.html">总览</a>
+  <a class="pg" href="./01-architecture.html">01 物理架构</a>
+  <a class="pg" href="./02-ai.html">02 pi-ai</a>
+  <a class="pg" href="./03-agent.html">03 agent-core</a>
+  <a class="pg" href="./04-coding-agent.html">04 coding-agent</a>
+  <a class="pg cur" href="./05-session-compaction.html">05 会话与压缩</a>
+  <a class="pg" href="./06-extensions.html">06 扩展系统</a>
+  <a class="pg" href="./07-tui.html">07 TUI</a>
+  <a class="pg" href="./08-rpc.html">08 RPC</a>
+  <a class="pg" href="./09-supply-chain.html">09 构建发布</a>
+</div></nav>
+
+<main>
+<div class="hero">
+  <div class="kicker">第 05 篇</div>
+  <h1>会话持久化与上下文压缩</h1>
+  <div class="sub">会话文件就是日志：首行 header，之后每行一个带 id/parentId 的 Entry，只追加、不改写。分支是移动指针，压缩是追加一条 Entry。本篇拆 JSONL v3 格式、branch/resume 语义，以及 compaction 的两个算法问题：<strong>何时压</strong>（阈值公式）与<strong>在哪切</strong>（切点搜索）。</div>
+</div>
+
+<h2><span class="no">1</span>磁盘上的会话：JSONL v3</h2>
+<p>每个会话是 <code>~/.pi/agent/sessions/--&lt;cwd 转义&gt;--/session-&lt;id&gt;.jsonl</code> 下的一个文件（cwd 里的 <code>/</code> 转成 <code>-</code>，因此会话按项目天然分目录）。文件第一行是 header，之后每行一个 Entry。Entry 类型的联合定义如下：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/coding-agent/src/core/session-manager.ts</span><span class="cb-note">L46-56 + L69-153（节选）</span></div>
+<pre><code>export interface SessionEntryBase {
+  type: string;
+  id: string;                 // 树节点 id
+  parentId: string | null;    // 树边 —— 整个会话是一棵由这两根线织成的树
+  timestamp: string;
+}
+
+export interface SessionMessageEntry extends SessionEntryBase {
+  type: "message";
+  message: AgentMessage;
+}
+
+export interface CompactionEntry&lt;T = unknown&gt; extends SessionEntryBase {
+  type: "compaction";
+  summary: string;              // LLM 生成的结构化摘要
+  firstKeptEntryId: string;     // 摘要覆盖到哪里：构建上下文时从这里保留原文
+  tokensBefore: number;
+  details?: T;                  // 扩展私有数据（不进上下文）
+  usage?: Usage;                // 生成摘要这一次 LLM 调用的花费
+  fromHook?: boolean;           // 是否由扩展接管生成
+}
+
+export interface CustomEntry&lt;T = unknown&gt; extends SessionEntryBase {
+  type: "custom";
+  customType: string;
+  data?: T;
+  // Does NOT participate in LLM context (ignored by buildSessionContext).
+}
+
+export interface CustomMessageEntry&lt;T = unknown&gt; extends SessionEntryBase {
+  type: "custom_message";       // 与 custom 相反：这个会进 LLM 上下文
+  customType: string;
+  content: string | (TextContent | ImageContent)[];
+  display: boolean;             // 控制是否在 TUI 里渲染
+}
+
+export type SessionEntry =
+  | SessionMessageEntry | ThinkingLevelChangeEntry | ModelChangeEntry
+  | CompactionEntry | BranchSummaryEntry | CustomEntry
+  | CustomMessageEntry | LabelEntry | SessionInfoEntry;</code></pre>
+</div>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 330" width="980" role="img" aria-label="JSONL 文件结构">
+  <rect x="40" y="24" width="620" height="280" rx="8" fill="#fff" stroke="#98a1ad"></rect>
+  <text x="60" y="48" class="t-s t-b t-mono">session-a1b2.jsonl（每行一个 JSON 对象）</text>
+
+  <rect x="60" y="60" width="580" height="30" rx="4" class="n-disk"></rect>
+  <text x="72" y="80" class="t-xs t-mono">{"type":"session","version":3,"id":"a1b2","cwd":"/home/me/proj",…}</text>
+
+  <rect x="60" y="98" width="580" height="26" rx="4" class="n-agent"></rect>
+  <text x="72" y="115" class="t-xs t-mono">{"type":"message","id":"e1","parentId":null,"message":{role:"user",…}}</text>
+  <rect x="60" y="130" width="580" height="26" rx="4" class="n-agent"></rect>
+  <text x="72" y="147" class="t-xs t-mono">{"type":"message","id":"e2","parentId":"e1","message":{role:"assistant",…}}</text>
+  <rect x="60" y="162" width="580" height="26" rx="4" class="n-agent"></rect>
+  <text x="72" y="179" class="t-xs t-mono">{"type":"message","id":"e3","parentId":"e2","message":{role:"toolResult",…}}</text>
+  <rect x="60" y="194" width="580" height="26" rx="4" class="n-disk"></rect>
+  <text x="72" y="211" class="t-xs t-mono">{"type":"compaction","id":"e4","parentId":"e3","summary":"## Goal\n…","firstKeptEntryId":"e2"}</text>
+  <rect x="60" y="226" width="580" height="26" rx="4" class="n-ca"></rect>
+  <text x="72" y="243" class="t-xs t-mono">{"type":"custom","id":"e5","customType":"todo-list","data":{…}}  ← 不进上下文</text>
+  <rect x="60" y="258" width="580" height="26" rx="4" class="n-ca"></rect>
+  <text x="72" y="275" class="t-xs t-mono">{"type":"custom_message","id":"e6","content":"…","display":true}  ← 进上下文</text>
+
+  <rect x="700" y="60" width="260" height="224" rx="8" fill="#fbfbf9" stroke="#c9cdd4" stroke-dasharray="5 4"></rect>
+  <text x="716" y="84" class="t-s t-b">读取路径</text>
+  <text x="716" y="108" class="t-xs">list/listAll：只并行扫 header</text>
+  <text x="716" y="126" class="t-xs">（session picker 秒开）</text>
+  <text x="716" y="154" class="t-xs">buildSessionContext：沿</text>
+  <text x="716" y="172" class="t-xs">leaf → parent 链回溯，处理</text>
+  <text x="716" y="190" class="t-xs">compaction / branch_summary</text>
+  <text x="716" y="208" class="t-xs">折叠，产出 LLM 消息数组</text>
+  <text x="716" y="236" class="t-xs">v1/v2 文件读入时自动迁移，</text>
+  <text x="716" y="254" class="t-xs">写回即升级 v3</text>
+</svg>
+</div>
+<figcaption>图 5-1 · 会话文件结构。header 携带 version/cwd/parentSession；Entry 用 id/parentId 织成树；custom 与 custom_message 是一对"进不进上下文"相反的扩展出口。</figcaption>
+</figure>
+
+<h2><span class="no">2</span>append-only 树与 branch</h2>
+<p>分支的实现只有一行赋值——这是"事件溯源"式存储的红利：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/coding-agent/src/core/session-manager.ts</span><span class="cb-note">L1354-1374</span></div>
+<pre><code>/**
+ * Start a new branch from an earlier entry.
+ * Moves the leaf pointer to the specified entry. The next appendXXX() call
+ * will create a child of that entry, forming a new branch. Existing entries
+ * are not modified or deleted.
+ */
+branch(branchFromId: string): void {
+  if (!this.byId.has(branchFromId)) {
+    throw new Error(`Entry ${branchFromId} not found`);
+  }
+  this.leafId = branchFromId;        // 就这。历史原封不动。
+}
+
+resetLeaf(): void {
+  this.leafId = null;                // 下一跳直接成为新根（重写第一条消息用）
+}</code></pre>
+</div>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 420" width="980" role="img" aria-label="branch 前后">
+  <defs>
+    <marker id="ar-se1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <text x="40" y="30" class="zone-label">branch(e3) 之前：leaf = e5</text>
+  <g>
+    <rect x="50" y="50" width="90" height="34" rx="17" class="n-agent"></rect><text x="95" y="72" text-anchor="middle" class="t-xs t-b">e1 user</text>
+    <rect x="170" y="50" width="110" height="34" rx="17" class="n-agent"></rect><text x="225" y="72" text-anchor="middle" class="t-xs t-b">e2 assistant</text>
+    <rect x="310" y="50" width="110" height="34" rx="17" class="n-agent"></rect><text x="365" y="72" text-anchor="middle" class="t-xs t-b">e3 toolResult</text>
+    <rect x="450" y="50" width="110" height="34" rx="17" class="n-agent"></rect><text x="505" y="72" text-anchor="middle" class="t-xs t-b">e4 assistant</text>
+    <rect x="590" y="50" width="100" height="34" rx="17" class="n-hl"></rect><text x="640" y="72" text-anchor="middle" class="t-xs t-b">e5 user ●leaf</text>
+    <line x1="140" y1="67" x2="168" y2="67" class="edge" marker-end="url(#ar-se1)"></line>
+    <line x1="280" y1="67" x2="308" y2="67" class="edge" marker-end="url(#ar-se1)"></line>
+    <line x1="420" y1="67" x2="448" y2="67" class="edge" marker-end="url(#ar-se1)"></line>
+    <line x1="560" y1="67" x2="588" y2="67" class="edge" marker-end="url(#ar-se1)"></line>
+  </g>
+
+  <text x="40" y="130" class="zone-label">用户 /tree 选中 e3 → branch("e3") → leaf = e3（文件一字节未变）</text>
+  <g>
+    <rect x="50" y="150" width="90" height="34" rx="17" class="n-agent"></rect><text x="95" y="172" text-anchor="middle" class="t-xs t-b">e1</text>
+    <rect x="170" y="150" width="110" height="34" rx="17" class="n-agent"></rect><text x="225" y="172" text-anchor="middle" class="t-xs t-b">e2</text>
+    <rect x="310" y="150" width="110" height="34" rx="17" class="n-hl"></rect><text x="365" y="172" text-anchor="middle" class="t-xs t-b">e3 ●leaf</text>
+    <rect x="450" y="150" width="110" height="34" rx="17" class="n-agent" opacity="0.45"></rect><text x="505" y="172" text-anchor="middle" class="t-xs t-b">e4</text>
+    <rect x="590" y="150" width="100" height="34" rx="17" class="n-agent" opacity="0.45"></rect><text x="640" y="172" text-anchor="middle" class="t-xs t-b">e5</text>
+    <line x1="140" y1="167" x2="168" y2="167" class="edge" marker-end="url(#ar-se1)"></line>
+    <line x1="280" y1="167" x2="308" y2="167" class="edge" marker-end="url(#ar-se1)"></line>
+    <line x1="420" y1="167" x2="448" y2="167" class="edge edge-dash"></line>
+    <line x1="560" y1="167" x2="588" y2="167" class="edge edge-dash"></line>
+  </g>
+
+  <text x="40" y="230" class="zone-label">下一次 append：新 Entry e6 的 parentId = e3 —— 旧路径 e4→e5 仍在文件里，随时可以再 branch 回去</text>
+  <g>
+    <rect x="50" y="250" width="90" height="34" rx="17" class="n-agent"></rect><text x="95" y="272" text-anchor="middle" class="t-xs t-b">e1</text>
+    <rect x="170" y="250" width="110" height="34" rx="17" class="n-agent"></rect><text x="225" y="272" text-anchor="middle" class="t-xs t-b">e2</text>
+    <rect x="310" y="250" width="110" height="34" rx="17" class="n-agent"></rect><text x="365" y="272" text-anchor="middle" class="t-xs t-b">e3</text>
+    <rect x="310" y="320" width="110" height="34" rx="17" class="n-hl"></rect><text x="365" y="342" text-anchor="middle" class="t-xs t-b">e6 新分支 ●leaf</text>
+    <rect x="450" y="250" width="110" height="34" rx="17" class="n-agent" opacity="0.45"></rect><text x="505" y="272" text-anchor="middle" class="t-xs t-b">e4（旧）</text>
+    <rect x="590" y="250" width="100" height="34" rx="17" class="n-agent" opacity="0.45"></rect><text x="640" y="272" text-anchor="middle" class="t-xs t-b">e5（旧）</text>
+    <line x1="140" y1="267" x2="168" y2="267" class="edge" marker-end="url(#ar-se1)"></line>
+    <line x1="280" y1="267" x2="308" y2="267" class="edge" marker-end="url(#ar-se1)"></line>
+    <path d="M 365 284 L 365 318" class="edge" marker-end="url(#ar-se1)"></path>
+    <line x1="420" y1="267" x2="448" y2="267" class="edge edge-dash"></line>
+    <line x1="560" y1="267" x2="588" y2="267" class="edge edge-dash"></line>
+  </g>
+
+  <rect x="720" y="250" width="240" height="120" rx="8" fill="#fbfbf9" stroke="#c9cdd4" stroke-dasharray="5 4"></rect>
+  <text x="736" y="274" class="t-s t-b">变体：branchWithSummary</text>
+  <text x="736" y="296" class="t-xs">放弃长分支时，先给被放弃的</text>
+  <text x="736" y="314" class="t-xs">路径生成 branch_summary Entry，</text>
+  <text x="736" y="332" class="t-xs">新分支的上下文里能看到</text>
+  <text x="736" y="350" class="t-xs">"我们从哪里拐弯的"</text>
+</svg>
+</div>
+<figcaption>图 5-2 · branch 的完整语义：三次状态变化全部只动 leafId。旧路径不删不改，/tree 里永远可以切回去——这也是"resume 任意历史状态"能力的基础。</figcaption>
+</figure>
+
+<p><code>buildSessionContext()</code> 负责把树折叠回线性消息数组：从 leaf 沿 parentId 回溯到根，遇到 <code>compaction</code> Entry 时，把 <code>firstKeptEntryId</code> 之前的消息替换为摘要文本、之后的原文保留；遇到 <code>branch_summary</code> 则注入一条"user 消息"说明前情。header 之外的全部信息都在这一条回溯路径上。</p>
+
+<h2><span class="no">3</span>何时压缩：一个不等式</h2>
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/coding-agent/src/core/compaction/compaction.ts</span><span class="cb-note">L235-238 + L266-274</span></div>
+<pre><code>export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
+  if (!settings.enabled) return false;
+  return contextTokens &gt; contextWindow - settings.reserveTokens;
+}
+// 默认 reserveTokens = 16384，keepRecentTokens = 20000
+
+export function estimateTokens(message: AgentMessage): number {
+  ...
+  case "user": {
+    chars = estimateTextAndImageContentChars(...);   // 图片按 4800 字符估算
+    return Math.ceil(chars / 4);                     // chars/4 启发式，宁高勿低
+  }</code></pre>
+</div>
+
+<p>触发时机有三处，互相兜底：<strong>agent_end 之后</strong>（主路径，后台执行不阻塞 UI）、<strong>下一次 prompt 发送之前</strong>（补上次响应被 abort 漏掉的检查）、<strong>/compact 手动</strong>。此外扩展可通过 <code>session_before_compact</code> 事件整个接管压缩。0.84.x 期间还修了一个隐蔽 bug：provider 不回传流式 usage 时阈值判断拿不到 token 数导致压缩被跳过（#8328），以及大工具结果跨过阈值时先把结果发给了 provider 才压缩（#6879，改为在工具执行与下一次模型请求之间压缩）。</p>
+
+<h2><span class="no">4</span>在哪切：findCutPoint</h2>
+<p>摘要不能覆盖整个上下文——最近的若干 token 必须保留原文（模型需要确切的代码与错误信息）。于是问题变成：<strong>从后往前数 keepRecentTokens 个 token，然后找一个"合法切割点"</strong>。合法性的定义很有意思：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/coding-agent/src/core/compaction/compaction.ts</span><span class="cb-note">L323-336 + L415-460（节选）</span></div>
+<pre><code>function isTurnStartMessage(message: AgentMessage): boolean {
+  switch (message.role) {
+    case "user":
+    case "bashExecution":
+    case "custom":
+    case "branchSummary":
+    case "compactionSummary":
+      return true;
+    case "assistant":
+    case "toolResult":
+      return false;              // assistant/toolResult 不能开启新轮
+  }
+}
+
+function findValidCutPoints(entries, startIndex, endIndex): number[] {
+  // Never cut at tool results (they must follow their tool call).
+  // When we cut at an assistant message with tool calls, its tool results
+  // follow it and will be kept.
+  ...
+}
+
+export function findCutPoint(entries, startIndex, endIndex, keepRecentTokens): CutPointResult {
+  const cutPoints = findValidCutPoints(entries, startIndex, endIndex);
+  if (cutPoints.length === 0) {
+    return { firstKeptEntryIndex: startIndex, turnStartIndex: -1, isSplitTurn: false };
+  }
+
+  // Walk backwards from newest, accumulating estimated message sizes
+  let accumulatedTokens = 0;
+  let cutIndex = cutPoints[0];
+
+  for (let i = endIndex - 1; i &gt;= startIndex; i--) {
+    const messageTokens = sessionEntryToContextMessages(entries[i])
+      .reduce((sum, m) =&gt; sum + estimateTokens(m), 0);
+    if (messageTokens === 0) continue;
+    accumulatedTokens += messageTokens;
+
+    if (accumulatedTokens &gt;= keepRecentTokens) {
+      // Find the closest valid cut point at or after this entry
+      for (let c = 0; c &lt; cutPoints.length; c++) {
+        if (cutPoints[c] &gt;= i) { cutIndex = cutPoints[c]; break; }
+      }
+      break;
+    }
+  }
+  ...  // 随后再向前吞并相邻的"不可见元数据 Entry"，并判定 split-turn
+}</code></pre>
+</div>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 400" width="980" role="img" aria-label="切点算法">
+  <defs>
+    <marker id="ar-se2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <!-- 消息序列 -->
+  <text x="40" y="30" class="zone-label">上下文条目序列（老 → 新）</text>
+
+  <rect x="50" y="46" width="80" height="40" rx="5" class="n-warn"></rect><text x="90" y="70" text-anchor="middle" class="t-xs">u1 摘要区</text>
+  <rect x="140" y="46" width="80" height="40" rx="5" class="n-warn"></rect><text x="180" y="70" text-anchor="middle" class="t-xs">a1</text>
+  <rect x="230" y="46" width="80" height="40" rx="5" class="n-warn"></rect><text x="270" y="70" text-anchor="middle" class="t-xs">tr1</text>
+  <rect x="320" y="46" width="80" height="40" rx="5" class="n"></rect><text x="360" y="70" text-anchor="middle" class="t-xs">u2 ✓切点</text>
+  <rect x="410" y="46" width="80" height="40" rx="5" class="n-warn"></rect><text x="450" y="70" text-anchor="middle" class="t-xs">a2</text>
+  <rect x="500" y="46" width="80" height="40" rx="5" class="n-warn"></rect><text x="540" y="70" text-anchor="middle" class="t-xs">tr2</text>
+  <rect x="590" y="46" width="80" height="40" rx="5" class="n"></rect><text x="630" y="70" text-anchor="middle" class="t-xs">u3 ✓切点</text>
+  <rect x="680" y="46" width="80" height="40" rx="5" class="n"></rect><text x="720" y="70" text-anchor="middle" class="t-xs">a3</text>
+  <rect x="770" y="46" width="90" height="40" rx="5" class="n-hl"></rect><text x="815" y="70" text-anchor="middle" class="t-xs">tr3 保留区</text>
+
+  <text x="50" y="108" class="t-xs t-b" style="fill:var(--c-warn)">将被摘要（est. 累计到 keepRecentTokens 为止）</text>
+  <text x="620" y="108" class="t-xs t-b" style="fill:var(--c-ok)">最近 keepRecentTokens=20k 原文保留</text>
+
+  <!-- 从右往左走 -->
+  <path d="M 850 100 L 850 130 L 120 130 L 120 90" class="edge edge-dash" marker-end="url(#ar-se2)"></path>
+  <text x="380" y="124" class="t-xs">从最新往回累加估算 token，越过预算线的位置 → 向后找最近的合法切点（这里落在 u2）</text>
+
+  <!-- 规则框 -->
+  <rect x="50" y="150" width="890 " height="104" rx="8" fill="#fbfbf9" stroke="#c9cdd4" stroke-dasharray="5 4"></rect>
+  <text x="66" y="174" class="t-s t-b">合法切点规则（isCutPointMessage / isTurnStartMessage）</text>
+  <text x="66" y="196" class="t-xs">· 绝不切在 toolResult 上 —— 工具结果必须紧跟它的 toolCall，否则 provider 校验直接拒绝</text>
+  <text x="66" y="216" class="t-xs">· 切在 assistant 上时，其工具结果跟随保留（同一轮的尾部整体保留）</text>
+  <text x="66" y="236" class="t-xs">· 切点落在 assistant/tr 中间 = split-turn：该轮前半段单独走一遍 TURN_PREFIX 摘要，再与主摘要拼接</text>
+
+  <!-- 摘要 prompt -->
+  <rect x="50" y="270" width="440" height="110" rx="8" class="n-ai"></rect>
+  <text x="70" y="294" class="t-s t-b">SUMMARIZATION_PROMPT（固定结构化格式）</text>
+  <text x="70" y="316" class="t-xs">## Goal / ## Constraints &amp; Preferences / ## Progress</text>
+  <text x="70" y="334" class="t-xs">(Done · In Progress · Blocked) / ## Key Decisions</text>
+  <text x="70" y="352" class="t-xs">/ ## Next Steps / ## Critical Context</text>
+  <text x="70" y="370" class="t-xs">"Preserve exact file paths, function names, and error messages."</text>
+
+  <rect x="520" y="270" width="420" height="110" rx="8" class="n-agent"></rect>
+  <text x="540" y="294" class="t-s t-b">连续压缩 = 摘要叠加</text>
+  <text x="540" y="316" class="t-xs">第二次压缩不走全新摘要，而是 UPDATE_SUMMARIZATION_PROMPT：</text>
+  <text x="540" y="334" class="t-xs">把新消息合入 &lt;previous-summary&gt;，规则是 PRESERVE/ADD/UPDATE，</text>
+  <text x="540" y="352" class="t-xs">防止多轮压缩后信息相互覆盖丢失。</text>
+  <text x="540" y="370" class="t-xs">生成结果若撞到输出 token 上限（截断）会被整体拒收（#7048）。</text>
+</svg>
+</div>
+<figcaption>图 5-3 · 切点算法全景：预算从尾部往回数，切点必须落在轮次边界，split-turn 用二次摘要补齐。摘要格式固定为六大段，保证可被 UPDATE 增量维护。</figcaption>
+</figure>
+
+<h2><span class="no">5</span>压缩前后的上下文对照</h2>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 330" width="980" role="img" aria-label="压缩前后对照">
+  <defs>
+    <marker id="ar-se3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <text x="40" y="28" class="zone-label">压缩前：tokens > window − reserve</text>
+  <rect x="40" y="42" width="890" height="70" rx="8" class="zone-fill-ca"></rect>
+  <rect x="56" y="56" width="120" height="42" rx="5" class="n-ca"></rect><text x="116" y="82" text-anchor="middle" class="t-xs">旧摘要(如有)</text>
+  <rect x="186" y="56" width="90" height="42" rx="5" class="n-agent"></rect><text x="231" y="82" text-anchor="middle" class="t-xs">u1</text>
+  <rect x="286" y="56" width="90" height="42" rx="5" class="n-agent"></rect><text x="331" y="82" text-anchor="middle" class="t-xs">a1·tr1</text>
+  <rect x="386" y="56" width="90" height="42" rx="5" class="n-agent"></rect><text x="431" y="82" text-anchor="middle" class="t-xs">u2·a2·tr2</text>
+  <rect x="486" y="56" width="90" height="42" rx="5" class="n-agent"></rect><text x="531" y="82" text-anchor="middle" class="t-xs">u3·a3·tr3</text>
+  <rect x="586" y="56" width="90" height="42" rx="5" class="n-agent"></rect><text x="631" y="82" text-anchor="middle" class="t-xs">u4…tr4</text>
+  <rect x="686" y="56" width="90" height="42" rx="5" class="n-agent"></rect><text x="731" y="82" text-anchor="middle" class="t-xs">u5…tr5</text>
+  <rect x="786" y="56" width="130" height="42" rx="5" class="n-hl"></rect><text x="851" y="82" text-anchor="middle" class="t-xs">u6…tr6（刚发生）</text>
+
+  <line x1="470" y1="120" x2="470" y2="152" class="edge" marker-end="url(#ar-se3)"></line>
+  <text x="480" y="142" class="t-xs">findCutPoint：摘要 u1..u5 相关部分，保留尾部 20k 原文</text>
+
+  <text x="40" y="182" class="zone-label">压缩后：追加 CompactionEntry（e7），文件里旧 Entry 原样保留</text>
+  <rect x="40" y="196" width="890" height="70" rx="8" class="zone-fill-ca"></rect>
+  <rect x="56" y="210" width="330" height="42" rx="5" class="n-ai"></rect>
+  <text x="221" y="228" text-anchor="middle" class="t-xs t-b">新摘要（## Goal / Progress / Decisions / Next Steps）</text>
+  <text x="221" y="244" text-anchor="middle" class="t-xs">tokensBefore 记录压缩前规模 · usage 记录摘要生成的花费</text>
+  <rect x="396" y="210" width="520" height="42" rx="5" class="n-agent"></rect>
+  <text x="656" y="236" text-anchor="middle" class="t-xs t-b">原文保留区：firstKeptEntryId = 切点起的全部 Entry（代码与错误信息一字不差）</text>
+
+  <rect x="40" y="282" width="890" height="36" rx="6" class="n-ok"></rect>
+  <text x="485" y="304" text-anchor="middle" class="t-xs t-b">下一次压缩时：本次的"原文保留区"整体展开为虚拟 Entry 参与切割（retainedTail 链式衔接，agent 包 prepareCompaction）</text>
+</svg>
+</div>
+<figcaption>图 5-4 · 压缩前后对照。压缩是纯增量的：多压几次，文件里出现一条 CompactionEntry 链，构建上下文时只用最近一条 + 它的保留区。</figcaption>
+</figure>
+
+<nav class="pagenav">
+  <a href="./04-coding-agent.html"><span class="dir">上一篇</span>← 04 · coding-agent 编排核心</a>
+  <a class="next" href="./06-extensions.html"><span class="dir">下一篇</span>06 · 扩展系统 →</a>
+</nav>
+
+<footer class="colophon">Pi 源码深度剖析 · 基于 worktree 368e013de（v0.84.1）</footer>
+</main>
+<script src="./script.js"></script>
+</body>
+</html>

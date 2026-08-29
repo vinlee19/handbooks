@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>09 · 并发模型与设计模式 — Moonlink 源码深度解析</title>
+<style>
+:root{
+  --blue:#2563eb;--green:#16a34a;--orange:#ea580c;--purple:#7c3aed;--gray:#64748b;--red:#dc2626;
+  --ink:#1e293b;--muted:#64748b;--bg:#f6f8fa;--card:#fff;--line:#e2e8f0;--code-bg:#0d1117;--code-ink:#e6edf3;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.8}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.97);display:flex;flex-wrap:wrap;gap:2px;padding:8px 16px;font-size:13px}
+.topnav .brand{color:#fbbf24;font-weight:700;margin-right:10px;padding:4px 6px}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:4px 10px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav a.active{background:var(--blue);color:#fff}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 20px 80px}
+.page-head{background:linear-gradient(135deg,#0f172a,#1e3a8a);border-radius:14px;color:#f1f5f9;padding:30px 34px;margin-bottom:26px}
+.page-head h1{font-size:28px;margin-bottom:6px}
+.page-head p{color:#cbd5e1;font-size:14.5px}
+h2{font-size:23px;margin:40px 0 12px;padding-left:12px;border-left:5px solid var(--blue)}
+h3{font-size:18px;margin:24px 0 8px;color:#0f172a}
+p{margin:10px 0;color:#334155}
+.lead{font-size:15.5px;color:#475569}
+.figure{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin:20px 0}
+.fig-title{font-weight:700;font-size:14.5px;color:#0f172a;margin-bottom:4px}
+.fig-title .fno{color:var(--blue)}
+.fig-desc{font-size:13px;color:var(--muted);margin-bottom:10px}
+svg{width:100%;height:auto;display:block}
+code{background:#eef2f7;border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:.88em;color:#be185d}
+pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:16px 18px;overflow-x:auto;font-size:13px;line-height:1.6;margin:14px 0}
+pre code{background:none;border:none;color:inherit;padding:0}
+.k{color:#ff7b72}.t{color:#79c0ff}.s{color:#a5d6ff}.c{color:#8b949e;font-style:italic}.n{color:#ffa657}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px;background:var(--card)}
+th{background:#f1f5f9;text-align:left}
+th,td{border:1px solid var(--line);padding:8px 12px;vertical-align:top}
+tbody tr:nth-child(even){background:#fafbfc}
+.callout{border-left:4px solid var(--blue);background:#eff6ff;border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0;font-size:14px}
+.callout.warn{border-color:var(--orange);background:#fff7ed}
+.callout.good{border-color:var(--green);background:#f0fdf4}
+.callout b{color:#0f172a}
+.footer{display:flex;justify-content:space-between;margin-top:60px;padding-top:18px;border-top:1px solid var(--line);font-size:14px}
+.footer a{color:var(--blue);text-decoration:none;font-weight:600}
+ul,ol{margin:8px 0 8px 24px}
+li{margin:4px 0}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">🥮 Moonlink 源码解析</span>
+  <a href="index.html">总导航</a>
+  <a href="01-overview.html">01 总体架构</a>
+  <a href="02-ingestion.html">02 数据摄入</a>
+  <a href="03-core-engine.html">03 存储引擎</a>
+  <a href="04-index-dv.html">04 索引与 DV</a>
+  <a href="05-wal-recovery.html">05 WAL 与恢复</a>
+  <a href="06-iceberg.html">06 Iceberg 集成</a>
+  <a href="07-query.html">07 查询路径</a>
+  <a href="08-control-plane.html">08 控制面</a>
+  <a class="active" href="09-concurrency-lsn.html">09 并发模型</a>
+</nav>
+
+<div class="wrap">
+<div class="page-head">
+  <h1>Chapter 09 · 并发模型与设计模式：为什么 moonlink 几乎没有锁</h1>
+  <p>全仓 9 万行代码，核心表状态几乎不被互斥锁保护——靠的是「单线程 actor + 消息传递 + watch 广播 + 不可变快照」这套组合拳。本章把线程模型画清楚，并总结可迁移的设计模式。</p>
+</div>
+
+<h2>9.1 线程/任务模型：一张表都在哪些执行体上</h2>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 9-1</span> · 单表的执行体地图（tokio 多线程运行时）</div>
+  <div class="fig-desc">方框 = tokio task；箭头 = 通道。表状态（MemSlice/Snapshot）只被 actor 任务触碰——这是「免锁」的根本。</div>
+  <svg viewBox="0 0 1160 620" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="i11" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+      <marker id="i12" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#16a34a"/></marker>
+    </defs>
+    <!-- actor -->
+    <rect x="400" y="200" width="360" height="200" rx="14" fill="#dcfce7" stroke="#16a34a" stroke-width="2"/>
+    <text x="580" y="230" text-anchor="middle" font-weight="700" fill="#14532d" font-size="14">TableHandler actor（事件循环 task）</text>
+    <text x="580" y="254" text-anchor="middle" font-size="11.5" fill="#166534">唯一有权修改表状态的任务</text>
+    <text x="580" y="278" text-anchor="middle" font-size="11.5" fill="#166534">MemSlice · SnapshotTableState · WalManager 内存态</text>
+    <text x="580" y="302" text-anchor="middle" font-size="11.5" fill="#166534">recv_many(128) 批量处理 · 串行 apply 后台结果</text>
+    <text x="580" y="326" text-anchor="middle" font-size="11.5" fill="#166534">特殊态：InitialCopy / AlterTable 阻塞 + 缓冲</text>
+    <text x="580" y="366" text-anchor="middle" font-size="11" fill="#15803d">modeled as：单写者状态机 + FIFO 事件队列</text>
+    <!-- inputs -->
+    <g font-size="11.5">
+      <rect x="30" y="60" width="240" height="80" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+      <text x="150" y="86" text-anchor="middle" font-weight="700" fill="#1e3a8a">复制任务（每 URI 一个）</text>
+      <text x="150" y="108" text-anchor="middle" fill="#3b5ba9">CdcStream → MoonlinkSink</text>
+      <text x="150" y="128" text-anchor="middle" fill="#3b5ba9">（网络 IO task）</text>
+      <rect x="30" y="170" width="240" height="70" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+      <text x="150" y="196" text-anchor="middle" font-weight="700" fill="#1e3a8a">REST handler（axum）</text>
+      <text x="150" y="216" text-anchor="middle" fill="#3b5ba9">EventRequest 队列 → sink</text>
+      <rect x="30" y="270" width="240" height="70" rx="10" fill="#ccfbf1" stroke="#0d9488"/>
+      <text x="150" y="296" text-anchor="middle" font-weight="700" fill="#115e59">ReadStateManager 调用方</text>
+      <text x="150" y="316" text-anchor="middle" fill="#0f766e">RPC server task</text>
+      <rect x="30" y="370" width="240" height="70" rx="10" fill="#fef9c3" stroke="#ca8a04"/>
+      <text x="150" y="396" text-anchor="middle" font-weight="700" fill="#713f12">定时器 task</text>
+      <text x="150" y="416" text-anchor="middle" fill="#a16207">select! 三路 tick → 事件</text>
+    </g>
+    <line x1="270" y1="100" x2="400" y2="240" stroke="#475569" stroke-width="1.6" marker-end="url(#i11)"/>
+    <line x1="270" y1="205" x2="400" y2="270" stroke="#475569" stroke-width="1.6" marker-end="url(#i11)"/>
+    <line x1="270" y1="305" x2="400" y2="305" stroke="#475569" stroke-width="1.6" marker-end="url(#i11)"/>
+    <line x1="270" y1="405" x2="400" y2="350" stroke="#475569" stroke-width="1.6" marker-end="url(#i11)"/>
+    <!-- background tasks -->
+    <g font-size="11.5">
+      <rect x="890" y="60" width="240" height="90" rx="10" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="1010" y="86" text-anchor="middle" font-weight="700" fill="#7c2d12">DiskSliceWriter task</text>
+      <text x="1010" y="108" text-anchor="middle" fill="#9a3412">flush 写 Parquet</text>
+      <text x="1010" y="128" text-anchor="middle" fill="#9a3412">完成后发 FlushResult</text>
+      <rect x="890" y="170" width="240" height="90" rx="10" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="1010" y="196" text-anchor="middle" font-weight="700" fill="#7c2d12">snapshot 构建 task</text>
+      <text x="1010" y="218" text-anchor="middle" fill="#9a3412">update_snapshot</text>
+      <text x="1010" y="238" text-anchor="middle" fill="#9a3412">（克隆态上运算）</text>
+      <rect x="890" y="280" width="240" height="90" rx="10" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="1010" y="306" text-anchor="middle" font-weight="700" fill="#7c2d12">WAL 持久化 task</text>
+      <text x="1010" y="328" text-anchor="middle" fill="#9a3412">prepare 的产物落盘</text>
+      <text x="1010" y="348" text-anchor="middle" fill="#9a3412">+ iceberg 提交 task</text>
+      <rect x="890" y="390" width="240" height="90" rx="10" fill="#ffedd5" stroke="#ea580c"/>
+      <text x="1010" y="416" text-anchor="middle" font-weight="700" fill="#7c2d12">compaction / index merge task</text>
+      <text x="1010" y="438" text-anchor="middle" fill="#9a3412">重写文件（读克隆态）</text>
+      <text x="1010" y="458" text-anchor="middle" fill="#9a3412">结果回投事件</text>
+    </g>
+    <line x1="760" y1="250" x2="890" y2="110" stroke="#16a34a" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#i12)"/>
+    <line x1="760" y1="280" x2="890" y2="215" stroke="#16a34a" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#i12)"/>
+    <line x1="760" y1="320" x2="890" y2="325" stroke="#16a34a" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#i12)"/>
+    <line x1="760" y1="360" x2="890" y2="430" stroke="#16a34a" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#i12)"/>
+    <path d="M 1010 480 L 1010 540 L 580 540 L 580 400" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="3 4" marker-end="url(#i11)"/>
+    <text x="795" y="532" text-anchor="middle" font-size="11" fill="#94a3b8">全部以 TableEvent::XxxResult 回投 → actor 串行 apply（状态单写者不变）</text>
+    <!-- bottom notes -->
+    <g font-size="12" fill="#475569">
+      <text x="30" y="580">关键取舍：后台任务拿到的都是「快照克隆 / 已 drain 的数据」，绝不共享可变状态 —— 所以不需要锁；</text>
+      <text x="30" y="604">代价是一次 Clone / move 的内存拷贝（Arrow 列用 Arc 廉价共享），换来的是完全无数据竞争 —— chaos 测试（随机故障注入）敢于并发跑。</text>
+    </g>
+  </svg>
+</div>
+
+<h2>9.2 通道拓扑：mpsc 与 watch 各司其职</h2>
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 9-2</span> · 跨任务通信通道全景（tokio mpsc = 队列，watch = 状态广播）</div>
+  <svg viewBox="0 0 1160 480" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="i21" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2563eb"/></marker>
+      <marker id="i22" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#dc2626"/></marker>
+    </defs>
+    <!-- mpsc side -->
+    <text x="30" y="36" font-size="14" font-weight="700" fill="#2563eb">mpsc 队列（要「逐条处理」的）</text>
+    <g font-size="11.5">
+      <rect x="30" y="52" width="530" height="180" rx="10" fill="#dbeafe" stroke="#2563eb"/>
+      <g font-family="Menlo,monospace" font-size="11.5" fill="#1e293b">
+        <text x="50" y="80">1. TableEvent 队列　cap=32768　（每表一条，图 9-1 中心）</text>
+        <text x="50" y="106">2. REST EventRequest 队列　——　入队确认后再执行（一致性屏障）</text>
+        <text x="50" y="132">3. sync 摄入回传通道　cap=1　——　tx 塞进事件，actor 处理完回 LSN</text>
+        <text x="50" y="158">4. BatchSender　——　initial copy 分片并行产出 Arrow 批</text>
+        <text x="50" y="184">5. 事件回放通道（Unbounded）　——　chaos/测试用 MooncakeTableEvent</text>
+      </g>
+    </g>
+    <!-- watch side -->
+    <text x="600" y="36" font-size="14" font-weight="700" fill="#dc2626">watch 广播（只要「最新值」的）</text>
+    <g font-size="11.5">
+      <rect x="600" y="52" width="530" height="180" rx="10" fill="#fee2e2" stroke="#dc2626"/>
+      <g font-family="Menlo,monospace" font-size="11.5" fill="#7f1d1d">
+        <text x="620" y="80">1. replication_lsn（LsnState::subscribe，lsn_state.rs）→ 读侧等待</text>
+        <text x="620" y="106">2. table_snapshot watch（u64 快照版本）→ 读侧等待</text>
+        <text x="620" y="132">3. wal_flush_lsn watch　→ wait_for_wal_flush / PG ACK</text>
+        <text x="620" y="158">4. flush_lsn watch　→ TableEventManager::subscribe_flush_lsn</text>
+        <text x="620" y="184">5. force_snapshot / maintenance 完成广播（event_sync.rs）</text>
+      </g>
+    </g>
+    <g font-size="12" fill="#475569">
+      <rect x="30" y="260" width="1100" height="90" rx="10" fill="#f0fdf4" stroke="#16a34a"/>
+      <text x="55" y="288" font-weight="700" fill="#14532d">选型心法（可迁移）</text>
+      <text x="55" y="316">「事件」用 mpsc（不能丢、要保序）；「水位/进度」用 watch（只关心最新，旧值无意义）。moonlink 全仓没有一处 async Mutex 保护表状态 —— 通道选型正确时，锁自然消失。</text>
+    </g>
+    <g font-size="12" fill="#475569">
+      <rect x="30" y="370" width="1100" height="90" rx="10" fill="#eff6ff" stroke="#2563eb"/>
+      <text x="55" y="398" font-weight="700" fill="#1e3a8a">event_sync.rs 的同步原语箱</text>
+      <text x="55" y="426">EventSyncSender/Receiver 打包了：drop 完成 oneshot · flush_lsn watch · force_snapshot 完成 watch · maintenance 完成 broadcast · wal_flush_lsn watch ——</text>
+      <text x="55" y="452">backend 对表的同步等待全部经它，避免在各处散落裸通道。</text>
+    </g>
+  </svg>
+</div>
+
+<h2>9.3 LSN 时间线：可见性如何推导</h2>
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 9-3</span> · 一段时间线上的六种 LSN 与读判定（数字为示例）</div>
+  <svg viewBox="0 0 1160 460" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="i31" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    </defs>
+    <line x1="60" y1="70" x2="1120" y2="70" stroke="#cbd5e1" stroke-width="3" marker-end="url(#i31)"/>
+    <text x="1120" y="50" text-anchor="end" font-size="12" fill="#94a3b8">时间 / LSN →</text>
+    <g font-size="11.5">
+      <!-- markers -->
+      <line x1="140" y1="55" x2="140" y2="85" stroke="#dc2626" stroke-width="2"/><text x="140" y="42" text-anchor="middle" fill="#dc2626" font-weight="700">commit 100</text>
+      <line x1="300" y1="55" x2="300" y2="85" stroke="#ea580c" stroke-width="2"/><text x="300" y="42" text-anchor="middle" fill="#ea580c" font-weight="700">flush 100 完成</text>
+      <line x1="430" y1="55" x2="430" y2="85" stroke="#7c3aed" stroke-width="2"/><text x="430" y="30" text-anchor="middle" fill="#7c3aed" font-weight="700">iceberg 提交(≈120)</text>
+      <text x="430" y="106" text-anchor="middle" fill="#7c3aed" font-size="10">snapshot LSN=100 落库</text>
+      <line x1="600" y1="55" x2="600" y2="85" stroke="#dc2626" stroke-width="2"/><text x="600" y="42" text-anchor="middle" fill="#dc2626" font-weight="700">commit 180</text>
+      <line x1="760" y1="55" x2="760" y2="85" stroke="#ea580c" stroke-width="2"/><text x="760" y="42" text-anchor="middle" fill="#ea580c" font-weight="700">commit 240</text>
+      <line x1="950" y1="55" x2="950" y2="85" stroke="#0d9488" stroke-width="2"/><text x="950" y="42" text-anchor="middle" fill="#0d9488" font-weight="700">replication 260</text>
+      <!-- zones -->
+      <rect x="140" y="120" width="290" height="54" fill="#dcfce7" stroke="#16a34a"/>
+      <text x="285" y="152" text-anchor="middle" font-size="11.5" fill="#14532d">快照已覆盖：req ≤ 100 → 直接读快照 ✓</text>
+      <rect x="430" y="120" width="170" height="54" fill="#fef9c3" stroke="#ca8a04"/>
+      <text x="515" y="152" text-anchor="middle" font-size="11.5" fill="#713f12">干净窗口：快照==commit</text>
+      <rect x="600" y="120" width="350" height="54" fill="#fee2e2" stroke="#dc2626"/>
+      <text x="775" y="146" text-anchor="middle" font-size="11.5" fill="#7f1d1d">脏区：内存有未快照提交（180/240），</text>
+      <text x="775" y="166" text-anchor="middle" font-size="11.5" fill="#7f1d1d">req∈(100,240] → 等 500ms 快照或走 union read</text>
+      <text x="60" y="152" font-size="11.5" fill="#475569">读判定</text>
+      <!-- consistency chain -->
+      <text x="60" y="240" font-size="13" font-weight="700" fill="#334155">读侧不变式（read_state_manager.rs 断言）</text>
+      <text x="60" y="270" font-family="Menlo,monospace" font-size="13" fill="#be185d">iceberg snapshot LSN ≤ mooncake snapshot LSN ≤ commit LSN ≤ replication LSN</text>
+      <text x="60" y="300" font-size="12" fill="#475569">任何时刻断言失败 = 系统有 bug 直接 panic（宁可宕机不可读脏）—— 这条断言是排查并发问题的第一现场。</text>
+      <!-- write visibility -->
+      <text x="60" y="350" font-size="13" font-weight="700" fill="#334155">写侧可见性规则（mooncake_table.rs 头注释）</text>
+      <text x="60" y="378" font-size="12.5" fill="#475569">读 lsn=X 可见所有 commit ≤ X 的记录；删除必须满足 COMMIT_LSN_xact1 ≤ DELETE_LSN_xact2 &lt; COMMIT_LSN_xact2（先提交才可被删）。</text>
+      <text x="60" y="404" font-size="12.5" fill="#475569">流式事务的删除统一盖 lsn−1 章 —— 保证「未提交事务的删除」绝不会提前生效（CH03 §3.1）。</text>
+      <text x="60" y="436" font-size="11" fill="#94a3b8">相关源码：lsn_state.rs（watch 封装）· event_sync.rs（同步原语箱）· table_handler.rs 头注释（六 LSN 权威定义）</text>
+    </g>
+  </svg>
+</div>
+
+<h2>9.4 可迁移的设计模式清单</h2>
+<table>
+  <thead><tr><th>模式</th><th>moonlink 中的实现</th><th>可迁移到的场景</th></tr></thead>
+  <tbody>
+    <tr><td>单线程 actor + 结果回投</td><td>TableHandler：事件串行、后台任务只回投 XxxResult</td><td>任何「复杂可变状态」的并发封装（游戏状态机、会话管理）</td></tr>
+    <tr><td>水位窗口</td><td>ongoing_flush_lsns BTreeMap：乱序完成按序生效</td><td>分布式系统的乱序完成/顺序提交（复制协议、日志系统）</td></tr>
+    <tr><td>单一真源 + 最后写锚点</td><td>metadata_wal.json 最后写；恢复时宁旧勿新</td><td>任何「元数据 + 数据分离」的存储设计</td></tr>
+    <tr><td>位置间接层</td><td>RecordLocation + remap：compaction 只改映射</td><td>GC/压缩/迁移不触碰读路径的系统</td></tr>
+    <tr><td>引用计数缓存 pin</td><td>NonEvictableHandle + EvictedFilesToDelete 异步删</td><td>「驱逐不能伤害在途读者」的缓存设计</td></tr>
+    <tr><td>先入队后执行</td><td>REST 快照/flush 的排队确认技巧</td><td>用 FIFO 顺序构造一致性屏障，替代分布式锁</td></tr>
+    <tr><td>跨语言指针直读协议</td><td>偏移量集中 + 字符串拖尾的手写 bincode</td><td>Rust/C++/Java 共享高频小结构</td></tr>
+    <tr><td>以断言文档化不变式</td><td>读侧四 LSN 链式 assert_le</td><td>把「系统正确性契约」写进代码而不是 wiki</td></tr>
+  </tbody>
+</table>
+
+<h2>9.5 测试体系：为什么敢这么设计</h2>
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 9-4</span> · 测试金字塔（真实文件清单）</div>
+  <svg viewBox="0 0 1160 620" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <g font-size="12" fill="#475569">
+      <text x="60" y="44" font-weight="700" fill="#334155">亮点机制</text>
+      <text x="60" y="74">· chaos_generator.rs / filesystem_accessor_chaos_wrapper.rs：在文件系统访问层随机注入失败 —— 直接考验图 5-3 的恢复矩阵；</text>
+      <text x="60" y="102">· event replay：MooncakeTableEvent 回放通道把一次真实运行录下来重放（register_event_replay_tx）；</text>
+      <text x="60" y="130">· debug/release 双阈值：debug 构建用 2MiB 文件、8 批水位 —— 让「小数据触发 compaction」在测试里可观察。</text>
+      <text x="60" y="158">· CI（.github/workflows/ci.yml）：fmt/clippy/deny/sort + GCS/S3/Glue/chaos 矩阵 —— 云后端测试不是摆设。</text>
+    </g>
+    <g font-size="11.5">
+      <polygon points="580,200 490,278 670,278" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="580" y="232" text-anchor="middle" font-weight="700" fill="#14532d" font-size="12">单元测试（内嵌 #[cfg(test)]）</text>
+      <text x="580" y="258" text-anchor="middle" font-size="10.5" fill="#166534">wal · mem_slice · index · DV 序列化…</text>
+      <polygon points="470,290 385,368 775,368" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+      <text x="580" y="322" text-anchor="middle" font-weight="700" fill="#115e59" font-size="12">行为级测试</text>
+      <text x="580" y="348" text-anchor="middle" font-size="10.5" fill="#0f766e">table_handler/tests.rs · mooncake_table/tests.rs · failure_tests.rs</text>
+      <polygon points="365,380 265,458 895,458" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+      <text x="580" y="410" text-anchor="middle" font-weight="700" fill="#1e3a8a" font-size="12">恢复与集成（backend/tests/）</text>
+      <text x="580" y="432" text-anchor="middle" font-size="10.5" fill="#3b5ba9">test_wal_recovery · test_table_recovery · test_control_plane_recovery</text>
+      <text x="580" y="450" text-anchor="middle" font-size="10.5" fill="#3b5ba9">test_replication_recovery · test_initial_copy · bulk_ingestion</text>
+      <polygon points="250,470 150,548 1010,548" fill="#f3e8ff" stroke="#7c3aed" stroke-width="1.5"/>
+      <text x="580" y="500" text-anchor="middle" font-weight="700" fill="#4c1d95" font-size="12">端到端 / 混沌 / 性能</text>
+      <text x="580" y="524" text-anchor="middle" font-size="10.5" fill="#6d28d9">service test.rs（1494 行全端点）· chaos_test（故障注入）· criterion benches · S3/GCS/REST-catalog 真实后端套件</text>
+    </g>
+  </svg>
+</div>
+
+<h2>9.6 全系列总结：一张图收束</h2>
+<div class="callout good"><b>读完九章，请用这句话向别人解释 moonlink：</b>「它把 Iceberg 当成最终持久层，把本地内存+NVMe 当成可恢复的写缓冲：写入毫秒级可见（union read），落盘按 LSN 有序推进（flush 窗口 + 两级快照），删除只记位图（v3 DV），崩溃后从 WAL+Iceberg 对账恢复（单一真源 metadata），对查询引擎暴露的永远是『标准 Parquet + 位图』——所以实时与批式两条读路径共用一份物理数据。」</div>
+<p>推荐的三条源码走读线路（每条约 1–2 天）：</p>
+<ol>
+  <li><b>写线路</b>：rest_api.rs → moonlink_rest_sink.rs → table_notify.rs → table_handler.rs → mem_slice.rs → disk_slice.rs → snapshot.rs → iceberg_table_syncer.rs；</li>
+  <li><b>删线路</b>：moonlink_sink.rs（upsert 展开）→ mem_index.rs → persisted_bucket_hash_map.rs → delete_vector.rs → iceberg/deletion_vector.rs → table_provider.rs（RowSelection）；</li>
+  <li><b>恢复线路</b>：recovery_utils.rs → wal.rs（PersistentWalMetadata）→ iceberg_table_loader.rs → postgres_source.rs（skip_before_end_lsn）。</li>
+</ol>
+
+<div class="footer">
+  <a href="08-control-plane.html">← 08 控制面</a>
+  <a href="index.html">回到总导航 ↑</a>
+</div>
+</div>
+</body>
+</html>

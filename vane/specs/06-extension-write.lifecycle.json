@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Vane 扩展写生命周期：Prepare → Finalize / Abort（#703）",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "happy-path",
+        "label": "正常路径",
+        "focus": [
+          "validate",
+          "prepare",
+          "workers",
+          "gate",
+          "committed"
+        ],
+        "note": "校验 → 一次性 Prepare → Worker 落盘 → 行数校验 → 事务内提交。"
+      },
+      {
+        "id": "abort-window",
+        "label": "中止窗口",
+        "focus": [
+          "prepare",
+          "workers",
+          "aborted"
+        ],
+        "note": "finalize 启动前可 AbortDistributedWrite，且仅在 worker 静默屏障成功后执行。"
+      },
+      {
+        "id": "unknown",
+        "label": "不可知终态",
+        "focus": [
+          "gate",
+          "unknown"
+        ],
+        "note": "finalize 一旦启动便禁止 abort/重试，失败即 outcome unknown，工件保留。"
+      }
+    ],
+    "viewBox": [
+      1240,
+      620
+    ]
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "扩展写主路径（PlanRunner::run_plan）"
+    },
+    {
+      "id": "abortlane",
+      "label": "中止窗口（finalize 启动前有效）"
+    },
+    {
+      "id": "terminal",
+      "label": "不可知终态"
+    }
+  ],
+  "states": [
+    {
+      "id": "validate",
+      "type": "start",
+      "label": "校验",
+      "lane": "main",
+      "col": 0,
+      "step": "01"
+    },
+    {
+      "id": "prepare",
+      "type": "active",
+      "label": "Prepare",
+      "lane": "main",
+      "col": 1,
+      "step": "02"
+    },
+    {
+      "id": "workers",
+      "type": "active",
+      "label": "Worker Sinks",
+      "lane": "main",
+      "col": 2,
+      "step": "03"
+    },
+    {
+      "id": "gate",
+      "type": "decision",
+      "label": "Finalize Gate",
+      "lane": "main",
+      "col": 3,
+      "step": "04"
+    },
+    {
+      "id": "committed",
+      "type": "success",
+      "label": "Commit",
+      "lane": "main",
+      "col": 4,
+      "step": "05"
+    },
+    {
+      "id": "aborted",
+      "type": "failure",
+      "label": "Abort",
+      "lane": "abortlane",
+      "col": 0
+    },
+    {
+      "id": "unknown",
+      "type": "failure",
+      "label": "Outcome Unknown",
+      "lane": "terminal",
+      "col": 2,
+      "yOffset": -15
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t_abort1",
+      "from": "prepare",
+      "to": "aborted",
+      "label": "prepare 异常",
+      "variant": "dashed",
+      "labelAt": [
+        270,
+        213
+      ]
+    },
+    {
+      "id": "t_abort2",
+      "from": "workers",
+      "to": "aborted",
+      "label": "worker 失败",
+      "variant": "dashed",
+      "labelAt": [
+        440,
+        255
+      ]
+    },
+    {
+      "id": "t_unknown",
+      "from": "gate",
+      "to": "unknown",
+      "label": "不匹配 / commit 异常",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "一次性语义",
+      "items": [
+        "PrepareDistributedWrite 在调度前恰好执行一次（#703 核心增量）",
+        "FinalizeDistributedWrite 在 Vane 协调者事务内恰好执行一次",
+        "affected-row 必须与信封总数一致，否则拒绝提交"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "中止窗口",
+      "items": [
+        "abort 仅在 prepare 已启动且 finalize 未启动时允许",
+        "worker 已开跑时，abort 必须等 quiesce 屏障成功后才执行",
+        "屏障失败则保留输出与已 prepare 的状态，不强行回滚"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "不可知终态",
+      "items": [
+        "finalize 启动后任何失败都不再 abort、不删工件、不重试",
+        "catalog 提交结果未知时标记 outcome_unknown=true",
+        "扩展侧须把工件写得可幂等对账（如不可变路径 + 统计 DTO）"
+      ]
+    }
+  ]
+}

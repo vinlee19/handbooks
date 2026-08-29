@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>09 · 构建与发布 — Pi 源码深度剖析</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<nav class="topnav"><div class="topnav-inner">
+  <a class="brand" href="./index.html">pi deep-dive</a>
+  <a class="pg" href="./index.html">总览</a>
+  <a class="pg" href="./01-architecture.html">01 物理架构</a>
+  <a class="pg" href="./02-ai.html">02 pi-ai</a>
+  <a class="pg" href="./03-agent.html">03 agent-core</a>
+  <a class="pg" href="./04-coding-agent.html">04 coding-agent</a>
+  <a class="pg" href="./05-session-compaction.html">05 会话与压缩</a>
+  <a class="pg" href="./06-extensions.html">06 扩展系统</a>
+  <a class="pg" href="./07-tui.html">07 TUI</a>
+  <a class="pg" href="./08-rpc.html">08 RPC</a>
+  <a class="pg cur" href="./09-supply-chain.html">09 构建发布</a>
+</div></nav>
+
+<main>
+<div class="hero">
+  <div class="kicker">第 09 篇</div>
+  <h1>构建与发布：把源码变成可信任的安装物</h1>
+  <div class="sub">约 3,000 行构建脚本 + 一条 tag 驱动的 CI 流水线。这一篇不讲代码逻辑，讲"信任如何被制造"：依赖精确 pin、二进制从确定性源码归档构建、npm OIDC 免 token 发布、R2 版本指针用 ETag CAS 推进——每一层都假设上一层可能出问题。</div>
+</div>
+
+<h2><span class="no">1</span>产物矩阵：npm 包与 Bun 二进制</h2>
+<p>pi 有两种安装形态。<strong>npm 路线</strong>：<code>tsgo</code> 直接 tsc 到 <code>dist/</code>（无打包器），bin 指向 <code>dist/cli.js</code>，依赖由 npm-shrinkwrap.json 钉死。<strong>二进制路线</strong>：<code>bun build --compile</code> 产出单文件可执行（六平台：darwin/linux/windows × arm64/x64），内嵌 Bun 运行时。</p>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 340" width="980" role="img" aria-label="二进制产物结构">
+  <defs>
+    <marker id="ar-sc1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <rect x="30" y="40" width="220" height="70" rx="7" class="n-ca"></rect>
+  <text x="140" y="64" text-anchor="middle" class="t-s t-b">src/bun/cli.ts（16 行）</text>
+  <text x="140" y="84" text-anchor="middle" class="t-xs">registerBunOAuthFlows · 沙箱环境还原</text>
+  <text x="140" y="100" text-anchor="middle" class="t-xs">延迟 import 真正的 cli.ts</text>
+
+  <rect x="30" y="140" width="220" height="70" rx="7" class="n-ca"></rect>
+  <text x="140" y="164" text-anchor="middle" class="t-s t-b">image-resize-worker.ts</text>
+  <text x="140" y="184" text-anchor="middle" class="t-xs">worker_threads 单消息协议</text>
+  <text x="140" y="200" text-anchor="middle" class="t-xs">photon WASM 图片缩放</text>
+
+  <rect x="360" y="70" width="200" height="110" rx="8" class="n-tui"></rect>
+  <text x="460" y="100" text-anchor="middle" class="t-s t-b">bun build --compile</text>
+  <text x="460" y="122" text-anchor="middle" class="t-s">双入口编译</text>
+  <text x="460" y="142" text-anchor="middle" class="t-s">--no-compile-autoload-bunfig</text>
+  <text x="460" y="162" text-anchor="middle" class="t-s">（防项目级 preload 注入）</text>
+
+  <rect x="660" y="30" width="290" height="290" rx="9" class="zone-fill-ca"></rect>
+  <text x="676" y="54" class="zone-label" style="fill:var(--c-ca)">每平台目录（×6 平台）</text>
+  <text x="690" y="78" class="t-xs t-mono">pi（或 pi.exe）     单文件主程序</text>
+  <text x="690" y="100" class="t-xs t-mono">photon_rs_bg.wasm  图片处理</text>
+  <text x="690" y="122" class="t-xs t-mono">theme/*.json       主题</text>
+  <text x="690" y="144" class="t-xs t-mono">export-html/       导出模板+vendor</text>
+  <text x="690" y="166" class="t-xs t-mono">clipboard .node     剪贴板原生件</text>
+  <text x="690" y="188" class="t-xs t-mono">modifiers .node     修饰键查询(darwin/win)</text>
+  <text x="690" y="214" class="t-xs">worker 必须作为显式入口传入，</text>
+  <text x="690" y="232" class="t-xs">才会被嵌入编译产物 —— 隐式</text>
+  <text x="690" y="250" class="t-xs">new Worker() 的目标文件不会</text>
+  <text x="690" y="268" class="t-xs">被 bun --compile 自动发现。</text>
+  <text x="690" y="294" class="t-xs">Unix 压缩包内再包一层 pi/ 目录</text>
+  <text x="690" y="310" class="t-xs">（mise 等版本管理器兼容）</text>
+
+  <line x1="250" y1="75" x2="358" y2="105" class="edge" marker-end="url(#ar-sc1)"></line>
+  <line x1="250" y1="175" x2="358" y2="145" class="edge" marker-end="url(#ar-sc1)"></line>
+  <line x1="560" y1="125" x2="658" y2="125" class="edge" marker-end="url(#ar-sc1)"></line>
+</svg>
+</div>
+<figcaption>图 9-1 · 二进制构建。剪贴板原生包的全平台变体在隔离 temp dir 单独安装（npm 不会跨平台装 optional deps）；x64 用 -baseline 指令集保证老 CPU 可用。</figcaption>
+</figure>
+
+<h2><span class="no">2</span>依赖卫生</h2>
+<ul class="clean">
+  <li><strong>精确 pin</strong>：所有外部依赖写死精确版本（无 <code>^</code>/<code>~</code>），<code>check-pinned-deps.mjs</code> 在 <code>npm run check</code> 里强制；工作区内部包才允许版本区间。</li>
+  <li><strong>lifecycle 脚本默认禁用</strong>：开发与 CI 一律 <code>npm ci --ignore-scripts</code>。带 install script 的新依赖必须人工审码并加入 allowlist——shrinkwrap 生成器（365 行）里当前只有两条：<code>@google/genai@1.52.0</code> 与 <code>protobufjs@7.6.5</code>，各带理由注释。</li>
+  <li><strong>npm-shrinkwrap.json</strong>：由根 lockfile 生成，发布随包走。生成器做硬校验：无 link/file/workspace resolved、无本地路径、闭包完整性、平台 specific 包齐全——保证用户 <code>npm install -g</code> 得到与 CI 完全相同的树。</li>
+  <li><strong>install-lock</strong>：另一个生成器产出 <code>pi-coding-agent-install</code> 的 pinned 清单（release 资产），给自更新脚本复现安装。</li>
+</ul>
+
+<h2><span class="no">3</span>发布流水线</h2>
+<p>本地脚本（<code>release.mjs</code>，281 行）只做"准备与验证"：要求工作区干净 → bump 全包版本 → CHANGELOG <code>[Unreleased]</code> 升级为版本段 → 重新生成 shrinkwrap/install-lock/模型数据 → check + build:offline + test.sh → commit + tag → push。<strong>npm 发布本身完全在 CI</strong>：</p>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 480" width="980" role="img" aria-label="CI 发布流水线">
+  <defs>
+    <marker id="ar-sc2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <rect x="30" y="40" width="150" height="52" rx="6" class="n-user"></rect>
+  <text x="105" y="62" text-anchor="middle" class="t-s t-b">push tag vX.Y.Z</text>
+  <text x="105" y="80" text-anchor="middle" class="t-xs">唯一触发器</text>
+
+  <rect x="230" y="30" width="230" height="72" rx="7" class="n-ca"></rect>
+  <text x="345" y="52" text-anchor="middle" class="t-s t-b">job: build</text>
+  <text x="345" y="72" text-anchor="middle" class="t-xs">hydrate 模型数据 → create-source-archive</text>
+  <text x="345" y="90" text-anchor="middle" class="t-xs">→ 解包归档后从归档内构建二进制 → SHA256SUMS</text>
+
+  <rect x="510" y="30" width="200" height="72" rx="7" class="n-ca"></rect>
+  <text x="610" y="52" text-anchor="middle" class="t-s t-b">job: stage-github-release</text>
+  <text x="610" y="72" text-anchor="middle" class="t-xs">校验资产 → 创建 draft Release</text>
+  <text x="610" y="90" text-anchor="middle" class="t-xs">（拒绝改动已公开 release）</text>
+
+  <rect x="760" y="30" width="190" height="72" rx="7" class="n-ai"></rect>
+  <text x="855" y="52" text-anchor="middle" class="t-s t-b">job: publish-npm</text>
+  <text x="855" y="72" text-anchor="middle" class="t-xs">environment: npm-publish · id-token</text>
+  <text x="855" y="90" text-anchor="middle" class="t-xs">OIDC trusted publishing，无长期 token</text>
+
+  <rect x="600" y="160" width="200" height="72" rx="7" class="n-agent"></rect>
+  <text x="700" y="182" text-anchor="middle" class="t-s t-b">job: announce-pi-dev-release</text>
+  <text x="700" y="202" text-anchor="middle" class="t-xs">逐包验证 npm 上确实存在该精确版本</text>
+  <text x="700" y="220" text-anchor="middle" class="t-xs">且 tarball 可下载 → 写 R2 标记</text>
+
+  <rect x="350" y="160" width="200" height="72" rx="7" class="n-agent"></rect>
+  <text x="450" y="182" text-anchor="middle" class="t-s t-b">job: publish-github-release</text>
+  <text x="450" y="202" text-anchor="middle" class="t-xs">draft → public（最后一步）</text>
+  <text x="450" y="220" text-anchor="middle" class="t-xs">资产先于公告可见</text>
+
+  <rect x="100" y="160" width="200" height="72" rx="7" class="n-user"></rect>
+  <text x="200" y="182" text-anchor="middle" class="t-s t-b">pi.dev/api/latest-version</text>
+  <text x="200" y="202" text-anchor="middle" class="t-xs">读 R2 标记后才公告新版本</text>
+  <text x="200" y="220" text-anchor="middle" class="t-xs">（publish.mjs 带来源证明 --provenance）</text>
+
+  <rect x="230" y="290" width="520" height="56" rx="7" class="n-warn"></rect>
+  <text x="490" y="312" text-anchor="middle" class="t-s t-b">任一 job 失败 → cleanup-draft-github-release 删除 draft</text>
+  <text x="490" y="332" text-anchor="middle" class="t-xs">保证"要么全部成功，要么不留半成品"；publish 助手幂等，可安全重跑失败 job</text>
+
+  <rect x="40" y="380" width="900" height="70" rx="8" fill="#fbfbf9" stroke="#c9cdd4" stroke-dasharray="5 4"></rect>
+  <text x="56" y="404" class="t-s t-b">R2 版本指针的并发安全</text>
+  <text x="56" y="426" class="t-xs">publish-release-announcement.mjs 轮询 npm registry 可见性（metadata + tarball HEAD，10 分钟超时），然后在</text>
+  <text x="56" y="444" class="t-xs">releases/v1/latest.json 上做带 ETag 的条件写（If-Match CAS，最多重试 5 次）—— 并发发布不会互相覆盖。</text>
+
+  <line x1="180" y1="66" x2="228" y2="66" class="edge" marker-end="url(#ar-sc2)"></line>
+  <line x1="460" y1="66" x2="508" y2="66" class="edge" marker-end="url(#ar-sc2)"></line>
+  <line x1="710" y1="66" x2="758" y2="66" class="edge" marker-end="url(#ar-sc2)"></line>
+  <path d="M 855 102 L 855 130 C 855 150 800 160 802 158" class="edge" marker-end="url(#ar-sc2)"></path>
+  <line x1="700" y1="158" x2="700" y2="158" class="edge"></line>
+  <path d="M 598 196 L 552 196" class="edge" marker-end="url(#ar-sc2)"></path>
+  <path d="M 348 196 L 302 196" class="edge" marker-end="url(#ar-sc2)"></path>
+</svg>
+</div>
+<figcaption>图 9-2 · tag 驱动的 CI 流水线（build-binaries.yml，367 行）。全部第三方 action 按 commit SHA 锁定，permissions 从空集起步，两个敏感 job 挂 environment 门。</figcaption>
+</figure>
+
+<h2><span class="no">4</span>供应链防线分层</h2>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 330" width="980" role="img" aria-label="供应链防线">
+  <rect x="40" y="24" width="900" height="60" rx="7" class="n-ca"></rect>
+  <text x="490" y="48" text-anchor="middle" class="t-s t-b">第 1 层 · 依赖准入</text>
+  <text x="490" y="70" text-anchor="middle" class="t-xs">精确 pin · install script 白名单（人工审码）· npm-audit CI · 锁文件提交需 PI_ALLOW_LOCKFILE_CHANGE</text>
+
+  <rect x="40" y="94" width="900" height="60" rx="7" class="n-ai"></rect>
+  <text x="490" y="118" text-anchor="middle" class="t-s t-b">第 2 层 · 构建输入</text>
+  <text x="490" y="140" text-anchor="middle" class="t-xs">确定性源码归档 → CI 从归档内构建（工作区污染无效）· --offline-model-data 用归档快照 · 禁 bunfig autoload</text>
+
+  <rect x="40" y="164" width="900" height="60" rx="7" class="n-agent"></rect>
+  <text x="490" y="188" text-anchor="middle" class="t-s t-b">第 3 层 · 发布通道</text>
+  <text x="490" y="210" text-anchor="middle" class="t-xs">shrinkwrap/install-lock 复现树 · npm provenance（来源证明）· OIDC trusted publishing（仓库里没有 npm token 可偷）</text>
+
+  <rect x="40" y="234" width="900" height="60" rx="7" class="n-tui"></rect>
+  <text x="490" y="258" text-anchor="middle" class="t-s t-b">第 4 层 · 公告一致性</text>
+  <text x="490" y="280" text-anchor="middle" class="t-xs">R2 标记仅在逐包验证版本存在 + tarball 可下载后写入 · ETag CAS 防并发覆盖 · pi.dev 不直读 npm</text>
+
+  <text x="40" y="320" class="t-xs">每一层独立成立：即使上层被攻破，下层仍有自己的校验。SHA256SUMS 让任何人可离线复验官方二进制。</text>
+</svg>
+</div>
+<figcaption>图 9-3 · 四层供应链防御。设计哲学与 pi 的错误处理同源：不信任任何单点，把"可能失败"编码进流程。</figcaption>
+</figure>
+
+<h2><span class="no">5</span>测试体系一瞥</h2>
+<table class="tbl">
+<thead><tr><th>包</th><th>组织</th><th>关键设施</th></tr></thead>
+<tbody>
+<tr><td class="mono">ai</td><td>130 个平铺测试，按"provider-特性"命名</td><td>faux provider（录制回放）；SSE 解析、跨 provider handoff、context overflow 各有专项</td></tr>
+<tr><td class="mono">agent</td><td>内核 4 个 + harness 子目录；双 vitest 配置</td><td>session 存储一致性套件 conformance.ts（993 行）——任何存储实现先跑它</td></tr>
+<tr><td class="mono">coding-agent</td><td>155 个测试文件 + suite/ 集成套件</td><td><code>test.sh</code> 用 <code>env -i</code> 清空环境变量跑（隔离 HOME/缓存/凭据）；suite 必须 faux provider，禁真实 API；回归测试放 <code>suite/regressions/&lt;issue&gt;-&lt;slug&gt;</code></td></tr>
+<tr><td class="mono">evals</td><td>私有包，LLM 行为评测</td><td>vitest-evals 框架 + 隔离临时项目，产出原生 session JSONL 工件供人工复核</td></tr>
+</tbody>
+</table>
+
+<p>值得专门指出 faux provider 的地位：它是 <code>packages/ai</code> 里一个 708 行的"假 provider"，可声明式编排响应序列（text/toolCalls/thinking/stopReason/delay），让整条 agent 循环——包括工具执行、压缩、RPC 协议——在零网络、零 token 成本下被端到端测试。这也是读源码的推荐姿势之一：先看 <code>DEBUGGING.md</code>（study 系列配套）里怎么用 faux 复现场景。</p>
+
+<nav class="pagenav">
+  <a href="./08-rpc.html"><span class="dir">上一篇</span>← 08 · 无头模式与协议栈</a>
+  <a class="next" href="./index.html"><span class="dir">回到</span>总览 · 重新选择路线</a>
+</nav>
+
+<footer class="colophon">Pi 源码深度剖析 · 基于 worktree 368e013de（v0.84.1）· 全系列完</footer>
+</main>
+<script src="./script.js"></script>
+</body>
+</html>

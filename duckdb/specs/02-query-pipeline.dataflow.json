@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "DuckDB 核心原理：一条 SQL 的五段流水线",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      520
+    ],
+    "views": [
+      {
+        "id": "front",
+        "label": "前端与绑定",
+        "focus": [
+          "parser",
+          "transformer",
+          "binder"
+        ],
+        "note": "PostgreSQL 语法解析，转成 DuckDB 语句树后按语句类型绑定。"
+      },
+      {
+        "id": "optimize",
+        "label": "优化",
+        "focus": [
+          "optimizer",
+          "joinorder"
+        ],
+        "note": "35 遍有序优化，连接序用 DPhyp 超图 DP，超限退化为贪心。"
+      },
+      {
+        "id": "execute",
+        "label": "物理执行",
+        "focus": [
+          "physgen",
+          "executor",
+          "chunks"
+        ],
+        "note": "物理计划切分为流水线，向量化 DataChunk 推送执行。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "SQL 前端"
+    },
+    {
+      "label": "绑定"
+    },
+    {
+      "label": "优化"
+    },
+    {
+      "label": "物理计划"
+    },
+    {
+      "label": "流水线执行"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "parser",
+      "type": "frontend",
+      "label": "Parser",
+      "sublabel": "libpg_query",
+      "stage": 0,
+      "row": 0,
+      "tag": "PG 语法"
+    },
+    {
+      "id": "transformer",
+      "type": "backend",
+      "label": "Transformer",
+      "sublabel": "转语句树",
+      "stage": 0,
+      "row": 2
+    },
+    {
+      "id": "binder",
+      "type": "backend",
+      "label": "Binder",
+      "sublabel": "名称解析",
+      "stage": 1,
+      "row": 1,
+      "tag": "BoundStatement"
+    },
+    {
+      "id": "optimizer",
+      "type": "backend",
+      "label": "35 遍优化",
+      "sublabel": "下推·列裁剪",
+      "stage": 2,
+      "row": 0,
+      "tag": "有序"
+    },
+    {
+      "id": "joinorder",
+      "type": "backend",
+      "label": "连接序搜索",
+      "sublabel": "DPhyp 超图",
+      "stage": 2,
+      "row": 2,
+      "tag": "贪心兜底"
+    },
+    {
+      "id": "physgen",
+      "type": "backend",
+      "label": "物理计划生成",
+      "sublabel": "算子选择",
+      "stage": 3,
+      "row": 1,
+      "tag": "代价"
+    },
+    {
+      "id": "executor",
+      "type": "backend",
+      "label": "Executor",
+      "sublabel": "事件驱动",
+      "stage": 4,
+      "row": 0,
+      "tag": "并行"
+    },
+    {
+      "id": "chunks",
+      "type": "database",
+      "label": "DataChunk",
+      "sublabel": "2048 向量",
+      "stage": 4,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "id": "f_parse",
+      "from": "parser",
+      "to": "transformer",
+      "label": "PG 解析树",
+      "route": "vertical-channel",
+      "channelX": 190
+    },
+    {
+      "id": "f_trans",
+      "from": "transformer",
+      "to": "binder",
+      "label": "SQLStatement",
+      "labelDx": 24
+    },
+    {
+      "id": "f_bind",
+      "from": "binder",
+      "to": "optimizer",
+      "label": "逻辑计划",
+      "variant": "emphasis"
+    },
+    {
+      "id": "f_opt",
+      "from": "optimizer",
+      "to": "physgen",
+      "label": "优化后计划",
+      "variant": "emphasis"
+    },
+    {
+      "id": "f_join",
+      "from": "joinorder",
+      "to": "physgen",
+      "label": "连接序"
+    },
+    {
+      "id": "f_phys",
+      "from": "physgen",
+      "to": "executor",
+      "label": "物理算子树",
+      "variant": "emphasis"
+    },
+    {
+      "id": "f_exec",
+      "from": "executor",
+      "to": "chunks",
+      "label": "结果流",
+      "route": "vertical-channel",
+      "channelX": 1000
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "前端即 PG 语法",
+      "items": [
+        "libpg_query（PostgreSQL 语法）解析，Transformer 转成 SQLStatement",
+        "未知语句交给 ParserExtension，扩展可接管自己的语法",
+        "绑定失败可触发替换扫描：SELECT * FROM 'data.csv' 直接可查"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "有序优化器",
+      "items": [
+        "35 遍优化按固定顺序执行，每遍后做列绑定校验",
+        "过滤下推 → 连接序(DPhyp) → 统计传播 → 压缩物化 各司其职",
+        "关联子查询先展平成 DelimJoin，再由 Deliminator 清理冗余"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "物理化",
+      "items": [
+        "等值 Join → 哈希 Join，范围 Join → IEJoin/MergeJoin",
+        "聚合按位宽选完美哈希或基数分区哈希表",
+        "ORDER BY+LIMIT 自动改写 TopN；统计可触发压缩物化"
+      ]
+    }
+  ]
+}

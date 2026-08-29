@@ -1,0 +1,433 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Vane 物理架构：内嵌 Driver + Ray 集群 + Arrow 数据平面",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1280,
+      640
+    ],
+    "repository": {
+      "url": "https://github.com/AstroVela/vane.git",
+      "revision": "64ed91c7e7ea7791b93e81e98fac0e8dce5da4de"
+    },
+    "views": [
+      {
+        "id": "driver-side",
+        "label": "Driver 进程",
+        "focus": [
+          "user",
+          "driver",
+          "native",
+          "driver_actor"
+        ],
+        "note": "vane 以库形态内嵌在用户 Python 进程中，经 pybind11 调用引擎。"
+      },
+      {
+        "id": "cluster-plane",
+        "label": "Ray 数据平面",
+        "focus": [
+          "driver_actor",
+          "worker",
+          "shuffle",
+          "object_store"
+        ],
+        "note": "单 Driver Actor 调度，每节点一个常驻 Worker Actor，shuffle 走磁盘 IPC + Flight DoGet。"
+      },
+      {
+        "id": "compute-plane",
+        "label": "计算与存储",
+        "focus": [
+          "worker",
+          "udf_pool",
+          "s3"
+        ],
+        "note": "Worker 把 UDF 批交给 Actor 池（含 GPU），经 httpfs 直读对象存储。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "用户代码",
+      "sublabel": "Notebook / 脚本",
+      "pos": [
+        40,
+        262
+      ],
+      "size": [
+        128,
+        62
+      ]
+    },
+    {
+      "id": "driver",
+      "type": "backend",
+      "label": "Driver 进程",
+      "sublabel": "vane Python API（惰性）",
+      "pos": [
+        240,
+        260
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "vane/__init__.py",
+          "line": 310
+        }
+      ]
+    },
+    {
+      "id": "native",
+      "type": "backend",
+      "label": "vane._native",
+      "sublabel": "pybind11 + DuckDB 静态链接",
+      "pos": [
+        240,
+        390
+      ],
+      "size": [
+        170,
+        66
+      ],
+      "sources": [
+        {
+          "path": "CMakeLists.txt",
+          "line": 172
+        }
+      ]
+    },
+    {
+      "id": "driver_actor",
+      "type": "backend",
+      "label": "RayQueryDriverActor",
+      "sublabel": "规划 + FTE 准入 · head 单例",
+      "pos": [
+        500,
+        320
+      ],
+      "size": [
+        180,
+        70
+      ],
+      "sources": [
+        {
+          "path": "vane/runners/ray/driver.py",
+          "line": 1754
+        }
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "RayWorkerActor ×N",
+      "sublabel": "快照 DuckDB · Flight 服务",
+      "pos": [
+        780,
+        320
+      ],
+      "size": [
+        190,
+        70
+      ],
+      "sources": [
+        {
+          "path": "vane/runners/ray/worker.py",
+          "line": 1092
+        },
+        {
+          "path": "external/duckdb/src/execution/distributed/exchange/flight_server.cpp",
+          "line": 224
+        }
+      ]
+    },
+    {
+      "id": "object_store",
+      "type": "database",
+      "label": "Plasma 对象存储",
+      "sublabel": "ray.put 结果分区",
+      "pos": [
+        780,
+        120
+      ],
+      "size": [
+        190,
+        62
+      ],
+      "sources": [
+        {
+          "path": "vane/runners/ray/worker.py",
+          "line": 3215
+        }
+      ]
+    },
+    {
+      "id": "shuffle",
+      "type": "database",
+      "label": "ShuffleCache",
+      "sublabel": "磁盘 IPC 文件（节点本地）",
+      "pos": [
+        1060,
+        320
+      ],
+      "size": [
+        156,
+        62
+      ],
+      "sources": [
+        {
+          "path": "external/duckdb/src/execution/distributed/exchange/shuffle_cache.cpp",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "udf_pool",
+      "type": "backend",
+      "label": "UDF / LLM Actor 池",
+      "sublabel": "GPU：vLLM · SGLang · 批 UDF",
+      "pos": [
+        500,
+        490
+      ],
+      "size": [
+        180,
+        62
+      ],
+      "sources": [
+        {
+          "path": "vane/execution/udf_ray_actor_pool.py",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "s3",
+      "type": "cloud",
+      "label": "S3 / 对象存储",
+      "sublabel": "httpfs · Parquet / 视频",
+      "pos": [
+        1060,
+        490
+      ],
+      "size": [
+        156,
+        62
+      ],
+      "sources": [
+        {
+          "path": "cmake/duckdb_loader.cmake",
+          "line": 45
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "用户 Python 进程（vane 以库内嵌）",
+      "wraps": [
+        "user",
+        "driver",
+        "native"
+      ],
+      "pad": 18
+    },
+    {
+      "kind": "region",
+      "label": "Ray 集群（可信网络 · Flight 明文无鉴权）",
+      "wraps": [
+        "driver_actor",
+        "worker",
+        "udf_pool",
+        "object_store",
+        "shuffle"
+      ],
+      "pad": 20
+    },
+    {
+      "kind": "security-group",
+      "label": "Arrow 数据平面",
+      "wraps": [
+        "worker",
+        "shuffle",
+        "object_store"
+      ],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    {
+      "id": "api",
+      "from": "user",
+      "to": "driver",
+      "label": "Relation API",
+      "variant": "emphasis",
+      "labelAt": [
+        204,
+        335
+      ]
+    },
+    {
+      "id": "bind",
+      "from": "driver",
+      "to": "native",
+      "label": "pybind11",
+      "labelAt": [
+        325,
+        358
+      ]
+    },
+    {
+      "id": "plan",
+      "from": "native",
+      "to": "driver_actor",
+      "label": "计划 + 连接快照",
+      "variant": "emphasis",
+      "labelAt": [
+        455,
+        455
+      ]
+    },
+    {
+      "id": "tasks",
+      "from": "driver_actor",
+      "to": "worker",
+      "label": "FTE 任务",
+      "variant": "emphasis",
+      "labelAt": [
+        726,
+        338
+      ]
+    },
+    {
+      "id": "put",
+      "from": "worker",
+      "to": "object_store",
+      "label": "ray.put 分区",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "route": "straight"
+    },
+    {
+      "id": "sinkwrite",
+      "from": "worker",
+      "to": "shuffle",
+      "label": "写 IPC",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        1020,
+        296
+      ]
+    },
+    {
+      "id": "doget",
+      "from": "shuffle",
+      "to": "worker",
+      "label": "DoGet 拉取",
+      "variant": "dashed"
+    },
+    {
+      "id": "httpfs",
+      "from": "worker",
+      "to": "s3",
+      "label": "httpfs 读",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "via": [
+        [
+          875,
+          430
+        ],
+        [
+          1138,
+          430
+        ]
+      ]
+    },
+    {
+      "id": "lease",
+      "from": "object_store",
+      "to": "driver_actor",
+      "label": "结果租约",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "top",
+      "via": [
+        [
+          728,
+          151
+        ],
+        [
+          728,
+          285
+        ],
+        [
+          590,
+          285
+        ]
+      ]
+    },
+    {
+      "id": "streamback",
+      "from": "driver_actor",
+      "to": "driver",
+      "label": "PyArrow 流回",
+      "variant": "dashed"
+    },
+    {
+      "id": "udfbatch",
+      "from": "worker",
+      "to": "udf_pool",
+      "label": "map_batches",
+      "fromSide": "left",
+      "toSide": "right",
+      "via": [
+        [
+          752,
+          355
+        ],
+        [
+          752,
+          521
+        ]
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "物理边界",
+      "items": [
+        "Driver 以库形态内嵌在用户进程里，没有独立服务",
+        "Ray 集群内只有一个命名 Driver Actor，钉在 head 节点",
+        "每个 Ray 节点恰好一个常驻 Worker Actor（max_concurrency 256）"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "数据平面",
+      "items": [
+        "全链路 Arrow RecordBatch，经 C 数据接口跨语言传递",
+        "shuffle 先落本地磁盘 IPC 文件，再用 Flight DoGet 拉取",
+        "最终结果分区经 ray.put 进 Plasma，由 Driver 租约收集"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "控制平面",
+      "items": [
+        "FTE 用租约 / 准入泵 / 压力记账自建调度，不走 Ray 原生任务队列",
+        "Worker 依据连接快照重建精确的 DuckDB DatabaseInstance",
+        "Flight 无 TLS、无鉴权，靠可信集群网络隔离；UDF/LLM 走独立 Actor 池"
+      ]
+    }
+  ]
+}

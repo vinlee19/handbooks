@@ -1,0 +1,313 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Vane 核心交互：Python 与引擎的双语言回路",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1280,
+      640
+    ],
+    "views": [
+      {
+        "id": "main-loop",
+        "label": "主回路",
+        "focus": [
+          "user_call",
+          "binding",
+          "engine",
+          "dispatcher",
+          "udf_exec"
+        ],
+        "note": "表达式从 Python 附加，经引擎规划，再以批形式回到 Python 执行。"
+      },
+      {
+        "id": "data-crossing",
+        "label": "数据过界",
+        "focus": [
+          "dispatcher",
+          "udf_exec",
+          "gpu"
+        ],
+        "note": "函数与批数据的序列化边界：cloudpickle + Arrow Table。"
+      },
+      {
+        "id": "error-path",
+        "label": "错误回传",
+        "focus": [
+          "udf_exec",
+          "binding"
+        ],
+        "note": "Worker 异常按 PythonExceptionHandling 策略转译回 Python。"
+      }
+    ],
+    "repository": {
+      "url": "https://github.com/AstroVela/vane.git",
+      "revision": "64ed91c7e7ea7791b93e81e98fac0e8dce5da4de"
+    }
+  },
+  "components": [
+    {
+      "id": "user_call",
+      "type": "frontend",
+      "label": "调用方",
+      "sublabel": "map_batches · ai.embed",
+      "pos": [
+        40,
+        270
+      ],
+      "size": [
+        170,
+        70
+      ]
+    },
+    {
+      "id": "binding",
+      "type": "backend",
+      "label": "pybind11 绑定",
+      "sublabel": "_VaneUDFMapBatchesExpression",
+      "pos": [
+        300,
+        270
+      ],
+      "size": [
+        180,
+        70
+      ],
+      "sources": [
+        {
+          "path": "vane/_expression_udf.py",
+          "line": 1341
+        }
+      ]
+    },
+    {
+      "id": "engine",
+      "type": "backend",
+      "label": "引擎规划",
+      "sublabel": "UDFProjectRewriter",
+      "pos": [
+        560,
+        270
+      ],
+      "size": [
+        180,
+        70
+      ],
+      "sources": [
+        {
+          "path": "external/duckdb/src/optimizer/optimizer.cpp",
+          "line": 231
+        }
+      ]
+    },
+    {
+      "id": "dispatcher",
+      "type": "backend",
+      "label": "算子分发",
+      "sublabel": "PhysicalUdfInOut",
+      "pos": [
+        820,
+        270
+      ],
+      "size": [
+        180,
+        70
+      ],
+      "sources": [
+        {
+          "path": "src/vane_py/udf_executor.cpp",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "udf_exec",
+      "type": "external",
+      "label": "批执行",
+      "sublabel": "Ray actor / subprocess",
+      "pos": [
+        1080,
+        270
+      ],
+      "size": [
+        180,
+        70
+      ],
+      "sources": [
+        {
+          "path": "vane/execution/unified_executor.py",
+          "line": 1
+        }
+      ]
+    },
+    {
+      "id": "gpu",
+      "type": "backend",
+      "label": "GPU 推理池",
+      "sublabel": "vLLM · SGLang 常驻",
+      "pos": [
+        1080,
+        450
+      ],
+      "size": [
+        180,
+        70
+      ],
+      "sources": [
+        {
+          "path": "vane/execution/udf_ray_actor_pool.py",
+          "line": 1
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Python 调用方",
+      "wraps": [
+        "user_call"
+      ],
+      "pad": 16
+    },
+    {
+      "kind": "region",
+      "label": "C++ vane._native / DuckDB 引擎",
+      "wraps": [
+        "binding",
+        "engine",
+        "dispatcher"
+      ],
+      "pad": 16
+    },
+    {
+      "kind": "region",
+      "label": "Worker 进程",
+      "wraps": [
+        "udf_exec",
+        "gpu"
+      ],
+      "pad": 16
+    }
+  ],
+  "connections": [
+    {
+      "id": "c_attach",
+      "from": "user_call",
+      "to": "binding",
+      "label": "attach 表达式",
+      "variant": "emphasis"
+    },
+    {
+      "id": "c_lower",
+      "from": "binding",
+      "to": "engine",
+      "label": "lowering · 释放 GIL",
+      "variant": "emphasis",
+      "labelAt": [
+        520,
+        354
+      ]
+    },
+    {
+      "id": "c_plan",
+      "from": "engine",
+      "to": "dispatcher",
+      "label": "STREAMING_UDF 算子",
+      "labelAt": [
+        780,
+        354
+      ]
+    },
+    {
+      "id": "c_submit",
+      "from": "dispatcher",
+      "to": "udf_exec",
+      "label": "pickle + Arrow 批",
+      "variant": "dashed",
+      "labelAt": [
+        1040,
+        354
+      ]
+    },
+    {
+      "id": "c_result",
+      "from": "udf_exec",
+      "to": "dispatcher",
+      "label": "Arrow 结果批",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [
+        [
+          1170,
+          180
+        ],
+        [
+          910,
+          180
+        ]
+      ]
+    },
+    {
+      "id": "c_fetch",
+      "from": "dispatcher",
+      "to": "user_call",
+      "label": "fetch / to_arrow",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [
+        [
+          910,
+          565
+        ],
+        [
+          125,
+          565
+        ]
+      ]
+    },
+    {
+      "id": "c_gpu",
+      "from": "udf_exec",
+      "to": "gpu",
+      "label": "大模型批（往返）",
+      "labelAt": [
+        1170,
+        354
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "双语言边界",
+      "items": [
+        "调用方：rel.map_batches(fn) 或 vane.ai.embed / prompt 附加表达式",
+        "绑定层封装为 _VaneUDFMapBatchesExpression，规划期降为 LOGICAL_UDF_PROJECT",
+        "执行期引擎线程释放 GIL，Python 回调只发生在 UDF 边界"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "数据过界",
+      "items": [
+        "分发器即 PhysicalUdfInOut + GlobalPythonDispatcher，按批提交",
+        "函数对象经 cloudpickle 下发到 Ray actor / subprocess",
+        "批数据以 pyarrow.Table 进出，背压由提交槽位与 in-flight 上限控制"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "错误与降级",
+      "items": [
+        "on_error=raise 时异常经 PythonExceptionHandling 转译回调用栈",
+        "on_error=ignore 时该行置 NULL 并记录脱敏日志",
+        "vLLM / SGLang 提供方不走 Python 回路，直接降为原生 VLLM_PROJECT 算子"
+      ]
+    }
+  ]
+}

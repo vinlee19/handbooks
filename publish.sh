@@ -32,15 +32,13 @@ while IFS='|' read -r -u 3 name icon title desc accent src; do
     continue
   fi
 
-  rm -rf "$name"
-  mkdir -p "$name"
-  cp "$src"/*.html "$name"/
-  # 视觉检查的中间产物不发布
-  rm -f "$name"/*visual-check*.html
-  # 带上 assets 子目录（如 ducklake 的样式文件）
-  if [ -d "$src/assets" ]; then
-    cp -R "$src/assets" "$name"/
-  fi
+  # 整目录同步：自动带上 style.css / script.js / assets/ / specs/ 等辅助文件，
+  # 排除视觉检查中间产物与本地垃圾文件
+  rsync -a --delete \
+    --exclude='*visual-check*' \
+    --exclude='.git/' --exclude='node_modules/' --exclude='.mimosa/' \
+    --exclude='.DS_Store' \
+    "$src"/ "$name"/
 
   # 已知修复：duckdb 的 index 里有指向本机 vane 项目的相对链接，站内改为根导航页
   if [ -f "$name/index.html" ]; then

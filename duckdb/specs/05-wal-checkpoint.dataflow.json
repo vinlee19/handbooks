@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "DuckDB 持久化：从 WAL 追加到单文件重写",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      520
+    ],
+    "views": [
+      {
+        "id": "wal-path",
+        "label": "WAL 快路径",
+        "focus": [
+          "dml",
+          "wal",
+          "auto"
+        ],
+        "note": "提交只追加 WAL 并 fsync，成本低。"
+      },
+      {
+        "id": "checkpoint",
+        "label": "检查点重写",
+        "focus": [
+          "auto",
+          "swap",
+          "writer",
+          "header"
+        ],
+        "note": "WAL 超阈值后切换旁路文件，整库序列化进新块。"
+      },
+      {
+        "id": "finish",
+        "label": "收尾",
+        "focus": [
+          "header",
+          "truncate"
+        ],
+        "note": "新 meta_block 原子生效，旧 WAL 截断进入下一轮。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "事务写入"
+    },
+    {
+      "label": "WAL"
+    },
+    {
+      "label": "触发判定"
+    },
+    {
+      "label": "重写"
+    },
+    {
+      "label": "收尾"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "dml",
+      "type": "backend",
+      "label": "DML 提交",
+      "sublabel": "增删改",
+      "stage": 0,
+      "row": 1,
+      "tag": "OLTP 少量"
+    },
+    {
+      "id": "wal",
+      "type": "database",
+      "label": "WAL",
+      "sublabel": "顺序追加",
+      "stage": 1,
+      "row": 1,
+      "tag": "fsync"
+    },
+    {
+      "id": "auto",
+      "type": "backend",
+      "label": "自动判定",
+      "sublabel": "超阈值触发",
+      "stage": 2,
+      "row": 1,
+      "tag": "checkpoint_wal_size"
+    },
+    {
+      "id": "swap",
+      "type": "backend",
+      "label": "WAL 切换",
+      "sublabel": "新提交走旁路",
+      "stage": 3,
+      "row": 0,
+      "tag": "不停服"
+    },
+    {
+      "id": "writer",
+      "type": "backend",
+      "label": "检查点写入",
+      "sublabel": "catalog + 行组",
+      "stage": 3,
+      "row": 2,
+      "tag": "压缩落盘"
+    },
+    {
+      "id": "header",
+      "type": "database",
+      "label": "新 Header",
+      "sublabel": "meta_block 指针",
+      "stage": 4,
+      "row": 0,
+      "tag": "原子切换"
+    },
+    {
+      "id": "truncate",
+      "type": "backend",
+      "label": "旧 WAL 截断",
+      "sublabel": "下一轮生效",
+      "stage": 4,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "id": "f_dml",
+      "from": "dml",
+      "to": "wal",
+      "label": "追加 entry",
+      "variant": "emphasis",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "f_size",
+      "from": "wal",
+      "to": "auto",
+      "label": "大小检查",
+      "route": "straight",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "f_trigger",
+      "from": "auto",
+      "to": "swap",
+      "label": "达到阈值",
+      "variant": "emphasis"
+    },
+    {
+      "id": "f_swap",
+      "from": "swap",
+      "to": "writer",
+      "label": "整库序列化",
+      "route": "vertical-channel",
+      "channelX": 830,
+      "labelAt": [
+        790,
+        271
+      ]
+    },
+    {
+      "id": "f_meta",
+      "from": "writer",
+      "to": "header",
+      "label": "meta_block",
+      "variant": "emphasis",
+      "labelAt": [
+        910,
+        258
+      ]
+    },
+    {
+      "id": "f_trunc",
+      "from": "header",
+      "to": "truncate",
+      "label": "截断旧 WAL",
+      "variant": "dashed",
+      "route": "vertical-channel",
+      "channelX": 1050,
+      "labelAt": [
+        1050,
+        271
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "快路径",
+      "items": [
+        "提交只做 WAL 顺序追加 + fsync，不随机写数据文件",
+        "未提交数据在事务本地存储（LocalStorage），提交时合入",
+        "WAL 条目带类型：建表/插删改/行组数据/检查点标记"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "重写检查点",
+      "items": [
+        "WAL 写入 .checkpoint.wal 旁路，检查点期间新提交不停",
+        "catalog 按依赖拓扑排序后序列化，行组按列段压缩（FSST/ALP/Bitpacking）",
+        "部分块管理器（PartialBlockManager）把小列段拼进共享块"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "崩溃安全",
+      "items": [
+        "双 DatabaseHeader 交替写，任一时刻都有一个完好根指针",
+        "启动时：加载 meta_block 指向的快照，再重放 WAL 补齐差量",
+        "存储版本带号（64→69），老文件可升级不可降级"
+      ]
+    }
+  ]
+}

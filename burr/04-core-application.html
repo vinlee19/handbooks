@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>04 · Application 运行时核心 — Apache Burr 源码剖析</title>
+<style>
+:root{
+  --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --line:#e2e8f0;
+  --blue:#2563eb; --blue-bg:#eff6ff; --green:#16a34a; --green-bg:#f0fdf4;
+  --amber:#d97706; --amber-bg:#fffbeb; --purple:#9333ea; --purple-bg:#faf5ff;
+  --red:#dc2626; --red-bg:#fef2f2; --code-bg:#0f172a;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.75}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.94);backdrop-filter:blur(6px);color:#e2e8f0;display:flex;gap:12px;align-items:center;padding:10px 24px;font-size:13px;flex-wrap:wrap}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:3px 8px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav .brand{font-weight:700;color:#fff;font-size:14px;letter-spacing:.5px;margin-right:8px}
+.topnav .brand span{color:#60a5fa}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+.hero{background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:40px 0;margin-bottom:28px}
+.hero h1{margin:0 0 8px;font-size:28px}
+.hero p{margin:0;color:#cbd5e1;font-size:14.5px;max-width:880px}
+main{padding-bottom:64px}
+h2{font-size:23px;border-left:5px solid var(--blue);padding-left:12px;margin:42px 0 10px}
+h3{font-size:18px;margin:26px 0 6px;color:#1d4ed8}
+h4{font-size:15.5px;margin:18px 0 6px}
+p,li{color:#334155;font-size:14.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:16px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.grid{display:grid;gap:16px}
+.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:860px){.grid.c2,.grid.c3{grid-template-columns:1fr}}
+figure{margin:20px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;overflow-x:auto}
+figcaption{font-size:13px;color:var(--muted);text-align:center;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+figcaption b{color:#1d4ed8}
+pre{background:var(--code-bg);color:#e2e8f0;padding:16px 18px;border-radius:10px;overflow-x:auto;font-size:12.8px;line-height:1.65}
+code{font-family:"SF Mono",Menlo,Consolas,"Courier New",monospace}
+p code,li code,td code,h3 code,h4 code,figcaption code{background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:5px;font-size:.9em}
+pre code{background:none;color:inherit;padding:0}
+.c-key{color:#7dd3fc}.c-str{color:#fbbf24}.c-com{color:#94a3b8;font-style:italic}.c-fn{color:#a5b4fc}.c-num{color:#f472b6}.c-dec{color:#fde047}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:#fff}
+th{background:#1e293b;color:#fff;text-align:left;padding:8px 12px;font-weight:600}
+td{border:1px solid var(--line);padding:7px 12px;vertical-align:top}
+tr:nth-child(even) td{background:#f8fafc}
+.path{font-family:monospace;background:#f1f5f9;border:1px solid var(--line);padding:1px 7px;border-radius:5px;font-size:12.5px;color:#0f766e;word-break:break-all}
+.note{border-left:4px solid var(--amber);background:var(--amber-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.note b{color:#92400e}
+.tip{border-left:4px solid var(--green);background:var(--green-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.tip b{color:#166534}
+.warn{border-left:4px solid var(--red);background:var(--red-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.pager{display:flex;justify-content:space-between;margin:40px 0 8px}
+.pager a{background:#fff;border:1px solid var(--line);padding:10px 18px;border-radius:10px;text-decoration:none;color:var(--ink);font-size:14px}
+.pager a:hover{border-color:var(--blue);color:var(--blue)}
+footer.foot{text-align:center;color:#94a3b8;font-size:12.5px;padding:24px 0 40px}
+svg text{font-family:inherit}
+svg .t{fill:#1e293b;font-size:13px}
+svg .tb{fill:#fff;font-weight:700;font-size:13px}
+svg .ts{fill:#475569;font-size:11px}
+svg .tt{fill:#0f172a;font-weight:700;font-size:15px}
+svg .tc{fill:#64748b;font-size:11px;font-family:Menlo,monospace}
+svg .lbl{fill:#334155;font-size:11.5px}
+svg .ar{stroke:#64748b;stroke-width:1.5;fill:none}
+svg .ar-b{stroke:#2563eb;stroke-width:1.8;fill:none}
+svg .ar-dash{stroke:#94a3b8;stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+svg .zone{fill:#f8fafc;stroke:#cbd5e1;stroke-dasharray:6 4}
+svg .bx{stroke-width:1.5}
+svg .b-blue{fill:#eff6ff;stroke:#3b82f6}
+svg .b-blue-d{fill:#dbeafe;stroke:#2563eb}
+svg .b-green{fill:#f0fdf4;stroke:#22c55e}
+svg .b-green-d{fill:#dcfce7;stroke:#16a34a}
+svg .b-amber{fill:#fffbeb;stroke:#f59e0b}
+svg .b-purple{fill:#faf5ff;stroke:#a855f7}
+svg .b-red{fill:#fef2f2;stroke:#ef4444}
+svg .b-slate{fill:#f1f5f9;stroke:#94a3b8}
+svg .b-dark{fill:#1e293b;stroke:#0f172a}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">Apache&nbsp;Burr<span>·源码深度剖析</span></span>
+  <a href="index.html">总导航</a><a href="01-overview.html">项目全景</a>
+  <a href="02-core-state.html">State</a><a href="03-core-action.html">Action</a>
+  <a href="04-core-application.html"><b>运行时</b></a><a href="05-graph-builder.html">Graph/Builder</a>
+  <a href="06-lifecycle-hooks.html">Hooks/Tracing</a><a href="07-persistence.html">持久化</a>
+  <a href="08-parallelism.html">并行</a><a href="09-tracking.html">追踪系统</a>
+  <a href="10-ui-frontend.html">遥测 UI</a><a href="11-integrations.html">集成生态</a>
+  <a href="12-execution-flow.html">端到端全景</a>
+</nav>
+
+<header class="hero"><div class="wrap">
+  <h1>04 · Application 运行时：执行引擎的每一行</h1>
+  <p>源码：<span class="path">burr/core/application.py</span>（2874 行，全仓库最核心的文件）。本篇自底向上拆解 <code>Application</code>：内部结构 → 游标机制 → 执行 API 层次 → 单步时序 → 依赖注入 → 上下文传递 → fork/spawn。</p>
+</div></header>
+
+<main class="wrap">
+
+<h2>4.1 Application 内部结构</h2>
+<figure>
+<svg viewBox="0 0 1060 560" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#64748b"/></marker></defs>
+<rect class="bx b-blue-d" x="40" y="30" width="500" height="500" rx="14" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="tt" x="60" y="60" style="fill:#1e3a8a">Application（application.py:835，构造仅限内部/Builder）</text>
+<rect class="bx b-slate" x="60" y="80" width="220" height="90" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="76" y="104" font-weight="700">_graph : Graph</text>
+<text class="ts" x="76" y="124">图 + 邻接表（只读）</text>
+<text class="ts" x="76" y="142">_public_facing_graph: 含 entrypoint</text>
+<rect class="bx b-slate" x="300" y="80" width="220" height="90" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="316" y="104" font-weight="700">_state : State</text>
+<text class="ts" x="316" y="124">唯一可变字段（_set_state :2031）</text>
+<text class="ts" x="316" y="144">内含 __PRIOR_STEP / __SEQUENCE_ID</text>
+<rect class="bx b-green" x="60" y="190" width="460" height="86" rx="8" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="76" y="214" font-weight="700">_adapter_set : LifecycleAdapterSet</text>
+<text class="ts" x="76" y="234">全部观测切面；构造时自动追加 TracerFactoryContextHook(:878)</text>
+<text class="ts" x="76" y="256">构造完成后立即触发 post_application_create 钩子（:903-911）</text>
+<rect class="bx b-amber" x="60" y="296" width="460" height="120" rx="8" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="76" y="320" font-weight="700">_dependency_factory : dict（:891-899）—— 按需制造的注入依赖</text>
+<text class="tc" x="76" y="346">"__tracer"  → TracerFactory(lifecycle_adapters, app_id, partition_key)</text>
+<text class="tc" x="76" y="368">"__context" → self._context_factory(action, sequence_id)</text>
+<text class="ts" x="76" y="392">action 签名里声明 __tracer / __context 才会被注入（最小知情）</text>
+<rect class="bx b-purple" x="60" y="436" width="460" height="74" rx="8" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="t" x="76" y="460" font-weight="700">身份与血缘</text>
+<text class="ts" x="76" y="480">uid(app_id) · partition_key · entrypoint · fork_parent_pointer / spawning_parent_pointer</text>
+<text class="ts" x="76" y="500">_parallel_executor_factory（默认 ThreadPoolExecutor，:831-832）</text>
+<rect class="bx b-green" x="580" y="30" width="450" height="240" rx="14" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tt" x="600" y="58">TracerFactoryContextHook（:768-824）</text>
+<text class="ts" x="600" y="82">引擎自动挂的内内部钩子，职责单一：</text>
+<text class="tc" x="600" y="110">pre_run_step:  把 TracerFactory 塞进</text>
+<text class="tc" x="600" y="128">               contextvar（tracer_factory_context_var）</text>
+<text class="tc" x="600" y="150">post_run_step: reset 该 contextvar</text>
+<text class="ts" x="600" y="178">→ 这样任意深度的业务代码都能通过</text>
+<text class="ts" x="600" y="196">tracer_factory_context_var.get() 拿到当前</text>
+<text class="ts" x="600" y="214">span 工厂实现「带外观测」（06 篇）。</text>
+<text class="ts" x="600" y="238">async 流式场景 token 复位跨 context 失败时</text>
+<text class="ts" x="600" y="256">降级 set(None)（:814-822，OTel 同款问题）</text>
+<rect class="bx b-amber" x="580" y="290" width="450" height="240" rx="14" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="tt" x="600" y="318">ApplicationContext（:618-667）</text>
+<text class="ts" x="600" y="342">dataclass：app_id / partition_key / sequence_id</text>
+<text class="ts" x="600" y="360">+ tracker / parallel_executor_factory / state_initializer</text>
+<text class="ts" x="600" y="378">/ state_persister / action_name</text>
+<text class="ts" x="600" y="406">同时是 context manager：__enter__ 把自己写入</text>
+<text class="ts" x="600" y="424">contextvar _application_context（:665）</text>
+<text class="ts" x="600" y="448">→ 子应用/深层库代码用 ApplicationContext.get()</text>
+<text class="ts" x="600" y="466">即可连回父应用（并行与递归追踪的基础，08 篇）。</text>
+<text class="ts" x="600" y="494">每步执行都包在 with self.context: 里（_step :954）</text>
+<path class="ar" d="M540 330 L578 330" marker-end="url(#arr)"/>
+</svg>
+<figcaption><b>图 4-1 · Application 对象结构</b> —— 不可变图 + 唯一可变的 _state + 钩子集合 + 按需依赖工厂。引擎对追踪/持久化一无所知，全部经由钩子与 contextvar 间接到达。</figcaption>
+</figure>
+
+<h2>4.2 游标机制：位置活在 State 里</h2>
+<div class="grid c2">
+<div class="card">
+<h3>两个哨兵键</h3>
+<pre><code><span class="c-com"># application.py:85-86</span>
+PRIOR_STEP   = <span class="c-str">"__PRIOR_STEP"</span>   <span class="c-com"># 上一个动作名</span>
+SEQUENCE_ID  = <span class="c-str">"__SEQUENCE_ID"</span>  <span class="c-com"># 步计数器</span></code></pre>
+<p>每步结束时 <code>_update_internal_state_value</code>（<span class="path">application.py:1010-1019</span>）把刚执行的动作名写进 <code>__PRIOR_STEP</code>；每步开始前 <code>_increment_sequence_id</code>（<span class="path">:2109-2113</span>）自增计数。</p>
+<h3>决定下一步</h3>
+<pre><code><span class="c-key">def</span> <span class="c-fn">get_next_action</span>(self):          <span class="c-com"># :2034</span>
+    <span class="c-key">return</span> self._graph.get_next_node(
+        self._state.get(PRIOR_STEP),
+        self._state, self.entrypoint)</code></pre>
+</div>
+<div class="card">
+<h3>推论（设计精髓）</h3>
+<ul>
+<li><b>恢复 = 载入 State</b>：进程崩溃后重建 Application 并灌入持久化的 State，<code>__PRIOR_STEP</code> 让执行精确落在断点之后；</li>
+<li><b>对账有主键</b>：<code>__SEQUENCE_ID</code> 让 log.jsonl 事件、数据库行、span 全部能对齐到「第几步」；</li>
+<li><b>游标受保护</b>：归并时动作写下的 <code>__</code> 私有键会被剥离（02 篇 <code>_state_update</code>），动作无法篡改位置；</li>
+<li><code>reset_to_entrypoint()</code> 的实现就是删掉 <code>__PRIOR_STEP</code>（<span class="path">:1005-1008</span>）——回到起点=丢失位置。</li>
+</ul>
+</div>
+</div>
+
+<h2>4.3 执行 API 的四层结构</h2>
+<figure>
+<svg viewBox="0 0 1060 500" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<rect class="bx b-blue-d" x="330" y="30" width="400" height="90" rx="12" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="tt" x="350" y="58" style="fill:#1e3a8a">L1 一次调用（最常用）</text>
+<text class="tc" x="350" y="82">run(halt_before, halt_after, inputs) → (action, result, state)   :1336</text>
+<text class="tc" x="350" y="102">arun :1364 · stream_result :1394 · astream_result :1645</text>
+<rect class="bx b-blue" x="230" y="170" width="280" height="100" rx="12" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="tt" x="250" y="198" style="fill:#1e3a8a">L2 迭代器</text>
+<text class="tc" x="250" y="222">iterate() 生成器，每步 yield，</text>
+<text class="tc" x="250" y="242">StopIteration.value 携带终值 :1259</text>
+<text class="tc" x="250" y="262">aiterate :1305（无返回值——语言限制）</text>
+<rect class="bx b-blue" x="560" y="170" width="270" height="100" rx="12" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="tt" x="580" y="198" style="fill:#1e3a8a">L2' 流式单步</text>
+<text class="tc" x="580" y="222">stream_result 返回容器，</text>
+<text class="tc" x="580" y="242">内部单步流式执行 + 状态提交</text>
+<text class="tc" x="580" y="262">stream_iterate :1918 = 循环组合两者</text>
+<rect class="bx b-green" x="330" y="320" width="400" height="130" rx="12" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tt" x="350" y="348">L3 原子步</text>
+<text class="tc" x="350" y="374">step(inputs) :916 → _step :949（同步主路径）</text>
+<text class="tc" x="350" y="396">astep :1075 → _astep :1089（async 动作才真异步；</text>
+<text class="tc" x="350" y="414">同步动作会回调 _step(_run_hooks=False) 避免钩子双发 :1118）</text>
+<text class="tc" x="350" y="438">执行核心：hooks → run/update → 盖游标 → 提交 → finally hooks</text>
+<rect class="bx b-amber" x="30" y="170" width="170" height="280" rx="12" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="46" y="198" font-weight="700">halt 语义</text>
+<text class="ts" x="46" y="224">halt_after=[动作名]</text>
+<text class="ts" x="46" y="240">跑到该动作后停</text>
+<text class="ts" x="46" y="266">halt_before=[动作名]</text>
+<text class="ts" x="46" y="282">在该动作前停</text>
+<text class="ts" x="46" y="308">支持 "@tag:xxx" 按标签</text>
+<text class="ts" x="46" y="324">（_parse_action_list :1156）</text>
+<text class="ts" x="46" y="352">_should_halt_iterate :1213</text>
+<text class="ts" x="46" y="368">before 优先于 after；</text>
+<text class="ts" x="46" y="384">至少会执行一步再判定</text>
+<rect class="bx b-amber" x="860" y="170" width="170" height="280" rx="12" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="876" y="198" font-weight="700">装饰器切面</text>
+<text class="ts" x="876" y="224">每个公共入口都被</text>
+<text class="ts" x="876" y="240">_call_execute_method_pre_post</text>
+<text class="ts" x="876" y="256">(:681-765) 装饰：</text>
+<text class="ts" x="876" y="282">pre/post_run_execute_call</text>
+<text class="ts" x="876" y="298">钩子只发一次 ——</text>
+<text class="ts" x="876" y="314">用 contextvar 哨兵记录</text>
+<text class="ts" x="876" y="330">app.uid 是否已在执行中</text>
+<text class="ts" x="876" y="356">（run 内部调 iterate 不会</text>
+<text class="ts" x="876" y="372">重复触发；嵌套子应用因</text>
+<text class="ts" x="876" y="388">uid 不同而独立追踪）</text>
+<path class="ar-b" d="M530 120 L420 168" marker-end="url(#arr2)"/>
+<text class="tc" x="536" y="150" style="fill:#2563eb">= 排空 iterate</text>
+<path class="ar-b" d="M530 120 L660 168" marker-end="url(#arr2)"/>
+<path class="ar-b" d="M400 270 L460 318" marker-end="url(#arr2)"/>
+<text class="tc" x="330" y="300" style="fill:#2563eb">循环调 step</text>
+<path class="ar-b" d="M690 270 L580 318" marker-end="url(#arr2)"/>
+<text class="tc" x="660" y="300" style="fill:#2563eb">单步流式</text>
+</svg>
+<figcaption><b>图 4-2 · 执行 API 四层结构</b> —— run 是 iterate 的「排空」；iterate 是 step 的循环 + halt 判定；step/_step 是唯一的原子执行单元。所有入口共享同一套 halt 解析与装饰器钩子。</figcaption>
+</figure>
+
+<h2>4.4 单步执行完整时序（引擎的心脏）</h2>
+<figure>
+<svg viewBox="0 0 1060 660" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker><marker id="arr3r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#dc2626"/></marker></defs>
+<!-- lifelines -->
+<rect class="bx b-blue-d" x="20" y="20" width="150" height="40" rx="8" style="fill:#dbeafe" style="stroke:#2563eb"/><text class="t" x="52" y="45" font-weight="700">调用方</text>
+<rect class="bx b-blue" x="220" y="20" width="150" height="40" rx="8" style="fill:#eff6ff" style="stroke:#3b82f6"/><text class="t" x="252" y="45" font-weight="700">Application</text>
+<rect class="bx b-slate" x="420" y="20" width="130" height="40" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/><text class="t" x="442" y="45" font-weight="700">Graph</text>
+<rect class="bx b-green" x="600" y="20" width="130" height="40" rx="8" style="fill:#f0fdf4" style="stroke:#22c55e"/><text class="t" x="622" y="45" font-weight="700">Hooks 切面</text>
+<rect class="bx b-amber" x="780" y="20" width="120" height="40" rx="8" style="fill:#fffbeb" style="stroke:#f59e0b"/><text class="t" x="806" y="45" font-weight="700">Action</text>
+<rect class="bx b-purple" x="930" y="20" width="110" height="40" rx="8" style="fill:#faf5ff" style="stroke:#a855f7"/><text class="t" x="956" y="45" font-weight="700">State</text>
+<line x1="95" y1="60" x2="95" y2="640" style="stroke:#cbd5e1"/><line x1="295" y1="60" x2="295" y2="640" style="stroke:#cbd5e1"/>
+<line x1="485" y1="60" x2="485" y2="640" style="stroke:#cbd5e1"/><line x1="665" y1="60" x2="665" y2="640" style="stroke:#cbd5e1"/>
+<line x1="840" y1="60" x2="840" y2="640" style="stroke:#cbd5e1"/><line x1="985" y1="60" x2="985" y2="640" style="stroke:#cbd5e1"/>
+<path class="ar-b" d="M95 90 L293 90" marker-end="url(#arr3)"/><text class="tc" x="110" y="82">app.run(halt_after=["result"], inputs={...})  :1336</text>
+<path class="ar-b" d="M295 116 L483 116" marker-end="url(#arr3)"/><text class="tc" x="306" y="108">get_next_node(__PRIOR_STEP, state, entrypoint) :2034→graph.py:150</text>
+<path class="ar" d="M485 142 L293 142" style="stroke-dasharray:4 3"/><text class="tc" x="330" y="136">Action（首步=entrypoint；此后=首条满足条件的边；无→None 终点）</text>
+<path class="ar-b" d="M295 168 L663 168" marker-end="url(#arr3)"/><text class="tc" x="330" y="160">pre_run_step（含内置 TracerFactoryContextHook；追踪器记 BeginEntry :962-970）</text>
+<path class="ar-b" d="M295 200 L838 200" marker-end="url(#arr3)"/><text class="tc" x="470" y="192">执行动作（按 single_step/streaming 选路，:975-983）</text>
+<rect x="700" y="212" width="260" height="70" rx="8" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="tc" x="712" y="234">single_step: run_and_update(state,**inputs)</text>
+<text class="tc" x="712" y="252">两步式: _run_function → result</text>
+<text class="tc" x="712" y="270">        _run_reducer → new_state（写入校验）</text>
+<path class="ar-b" d="M840 300 L983 300" marker-end="url(#arr3)"/><text class="tc" x="860" y="292">update(result, state) → 新 State</text>
+<path class="ar-b" d="M295 330 L983 330" marker-end="url(#arr3)"/><text class="tc" x="420" y="322">_update_internal_state_value: 盖 __PRIOR_STEP=action.name :985,:1010</text>
+<path class="ar-b" d="M295 356 L983 356" marker-end="url(#arr3)"/><text class="tc" x="560" y="348">_set_state(new_state) —— 提交（Application 唯一可变点 :986,:2031）</text>
+<path class="ar-b" d="M295 400 L663 400" marker-end="url(#arr3)"/><text class="tc" x="360" y="392">finally: post_run_step(exception=exc) :991-1002</text>
+<rect x="500" y="412" width="330" height="66" rx="8" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="tc" x="512" y="432">PersisterHook → save(seq, pos, state, completed/failed)</text>
+<text class="tc" x="512" y="450">LocalTrackingClient → log.jsonl 追加 EndEntry(含序列化 state)</text>
+<text class="tc" x="512" y="468">异常时同样触发（exception 非 None）→ 失败也可断点续跑</text>
+<path class="ar" d="M295 500 L97 500" style="stroke-dasharray:4 3" marker-end="url(#arr3)"/><text class="tc" x="120" y="492">yield (action, result, state)</text>
+<path class="ar-b" d="M295 524 L485 524" marker-end="url(#arr3)"/><text class="tc" x="310" y="516">_should_halt_iterate（after 命中 "result"? before 命中下一步?）:1213</text>
+<rect x="620" y="510" width="240" height="56" rx="8" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="tc" x="632" y="530">未停 → while has_next_action() 循环</text>
+<text class="tc" x="632" y="548">停 → return _return_value_iterate</text>
+<path class="ar" d="M295 596 L97 596" style="stroke-dasharray:4 3" marker-end="url(#arr3)"/><text class="tc" x="130" y="588">StopIteration(value=(action, result, final_state))</text>
+<path class="ar" d="M295 620 L97 620" style="stroke-dasharray:4 3" marker-end="url(#arr3)"/><text class="tc" x="150" y="612">post_run_execute_call 钩子（装饰器 finally，仅一次 :763）</text>
+</svg>
+<figcaption><b>图 4-3 · app.run() 单步全时序</b> —— 图寻址 → 前置钩子 → 执行 → 状态提交 → 后置钩子（finally 保证）→ halt 判定。绿色框内的两行是追踪与持久化全部魔力的来源：它们只是普通的 post_run_step 钩子。</figcaption>
+</figure>
+
+<h2>4.5 输入处理与依赖注入</h2>
+<div class="card">
+<p><code>_process_inputs</code>（<span class="path">application.py:1021-1072</span>）在每步执行前对入参做四件事：</p>
+<ol>
+<li><b>拒绝 <code>__</code> 前缀</b>：用户传入双下划线键直接 ValueError——那是框架保留位；</li>
+<li><b>过滤</b>：只保留 action 声明的 required/optional inputs，多余的丢弃并打 debug 日志；</li>
+<li><b>注入</b>：缺失的输入若命中 <code>_dependency_factory</code>（<code>__tracer</code>/<code>__context</code>），现场制造注入；</li>
+<li><b>报错</b>：仍缺失则抛出带「FILL ME IN」模板的详细错误，直接告诉你怎么改调用。</li>
+</ol>
+<div class="note"><b>为什么用 __ 前缀？</b> Python 会把签名中的 <code>__context</code> 名字修饰（name-mangle）成 <code>_ClassName__context</code>，引擎用 <code>_remap_dunder_parameters</code>（<span class="path">application.py:130-158</span>）在调用前把参数名改写回去——这是个冷知识级细节，读码时容易困惑。</div>
+</div>
+
+<h2>4.6 深挖 _state_update：归并与删除语义</h2>
+<div class="grid c2">
+<div class="card">
+<h3>为什么需要归并</h3>
+<p>函数式动作直接返回完整 State，其中可能夹带：<b>未声明的键</b>（禁止）、<b>该删的键</b>（允许删除！）、<b>__ 私有键</b>（必须剥离）。<code>_state_update</code>（<span class="path">application.py:199-230</span>）三步处理：</p>
+<pre><code>① wipe 掉 modified 里的全部 __ 私有键
+② 对比新旧键集求出 deleted_keys
+   （旧有新无 且 非 __ 前缀）
+③ merge 后再 wipe(deleted_keys)</code></pre>
+<p>这样「action 返回的 State 缺了个键」就被解释为<b>删除</b>，而不是丢数据——issue #28 的修复。</p>
+</div>
+<div class="card">
+<h3>写入的双重校验</h3>
+<p><code>_run_reducer</code>（<span class="path">application.py:243-263</span>）：</p>
+<ul>
+<li><code>extra_keys = 新增键 − reducer.writes</code> → 抛「attempted to write to keys that it did not declare」；</li>
+<li><code>_validate_reducer_writes</code>：声明的 writes 没写全也抛错（<span class="path">:233-240</span>）。</li>
+</ul>
+<p><b>效果：</b>动作的 IO 契约是强制的，UI 才能可靠地展示每个节点的数据签名，状态永远可推理。</p>
+</div>
+</div>
+
+<h2>4.7 fork 与 spawn：应用的血缘</h2>
+<figure>
+<svg viewBox="0 0 1060 380" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker><marker id="arr4g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#16a34a"/></marker></defs>
+<rect class="bx b-blue-d" x="60" y="40" width="200" height="80" rx="10" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="80" y="66" font-weight="700">父应用 A</text>
+<text class="ts" x="80" y="88">app_id=A · seq=12（某一步后）</text>
+<rect class="bx b-amber" x="420" y="40" width="260" height="80" rx="10" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="440" y="66" font-weight="700">fork（分叉）</text>
+<text class="ts" x="440" y="88">initialize_from(fork_from_app_id="A",</text>
+<text class="ts" x="440" y="104">  fork_from_sequence_id=12, app_id="B")</text>
+<rect class="bx b-blue" x="800" y="20" width="230" height="70" rx="10" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="t" x="820" y="46" font-weight="700">子应用 B（fork 产物）</text>
+<text class="ts" x="820" y="68">拿到 A 的 State 副本，独立演化</text>
+<text class="ts" x="820" y="86">典型：多分支探索 / 人工回滚重跑</text>
+<rect class="bx b-green" x="420" y="220" width="260" height="90" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="440" y="246" font-weight="700">spawn（派生）</text>
+<text class="ts" x="440" y="270">某 action 内部再 build 一个子应用，</text>
+<text class="ts" x="440" y="288">with_spawning_parent(A, seq=12)</text>
+<rect class="bx b-green-d" x="800" y="210" width="230" height="90" rx="10" style="fill:#dcfce7" style="stroke:#16a34a"/>
+<text class="t" x="820" y="236" font-weight="700">子应用 C（spawn 产物）</text>
+<text class="ts" x="820" y="258">新的初始 State，生命周期属于 A 的一步</text>
+<text class="ts" x="820" y="276">典型：并行子任务、递归子流程（08 篇）</text>
+<path class="ar-b" d="M260 70 L418 70" marker-end="url(#arr4)"/>
+<path class="ar-b" d="M680 70 L798 60" marker-end="url(#arr4)"/>
+<path class="ar" d="M260 100 L418 245" marker-end="url(#arr4g)"/>
+<path class="ar-b" d="M680 262 L798 258" marker-end="url(#arr4g)"/>
+<text class="tc" x="290" y="58">读快照</text><text class="tc" x="700" y="52">ParentPointer(app_id, seq)</text>
+<text class="tc" x="700" y="246">ParentPointer（children.jsonl 记 spawn_start）</text>
+<text class="ts" x="60" y="352">实现：Application._parent_pointer / _spawning_parent_pointer（application.py:2059-2079）；追踪侧 _log_child_relationships 反写父目录 children.jsonl（client.py:205-274，fcntl.flock 防并发写）。</text>
+<text class="ts" x="60" y="372">fork 与 fork_from_app_id == app_id 组合被禁止（builder :2617-2623）——不允许「分叉并覆盖自己」。</text>
+</svg>
+<figcaption><b>图 4-4 · fork vs spawn</b> —— fork 继承状态副本用于「回到过去重走」；spawn 开启全新子应用用于「并行/递归」。两者都会在追踪层留下血缘边，UI 据此画出应用树。</figcaption>
+</figure>
+
+<h2>4.8 异步语义的三个细节</h2>
+<div class="grid c3">
+<div class="card">
+<h4>1. 混合动作</h4>
+<p><code>astep</code> 遇到同步动作时不是硬 await，而是回调 <code>_step(_run_hooks=False)</code>（<span class="path">:1118</span>），再补发 async 钩子——避免同一事件钩子双发。</p>
+</div>
+<div class="card">
+<h4>2. 异步校验</h4>
+<p><code>validate_correct_async_use()</code>（<span class="path">:2160 附近</span>）阻止在事件循环里调同步 <code>run</code>（反之亦然），给出明确改法提示。</p>
+</div>
+<div class="card">
+<h4>3. aiterate 无返回值</h4>
+<p>async 生成器语言层面不能 <code>return value</code>，所以 <code>arun</code> 自己累加 <code>prior_action/result</code>（<span class="path">:1382-1384</span>），而不复用 <code>_return_value_iterate</code> 的 StopIteration 通道。</p>
+</div>
+</div>
+
+<div class="tip"><b>本篇要点：</b>① Application 只有 <code>_state</code> 一个可变字段；位置与步数都是 State 的键；② run=排空 iterate=循环 step，所有入口共享 halt 解析与恰好一次的 execute-call 钩子；③ _step 的骨架 = 寻址→前置钩子→执行→盖游标→提交→finally 后置钩子；④ 依赖注入只认 <code>__tracer/__context</code>，上下文靠 contextvars 穿透任意深度；⑤ 写入契约（未声明键报错、声明必写、删除语义）让状态永远可推理。</div>
+
+<div class="pager"><a href="03-core-action.html">← 03 Action</a><a href="05-graph-builder.html">下一篇：05 Graph 与 Builder →</a></div>
+</main>
+<footer class="foot">Apache Burr 源码学习笔记 · 04 Application 运行时 · 基于 v0.42.0</footer>
+</body>
+</html>

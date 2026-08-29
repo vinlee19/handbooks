@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>08 · 无头模式与协议栈 — Pi 源码深度剖析</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<nav class="topnav"><div class="topnav-inner">
+  <a class="brand" href="./index.html">pi deep-dive</a>
+  <a class="pg" href="./index.html">总览</a>
+  <a class="pg" href="./01-architecture.html">01 物理架构</a>
+  <a class="pg" href="./02-ai.html">02 pi-ai</a>
+  <a class="pg" href="./03-agent.html">03 agent-core</a>
+  <a class="pg" href="./04-coding-agent.html">04 coding-agent</a>
+  <a class="pg" href="./05-session-compaction.html">05 会话与压缩</a>
+  <a class="pg" href="./06-extensions.html">06 扩展系统</a>
+  <a class="pg" href="./07-tui.html">07 TUI</a>
+  <a class="pg cur" href="./08-rpc.html">08 RPC</a>
+  <a class="pg" href="./09-supply-chain.html">09 构建发布</a>
+</div></nav>
+
+<main>
+<div class="hero">
+  <div class="kicker">第 08 篇</div>
+  <h1>无头模式与协议栈</h1>
+  <div class="sub">pi 有两套并存的"机器接口"：内建的 JSONL RPC（<code>--mode rpc</code>，稳定，子进程 stdin/stdout）与实验性的 CBOR 二进制协议（packages/protocol + client + server，Unix socket）。它们共享同一个 AgentSession 内核，只是编解码与传输不同。本篇把 print/json 模式一起讲清。</div>
+</div>
+
+<h2><span class="no">1</span>print 与 json 模式</h2>
+<p><code>runPrintMode</code>（169 行）是最简单的消费者：把初始消息发给 AgentSession，订阅事件直到 agent_end。<code>mode:"text"</code> 只输出最后一条 assistant 文本；<code>mode:"json"</code> 把每个事件经 <code>toJsonEvent</code> 序列化输出——注意它对 <code>message_update</code> 做了特殊处理：</p>
+
+<div class="callout note">
+  <div class="co-title">为什么 json 模式要"剥掉累积 partial"</div>
+  <p>内部事件协议里，<code>message_update</code> 的 <code>partial</code> 字段携带<strong>累积到当前的完整消息</strong>（02 篇）。对内存中的 UI 消费者这很方便，但逐行输出到 stdout 时会把同一段正文重复几十遍。于是 <code>toJsonEvent</code>（modes/json-event.ts，40 行）把它改写为只含本次 <code>delta</code> 的事件——机器消费者自己拼接增量，通信量降一个数量级。这是一个"同一事件协议，两种视角"的好例子。</p>
+</div>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 260" width="980" role="img" aria-label="print/json 模式数据流">
+  <defs>
+    <marker id="ar-rpc1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <rect x="30" y="40" width="180" height="60" rx="6" class="n"></rect>
+  <text x="120" y="64" text-anchor="middle" class="t-s t-b">shell / CI 脚本</text>
+  <text x="120" y="82" text-anchor="middle" class="t-xs">pi -p "..." [ stdin ]</text>
+
+  <rect x="290" y="40" width="200" height="60" rx="6" class="n-ca"></rect>
+  <text x="390" y="60" text-anchor="middle" class="t-s t-b">runPrintMode</text>
+  <text x="390" y="78" text-anchor="middle" class="t-xs">首个事件前输出 session header（json）</text>
+
+  <rect x="570" y="40" width="150" height="60" rx="6" class="n-agent"></rect>
+  <text x="645" y="64" text-anchor="middle" class="t-s t-b">AgentSession</text>
+  <text x="645" y="82" text-anchor="middle" class="t-xs">prompt → 事件流</text>
+
+  <rect x="570" y="150" width="150" height="56" rx="6" class="n-ai"></rect>
+  <text x="645" y="172" text-anchor="middle" class="t-s t-b">工具 / 模型调用</text>
+  <text x="645" y="190" text-anchor="middle" class="t-xs">照常执行（可落盘）</text>
+
+  <rect x="800" y="40" width="160" height="90" rx="6" class="n-user"></rect>
+  <text x="880" y="66" text-anchor="middle" class="t-s t-b">stdout</text>
+  <text x="880" y="88" text-anchor="middle" class="t-xs">text：仅最终回答</text>
+  <text x="880" y="106" text-anchor="middle" class="t-xs">json：逐事件 JSONL</text>
+  <text x="880" y="122" text-anchor="middle" class="t-xs">（message_update 只留 delta）</text>
+
+  <line x1="210" y1="70" x2="288" y2="70" class="edge" marker-end="url(#ar-rpc1)"></line>
+  <line x1="490" y1="70" x2="568" y2="70" class="edge" marker-end="url(#ar-rpc1)"></line>
+  <path d="M 645 100 L 645 148" class="edge" marker-end="url(#ar-rpc1)"></path>
+  <path d="M 645 150 C 700 120 720 100 798 85" class="edge edge-dash" marker-end="url(#ar-rpc1)"></path>
+  <line x1="720" y1="70" x2="798" y2="70" class="edge" marker-end="url(#ar-rpc1)"></line>
+
+  <text x="30" y="160" class="t-xs">非 interactive 模式启动时 takeOverStdout() 接管 stdout 写入，</text>
+  <text x="30" y="178" class="t-xs">工具/依赖的杂散打印无法污染 JSONL 协议流。</text>
+</svg>
+</div>
+<figcaption>图 8-1 · print/json 模式。一次性进程：跑完一个回合即退出，退出码反映成败。</figcaption>
+</figure>
+
+<h2><span class="no">2</span>内建 JSONL RPC</h2>
+<p>RPC 模式是给宿主程序（IDE 插件、bot、测试）用的常驻接口：<code>spawn("pi", ["--mode", "rpc"])</code> 后长期持有子进程，stdin 发命令、stdout 收响应与实时事件。命令面几乎覆盖 AgentSession 全部动作：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/coding-agent/src/modes/rpc/rpc-types.ts</span><span class="cb-note">L20-73（命令联合类型，节选）</span></div>
+<pre><code>export type RpcCommand =
+  // Prompting
+  | { type: "prompt"; message: string; images?: ImageContent[]; streamingBehavior?: "steer" | "followUp" }
+  | { type: "steer"; message: string } | { type: "follow_up"; message: string }
+  | { type: "abort" }
+  | { type: "new_session"; parentSession?: string }
+
+  // State / Model / Thinking
+  | { type: "get_state" }
+  | { type: "set_model"; provider: string; modelId: string } | { type: "cycle_model" }
+  | { type: "set_thinking_level"; level: ThinkingLevel }
+
+  // Compaction / Retry / Bash
+  | { type: "compact"; customInstructions?: string } | { type: "set_auto_compaction"; enabled: boolean }
+  | { type: "bash"; command: string; excludeFromContext?: boolean }
+
+  // Session tree
+  | { type: "fork"; entryId: string } | { type: "clone" } | { type: "get_tree" }
+  | { type: "get_entries"; since?: string }      // 增量拉取
+  | { type: "get_last_assistant_text" }
+  ...;</code></pre>
+</div>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 340" width="980" role="img" aria-label="JSONL RPC 协议">
+  <defs>
+    <marker id="ar-rpc2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <rect x="40" y="60" width="220" height="220" rx="9" class="n-proto"></rect>
+  <text x="150" y="88" text-anchor="middle" class="t-s t-b">宿主进程</text>
+  <text x="150" y="112" text-anchor="middle" class="t-xs">IDE 插件 / bot / 测试</text>
+  <text x="150" y="140" text-anchor="middle" class="t-xs">RpcClient（rpc-client.ts，601 行）</text>
+  <text x="150" y="158" text-anchor="middle" class="t-xs">同进程或子进程皆可用</text>
+  <text x="150" y="196" text-anchor="middle" class="t-xs">渲染 extension_ui_request：</text>
+  <text x="150" y="214" text-anchor="middle" class="t-xs">把 ctx.ui 的 select/confirm/input</text>
+  <text x="150" y="232" text-anchor="middle" class="t-xs">转成宿主自己的 UI</text>
+
+  <rect x="560" y="40" width="380" height="260" rx="9" class="n-ca"></rect>
+  <text x="750" y="68" text-anchor="middle" class="t-s t-b">pi 子进程（--mode rpc）</text>
+  <rect x="590" y="86" width="320" height="36" rx="5" class="n-ca"></rect>
+  <text x="750" y="109" text-anchor="middle" class="t-xs t-b">AgentSession + 工具 + 扩展（完整内核）</text>
+
+  <!-- 通道 -->
+  <line x1="262" y1="110" x2="558" y2="110" class="edge" marker-end="url(#ar-rpc2)"></line>
+  <text x="300" y="102" class="t-xs">stdin：RpcCommand JSONL（每行一个）</text>
+  <line x1="558" y1="150" x2="262" y2="150" class="edge" marker-end="url(#ar-rpc2)"></line>
+  <text x="296" y="142" class="t-xs">stdout：RpcResponse（对应命令 id）</text>
+  <line x1="558" y1="190" x2="262" y2="190" class="edge edge-dash" marker-end="url(#ar-rpc2)"></line>
+  <text x="310" y="182" class="t-xs">stdout：JsonAgentSessionEvent 实时事件流（无 id）</text>
+  <line x1="262" y1="236" x2="558" y2="236" class="edge" marker-end="url(#ar-rpc2)"></line>
+  <text x="286" y="228" class="t-xs">stdin：extension_ui_response（应答扩展 UI 请求）</text>
+
+  <text x="40" y="312" class="t-xs t-b">实现细节：写事件用严格 LF 分行的手写 JSONL（jsonl.ts）——不用 readline，因为它会按 U+2028 切行，</text>
+  <text x="40" y="330" class="t-xs">而 JSON 字符串值里完全可能出现这个码点。0.84.4 新增 clear_queue：取回并清空排队的 steering/follow-up。</text>
+</svg>
+</div>
+<figcaption>图 8-2 · JSONL RPC。事件流与命令响应共用 stdout 但语义不同：响应带命令 id 一一对应，事件无 id 持续推送。扩展 UI 请求-应答对是无头模式跑交互扩展的关键桥。</figcaption>
+</figure>
+
+<h2><span class="no">3</span>实验性 CBOR 协议栈（protocol / client / server）</h2>
+<p>当集成方不是"能 spawn 子进程的 shell 世界"（比如编辑器扩展宿主、多客户端共享会话）时，JSONL 子进程模型不够用。<code>packages/protocol</code>（1,236 行）定义了二进制协议，设计原则写在它的 README 里：<strong>快照权威，progress 事件只是瞬态 UI 提示，不得折入权威状态</strong>——客户端状态归并只认 SessionSnapshot，事件只用来触发重绘。</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/protocol/src/framing.ts</span><span class="cb-note">L27-53 + L57-77 · 帧编解码</span></div>
+<pre><code>// FRAME_HEADER_LENGTH = 4（大端 uint32 长度前缀）
+export function encodeFrame(payload: Uint8Array): Uint8Array {
+  if (payload.byteLength &gt; MAX_UINT32) throw new RangeError(...);
+  const frame = new Uint8Array(FRAME_HEADER_LENGTH + payload.byteLength);
+  const length = payload.byteLength;
+  frame[0] = length &gt;&gt;&gt; 24;
+  frame[1] = length &gt;&gt;&gt; 16;
+  frame[2] = length &gt;&gt;&gt; 8;
+  frame[3] = length;
+  frame.set(payload, FRAME_HEADER_LENGTH);
+  return frame;
+}
+
+type DecoderState = "open" | "ended" | "failed";
+
+/** Incrementally splits arbitrary byte chunks into length-prefixed payloads. */
+export class FrameDecoder {
+  private readonly header = new Uint8Array(FRAME_HEADER_LENGTH);
+  ...
+  push(chunk: Uint8Array): Uint8Array[] {
+    if (this.state === "ended") throw new FrameError("Frame decoder has ended");
+    ...
+    // 任意切分的字节块 → 攒 header → 攒 payload → 吐完整帧
+    // 默认 16MB 帧上限，超限立即 fail 状态（拒收后续字节）
+  }
+}</code></pre>
+</div>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 280" width="980" role="img" aria-label="CBOR 帧格式">
+  <!-- 字节布局 -->
+  <text x="40" y="30" class="zone-label">一帧的布局</text>
+  <rect x="40" y="44" width="160" height="52" rx="5" class="n-disk"></rect>
+  <text x="120" y="66" text-anchor="middle" class="t-s t-b">4 字节长度前缀</text>
+  <text x="120" y="84" text-anchor="middle" class="t-xs t-mono">uint32-BE</text>
+  <rect x="200" y="44" width="380" height="52" rx="5" class="n-proto"></rect>
+  <text x="390" y="66" text-anchor="middle" class="t-s t-b">CBOR payload（自实现 RFC 8949 严格子集）</text>
+  <text x="390" y="84" text-anchor="middle" class="t-xs">整数限 safe range · 浮点仅 f64 · TypeBox schema 先验证再编码</text>
+
+  <rect x="40" y="120" width="890" height="56" rx="8" fill="#fbfbf9" stroke="#c9cdd4" stroke-dasharray="5 4"></rect>
+  <text x="56" y="142" class="t-s t-b">为什么不用现成 CBOR 库</text>
+  <text x="56" y="162" class="t-xs">编解码器共 384 行：拒绝未知 tag、拒绝非规范 map 键序、decoder 状态机显式 fail-fast。协议面小到"读一遍源码即审计完毕"——依赖面越小，攻击面越小。</text>
+
+  <!-- 消息类型 -->
+  <text x="40" y="206" class="zone-label">payload 里的消息（schemas.ts，TypeBox additionalProperties:false）</text>
+  <rect x="40" y="216" width="210" height="44" rx="5" class="n-agent"></rect>
+  <text x="145" y="236" text-anchor="middle" class="t-xs t-b">ClientHello / 命令 envelope</text>
+  <text x="145" y="252" text-anchor="middle" class="t-xs">prompt / steer / set_model / attach…</text>
+  <rect x="270" y="216" width="210" height="44" rx="5" class="n-ca"></rect>
+  <text x="375" y="236" text-anchor="middle" class="t-xs t-b">ServerHello / 响应 envelope</text>
+  <text x="375" y="252" text-anchor="middle" class="t-xs">CommandResult + ProtocolError</text>
+  <rect x="500" y="216" width="210" height="44" rx="5" class="n-tui"></rect>
+  <text x="605" y="236" text-anchor="middle" class="t-xs t-b">SessionSnapshot（权威）</text>
+  <text x="605" y="252" text-anchor="middle" class="t-xs">transcript + usage + 元数据全量</text>
+  <rect x="730" y="216" width="200" height="44" rx="5" class="n-ai"></rect>
+  <text x="830" y="236" text-anchor="middle" class="t-xs t-b">EventEnvelope（瞬态）</text>
+  <text x="830" y="252" text-anchor="middle" class="t-xs">流式 progress，不折入状态</text>
+</svg>
+</div>
+<figcaption>图 8-3 · CBOR 帧格式与消息分类。"快照权威"原则让断线重连变成"重新 attach + 收快照"，无需事件回放补齐状态。</figcaption>
+</figure>
+
+<p><code>packages/client</code>（1,225 行）是协议的消费端 SDK：传输无关（<code>ByteTransport</code> 接口 + Unix socket 实现）、显式不自动重连、会话租约（<code>SessionLease</code>，exclusive/shared 两种，AsyncDisposable，引用计数到最后一个租约释放才发 detach）。<code>packages/server</code> 用 coding-agent 的 <code>create-harness.ts</code> 承载会话。四者的关系回看 01 篇图 1-3。</p>
+
+<h2><span class="no">4</span>两套协议怎么选</h2>
+<table class="tbl">
+<thead><tr><th></th><th>JSONL RPC（稳定）</th><th>CBOR protocol/client/server（实验）</th></tr></thead>
+<tbody>
+<tr><td>传输</td><td>子进程 stdin/stdout 管道</td><td>Unix socket</td></tr>
+<tr><td>编解码</td><td>文本 JSON 行，人眼可调</td><td>4 字节长度前缀 + CBOR，TypeBox 校验</td></tr>
+<tr><td>进程模型</td><td>1 会话 = 1 子进程</td><td>常驻 server 承载多会话、多客户端 attach</td></tr>
+<tr><td>状态模型</td><td>命令/响应 + 事件流</td><td>快照权威 + 瞬态事件；租约管理所有权</td></tr>
+<tr><td>适合</td><td>脚本、测试、单宿主集成</td><td>编辑器深度集成、多面板共享、远程化前奏</td></tr>
+</tbody>
+</table>
+
+<nav class="pagenav">
+  <a href="./07-tui.html"><span class="dir">上一篇</span>← 07 · TUI 渲染引擎</a>
+  <a class="next" href="./09-supply-chain.html"><span class="dir">下一篇</span>09 · 构建与发布 →</a>
+</nav>
+
+<footer class="colophon">Pi 源码深度剖析 · 基于 worktree 368e013de（v0.84.1）</footer>
+</main>
+<script src="./script.js"></script>
+</body>
+</html>

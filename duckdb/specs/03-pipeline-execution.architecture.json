@@ -1,0 +1,334 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "DuckDB 核心交互：流水线执行的调度与推送回路",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1080,
+      480
+    ],
+    "repository": {
+      "url": "https://github.com/vinlee19/duckdb.git",
+      "revision": "0f8f010560c9140dc677aa08829f112f560ce5c3"
+    },
+    "views": [
+      {
+        "id": "schedule",
+        "label": "调度平面",
+        "focus": [
+          "executor",
+          "pipeline",
+          "schedq",
+          "task"
+        ],
+        "note": "事件 DAG 把流水线任务投进无锁队列，每线程领取一个 PipelineTask。"
+      },
+      {
+        "id": "dataplane",
+        "label": "数据平面",
+        "focus": [
+          "pexec",
+          "source",
+          "ops",
+          "sink"
+        ],
+        "note": "chunk 沿 source→算子→sink 推送，三种返回态驱动状态机。"
+      },
+      {
+        "id": "backpressure",
+        "label": "背压",
+        "focus": [
+          "sink",
+          "task"
+        ],
+        "note": "sink BLOCKED 时任务被挂起，恢复后经 InterruptState 回调重新入队。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "executor",
+      "type": "backend",
+      "label": "Executor",
+      "sublabel": "事件 DAG 驱动",
+      "pos": [
+        40,
+        140
+      ],
+      "size": [
+        170,
+        70
+      ],
+      "sources": [
+        {
+          "path": "src/parallel/executor.cpp",
+          "line": 554
+        }
+      ]
+    },
+    {
+      "id": "pipeline",
+      "type": "backend",
+      "label": "Pipeline",
+      "sublabel": "1 源 → 算子 → 1 汇",
+      "pos": [
+        290,
+        140
+      ],
+      "size": [
+        180,
+        70
+      ],
+      "sources": [
+        {
+          "path": "src/include/duckdb/parallel/pipeline.hpp",
+          "line": 133
+        }
+      ]
+    },
+    {
+      "id": "pexec",
+      "type": "backend",
+      "label": "PipelineExecutor",
+      "sublabel": "预算 50 chunk / 次",
+      "pos": [
+        560,
+        140
+      ],
+      "size": [
+        190,
+        70
+      ],
+      "sources": [
+        {
+          "path": "src/parallel/pipeline_executor.cpp",
+          "line": 189
+        }
+      ]
+    },
+    {
+      "id": "source",
+      "type": "backend",
+      "label": "Source",
+      "sublabel": "HAVE_MORE·BLOCKED·FINISHED",
+      "pos": [
+        860,
+        60
+      ],
+      "size": [
+        180,
+        70
+      ],
+      "sources": [
+        {
+          "path": "src/parallel/pipeline_executor.cpp",
+          "line": 302
+        }
+      ]
+    },
+    {
+      "id": "ops",
+      "type": "backend",
+      "label": "中间算子链",
+      "sublabel": "HAVE_MORE_OUTPUT 重入",
+      "pos": [
+        860,
+        180
+      ],
+      "size": [
+        180,
+        70
+      ]
+    },
+    {
+      "id": "sink",
+      "type": "backend",
+      "label": "Sink",
+      "sublabel": "Sink→Combine→Finalize",
+      "pos": [
+        860,
+        300
+      ],
+      "size": [
+        180,
+        70
+      ]
+    },
+    {
+      "id": "schedq",
+      "type": "messagebus",
+      "label": "TaskScheduler",
+      "sublabel": "moodycamel 无锁队列",
+      "pos": [
+        290,
+        320
+      ],
+      "size": [
+        180,
+        70
+      ],
+      "sources": [
+        {
+          "path": "src/parallel/task_scheduler.cpp",
+          "line": 271
+        }
+      ]
+    },
+    {
+      "id": "task",
+      "type": "backend",
+      "label": "PipelineTask ×N",
+      "sublabel": "每线程一个",
+      "pos": [
+        560,
+        320
+      ],
+      "size": [
+        190,
+        70
+      ],
+      "sources": [
+        {
+          "path": "src/parallel/pipeline.cpp",
+          "line": 179
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "数据平面（一条流水线）",
+      "wraps": [
+        "source",
+        "ops",
+        "sink"
+      ],
+      "pad": 16
+    },
+    {
+      "kind": "region",
+      "label": "调度平面",
+      "wraps": [
+        "schedq",
+        "task"
+      ],
+      "pad": 16
+    }
+  ],
+  "connections": [
+    {
+      "id": "x_build",
+      "from": "executor",
+      "to": "pipeline",
+      "label": "构建 MetaPipeline",
+      "variant": "emphasis",
+      "labelAt": [
+        250,
+        240
+      ]
+    },
+    {
+      "id": "x_post",
+      "from": "pipeline",
+      "to": "schedq",
+      "label": "投递任务",
+      "route": "straight",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        410,
+        262
+      ]
+    },
+    {
+      "id": "x_take",
+      "from": "schedq",
+      "to": "task",
+      "label": "领取"
+    },
+    {
+      "id": "x_run",
+      "from": "task",
+      "to": "pexec",
+      "label": "执行",
+      "route": "straight",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [
+        706,
+        262
+      ]
+    },
+    {
+      "id": "x_fetch",
+      "from": "pexec",
+      "to": "source",
+      "label": "FetchFromSource"
+    },
+    {
+      "id": "x_chunk",
+      "from": "source",
+      "to": "ops",
+      "label": "chunk×2048",
+      "route": "straight",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        1060,
+        156
+      ]
+    },
+    {
+      "id": "x_push",
+      "from": "ops",
+      "to": "sink",
+      "label": "push",
+      "route": "straight",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        1060,
+        276
+      ]
+    },
+    {
+      "id": "x_block",
+      "from": "sink",
+      "to": "task",
+      "label": "BLOCKED → 重新入队",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "推送式执行",
+      "items": [
+        "一条流水线 = 1 个 source → N 个中间算子 → 1 个 sink",
+        "PipelineExecutor 每次调用最多推 50 个 chunk，让出线程调度",
+        "算子返回 HAVE_MORE_OUTPUT 时压栈重入（如 join 逐批吐匹配）"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "事件 DAG",
+      "items": [
+        "每条流水线挂 5 个事件：Initialize → Run → PrepareFinish → Finish → Complete",
+        "Join 构建顺序靠事件依赖保证：全部 Combine 后统一 PrepareFinalize",
+        "临时内存管理器（TMM）在该阶段决定算子内存预算，超了就落盘"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "背压与顺序",
+      "items": [
+        "source/sink BLOCKED 时任务挂起，InterruptState 回调后重新入队",
+        "batch index 保证 sink 侧保序 flush（BatchInsert / CopyToFile / Order）",
+        "BatchMemoryManager 超内存水位即冻结高批次任务"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Moonlink 源码深度解析 · 总导航</title>
+<style>
+:root{
+  --blue:#2563eb;--green:#16a34a;--orange:#ea580c;--purple:#7c3aed;--gray:#64748b;--red:#dc2626;
+  --ink:#1e293b;--muted:#64748b;--bg:#f6f8fa;--card:#fff;--line:#e2e8f0;--code-bg:#0d1117;--code-ink:#e6edf3;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.8}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.97);display:flex;flex-wrap:wrap;gap:2px;padding:8px 16px;font-size:13px}
+.topnav .brand{color:#fbbf24;font-weight:700;margin-right:10px;padding:4px 6px}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:4px 10px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav a.active{background:var(--blue);color:#fff}
+.wrap{max-width:1180px;margin:0 auto;padding:28px 20px 80px}
+.hero{background:linear-gradient(135deg,#0f172a 0%,#1e3a5f 55%,#312e81 100%);border-radius:16px;color:#f1f5f9;padding:44px 40px;margin-bottom:30px}
+.hero h1{font-size:34px;letter-spacing:.5px;margin-bottom:10px}
+.hero p{color:#cbd5e1;font-size:16px;max-width:860px}
+.hero .tagline{display:inline-block;margin-top:16px;background:rgba(251,191,36,.15);border:1px solid rgba(251,191,36,.4);color:#fbbf24;padding:6px 14px;border-radius:999px;font-size:14px}
+h2{font-size:24px;margin:42px 0 14px;padding-left:12px;border-left:5px solid var(--blue)}
+h3{font-size:18px;margin:26px 0 10px;color:#0f172a}
+p{margin:10px 0;color:#334155}
+.lead{font-size:15.5px;color:#475569}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(255px,1fr));gap:16px;margin:20px 0}
+.chap{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 18px 14px;text-decoration:none;color:var(--ink);display:block;transition:all .15s;border-top:4px solid var(--blue)}
+.chap:hover{transform:translateY(-3px);box-shadow:0 8px 24px rgba(15,23,42,.1)}
+.chap.c2{border-top-color:var(--green)}.chap.c3{border-top-color:var(--orange)}.chap.c4{border-top-color:var(--red)}.chap.c5{border-top-color:var(--purple)}
+.chap .no{font-size:12px;color:var(--muted);letter-spacing:1px}
+.chap h3{margin:4px 0 6px;font-size:17px}
+.chap p{font-size:13px;color:var(--muted);line-height:1.6;margin:0}
+.figure{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin:20px 0}
+.fig-title{font-weight:700;font-size:14.5px;color:#0f172a;margin-bottom:4px}
+.fig-title .fno{color:var(--blue)}
+.fig-desc{font-size:13px;color:var(--muted);margin-bottom:10px}
+svg{width:100%;height:auto;display:block}
+code{background:#eef2f7;border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-family:"SF Mono",Menlo,Consolas,monospace;font-size:.88em;color:#be185d}
+pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:16px 18px;overflow-x:auto;font-size:13px;line-height:1.6;margin:14px 0}
+pre code{background:none;border:none;color:inherit;padding:0}
+.k{color:#ff7b72}.t{color:#79c0ff}.s{color:#a5d6ff}.c{color:#8b949e;font-style:italic}.n{color:#ffa657}
+table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px;background:var(--card)}
+th{background:#f1f5f9;text-align:left}
+th,td{border:1px solid var(--line);padding:8px 12px;vertical-align:top}
+tbody tr:nth-child(even){background:#fafbfc}
+.callout{border-left:4px solid var(--blue);background:#eff6ff;border-radius:0 10px 10px 0;padding:12px 16px;margin:16px 0;font-size:14px}
+.callout.warn{border-color:var(--orange);background:#fff7ed}
+.callout.good{border-color:var(--green);background:#f0fdf4}
+.callout b{color:#0f172a}
+.footer{display:flex;justify-content:space-between;margin-top:60px;padding-top:18px;border-top:1px solid var(--line);font-size:14px}
+.footer a{color:var(--blue);text-decoration:none;font-weight:600}
+.legend{display:flex;flex-wrap:wrap;gap:14px;font-size:12.5px;color:var(--muted);margin-top:8px}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{width:12px;height:12px;border-radius:3px;display:inline-block}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">🥮 Moonlink 源码解析</span>
+  <a class="active" href="index.html">总导航</a>
+  <a href="01-overview.html">01 总体架构</a>
+  <a href="02-ingestion.html">02 数据摄入</a>
+  <a href="03-core-engine.html">03 存储引擎</a>
+  <a href="04-index-dv.html">04 索引与 DV</a>
+  <a href="05-wal-recovery.html">05 WAL 与恢复</a>
+  <a href="06-iceberg.html">06 Iceberg 集成</a>
+  <a href="07-query.html">07 查询路径</a>
+  <a href="08-control-plane.html">08 控制面</a>
+  <a href="09-concurrency-lsn.html">09 并发模型</a>
+</nav>
+
+<div class="wrap">
+<div class="hero">
+  <h1>Moonlink 源码深度解析</h1>
+  <p>一套从 0 到 1 完全读懂 <b>Mooncake-Labs/moonlink</b> 的图文系列：原理 · 架构 · 底层源码。基于 main 分支 <code style="background:rgba(255,255,255,.12);color:#fbbf24;border:none">401c1d1</code>（2026-08 拉取），全部图表与真实源码中的类型名、文件路径、配置常量一一对应。</p>
+  <span class="tagline">managed ingestion engine for Apache Iceberg — 为 Iceberg 湖仓带来毫秒级流式写入</span>
+</div>
+
+<p class="lead">Moonlink 解决的核心矛盾是：<b>Iceberg 表格式擅长大规模批式分析，却不擅长高频流式写入</b>。传统摄取工具每来一批更新就往对象存储写小 Parquet 文件 + equality-delete 文件，很快陷入「小文件泛滥 → 元数据爆炸 → 读性能劣化 → 依赖 Spark 做合并」的泥潭。Moonlink 的答案是把「写入缓冲、索引、删除」放在本地 NVMe 内存态里做，只把「大小合适的 Parquet + Iceberg v3 Deletion Vector」异步暴露给 Iceberg——本系列 9 章将带你把这条链路彻底拆开。</p>
+
+<h2>章节导航</h2>
+<div class="grid">
+  <a class="chap" href="01-overview.html"><span class="no">CHAPTER 01</span><h3>总体架构</h3><p>项目定位、要解决的真问题、物理部署架构图（进程/端口/存储拓扑）、端到端数据流、与传统摄取管线对比。</p></a>
+  <a class="chap c2" href="02-ingestion.html"><span class="no">CHAPTER 02</span><h3>数据摄入</h3><p>REST/Avro/protobuf 三格式摄入、PostgreSQL 逻辑复制 CDC（slot/publication/pgoutput）、initial copy 分片并行、TableEvent 事件总线。</p></a>
+  <a class="chap c3" href="03-core-engine.html"><span class="no">CHAPTER 03</span><h3>存储引擎</h3><p>MooncakeTable 核心结构：MemSlice 列式写缓冲、(batch_id, row_offset) 数据定位、flush 全流程、mooncake/iceberg 两级快照演进。</p></a>
+  <a class="chap c4" href="04-index-dv.html"><span class="no">CHAPTER 04</span><h3>索引与删除向量</h3><p>MemIndex 三形态 + GlobalIndex 持久化 bucket hash map 双层索引；BatchDeletionVector → Puffin blob 的 Iceberg v3 删除向量。</p></a>
+  <a class="chap c5" href="05-wal-recovery.html"><span class="no">CHAPTER 05</span><h3>WAL 与崩溃恢复</h3><p>JSON 格式 WAL、500ms 持久化 + 截断循环、metadata_wal.json 单一真源、崩溃恢复时序、6 种 LSN 语义。</p></a>
+  <a class="chap" href="06-iceberg.html"><span class="no">CHAPTER 06</span><h3>Iceberg 集成</h3><p>Iceberg 表物理布局、sync_snapshot 七步提交、File/REST/Glue 三种 catalog、data compaction 与 index merge、两个 iceberg-rust workaround。</p></a>
+  <a class="chap c2" href="07-query.html"><span class="no">CHAPTER 07</span><h3>查询路径</h3><p>union read：内存 + 磁盘 + 删除位图的合并读、ReadState 跨语言 bincode 布局、DataFusion 谓词下推、pg_mooncake/duckdb 生态。</p></a>
+  <a class="chap c3" href="08-control-plane.html"><span class="no">CHAPTER 08</span><h3>控制面</h3><p>MoonlinkBackend 编排、SQLite/PG 元数据仓、REST/RPC/OTEL 端点全景、控制面崩溃恢复、存算分离的路径重映射。</p></a>
+  <a class="chap c4" href="09-concurrency-lsn.html"><span class="no">CHAPTER 09</span><h3>并发模型与设计模式</h3><p>每表单线程 actor、tokio watch 拓扑、LSN 时间线与可见性、NonEvictableHandle 缓存 pin、测试体系金字塔。</p></a>
+</div>
+
+<h2>图 0-1 · 系统全景导航地图</h2>
+<p>下面这张图把 9 个章节映射到系统的真实分层上：从客户端协议入口，穿过服务层与控制面，进入核心存储引擎，最终落到物理存储。读源码时建议对照此图定位每一章在整体中的位置。</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 0-1</span> · Moonlink 系统全景与章节导航</div>
+  <div class="fig-desc">蓝色 = 客户端/协议入口；青绿 = 服务接入层；灰紫 = 控制面；绿色 = 核心引擎（内存态）；橙色 = 物理存储。每层标注对应章节。</div>
+  <svg viewBox="0 0 1160 830" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="na1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    </defs>
+    <!-- Layer 1: clients -->
+    <text x="30" y="36" font-size="15" font-weight="700" fill="#2563eb">① 客户端 / 数据源</text>
+    <g font-size="13">
+      <rect x="30" y="52" width="200" height="52" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+      <text x="130" y="74" text-anchor="middle" font-weight="600" fill="#1e3a8a">PostgreSQL</text>
+      <text x="130" y="93" text-anchor="middle" font-size="11.5" fill="#3b5ba9">逻辑复制 CDC（WAL → pgoutput）</text>
+      <rect x="252" y="52" width="200" height="52" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+      <text x="352" y="74" text-anchor="middle" font-weight="600" fill="#1e3a8a">REST 客户端 / Kafka</text>
+      <text x="352" y="93" text-anchor="middle" font-size="11.5" fill="#3b5ba9">JSON · Avro · Protobuf</text>
+      <rect x="474" y="52" width="220" height="52" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+      <text x="584" y="74" text-anchor="middle" font-weight="600" fill="#1e3a8a">pg_mooncake / duckdb_mooncake</text>
+      <text x="584" y="93" text-anchor="middle" font-size="11.5" fill="#3b5ba9">SQL 引擎扩展（实时查询）</text>
+      <rect x="716" y="52" width="200" height="52" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+      <text x="816" y="74" text-anchor="middle" font-weight="600" fill="#1e3a8a">moonlink_datafusion</text>
+      <text x="816" y="93" text-anchor="middle" font-size="11.5" fill="#3b5ba9">DataFusion REPL / TableProvider</text>
+      <rect x="938" y="52" width="192" height="52" rx="9" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4"/>
+      <text x="1034" y="74" text-anchor="middle" font-weight="600" fill="#1e3a8a">Iceberg 计算引擎</text>
+      <text x="1034" y="93" text-anchor="middle" font-size="11.5" fill="#3b5ba9">Spark / DuckDB / Trino</text>
+      <text x="1034" y="121" text-anchor="middle" font-size="12" fill="#7c3aed">→ 经 Catalog 读 Iceberg 表（CH06/07）</text>
+    </g>
+    <line x1="130" y1="104" x2="130" y2="150" stroke="#475569" stroke-width="1.6" marker-end="url(#na1)"/>
+    <line x1="352" y1="104" x2="352" y2="150" stroke="#475569" stroke-width="1.6" marker-end="url(#na1)"/>
+    <line x1="584" y1="104" x2="584" y2="150" stroke="#475569" stroke-width="1.6" marker-end="url(#na1)"/>
+    <line x1="816" y1="104" x2="816" y2="150" stroke="#475569" stroke-width="1.6" marker-end="url(#na1)"/>
+    <line x1="1034" y1="130" x2="1034" y2="560" stroke="#7c3aed" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#na1)"/>
+
+    <!-- Layer 2: service -->
+    <text x="30" y="178" font-size="15" font-weight="700" fill="#0d9488">② 服务层 <tspan fill="#64748b" font-size="12" font-weight="400">（CH08 控制面 · CH02 摄入）</tspan></text>
+    <g font-size="13">
+      <rect x="30" y="192" width="360" height="70" rx="9" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+      <text x="210" y="214" text-anchor="middle" font-weight="700" fill="#115e59">moonlink_service（单进程）</text>
+      <text x="210" y="234" text-anchor="middle" font-size="12" fill="#0f766e">REST :3030（axum）· RPC :3031 / unix sock</text>
+      <text x="210" y="251" text-anchor="middle" font-size="12" fill="#0f766e">OTEL 摄入 :3435 · readiness :5050</text>
+      <rect x="412" y="192" width="320" height="70" rx="9" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+      <text x="572" y="214" text-anchor="middle" font-weight="700" fill="#115e59">moonlink_connectors</text>
+      <text x="572" y="234" text-anchor="middle" font-size="12" fill="#0f766e">pg_replicate：PostgresSource → MoonlinkSink</text>
+      <text x="572" y="251" text-anchor="middle" font-size="12" fill="#0f766e">rest_ingest：RestSource → MoonlinkRestSink</text>
+      <rect x="754" y="192" width="376" height="70" rx="9" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+      <text x="942" y="214" text-anchor="middle" font-weight="700" fill="#115e59">moonlink_backend（控制面编排）</text>
+      <text x="942" y="234" text-anchor="middle" font-size="12" fill="#0f766e">表生命周期 · scan_table · recover_all_tables</text>
+      <text x="942" y="251" text-anchor="middle" font-size="12" fill="#0f766e">moonlink_metadata_store：SQLite / PostgreSQL</text>
+    </g>
+    <line x1="390" y1="227" x2="412" y2="227" stroke="#475569" stroke-width="1.6" marker-end="url(#na1)"/>
+    <line x1="732" y1="227" x2="754" y2="227" stroke="#475569" stroke-width="1.6" marker-end="url(#na1)"/>
+
+    <!-- Layer 3: core engine -->
+    <text x="30" y="300" font-size="15" font-weight="700" fill="#16a34a">③ 核心引擎 src/moonlink <tspan fill="#64748b" font-size="12" font-weight="400">—— 每张表一个单线程事件循环 TableHandler（CH09）</tspan></text>
+    <g font-size="13">
+      <rect x="30" y="316" width="268" height="120" rx="9" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="164" y="340" text-anchor="middle" font-weight="700" fill="#14532d">TableHandler（actor）</text>
+      <text x="164" y="362" text-anchor="middle" font-size="12" fill="#166534">TableEvent 事件总线（CH02）</text>
+      <text x="164" y="381" text-anchor="middle" font-size="12" fill="#166534">3 定时器：snapshot 500ms</text>
+      <text x="164" y="399" text-anchor="middle" font-size="12" fill="#166534">wal 500ms · force 300s</text>
+      <text x="164" y="421" text-anchor="middle" font-size="12" fill="#166534">mpsc 队列 32768</text>
+
+      <rect x="318" y="316" width="268" height="120" rx="9" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="452" y="340" text-anchor="middle" font-weight="700" fill="#14532d">MooncakeTable 内存态</text>
+      <text x="452" y="362" text-anchor="middle" font-size="12" fill="#166534">MemSlice（Arrow 列缓冲，CH03）</text>
+      <text x="452" y="381" text-anchor="middle" font-size="12" fill="#166534">MemIndex + GlobalIndex（CH04）</text>
+      <text x="452" y="400" text-anchor="middle" font-size="12" fill="#166534">BatchDeletionVector（CH04）</text>
+      <text x="452" y="419" text-anchor="middle" font-size="12" fill="#166534">Snapshot 快照演进（CH03）</text>
+
+      <rect x="606" y="316" width="268" height="120" rx="9" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="740" y="340" text-anchor="middle" font-weight="700" fill="#14532d">后台任务（tokio spawn）</text>
+      <text x="740" y="362" text-anchor="middle" font-size="12" fill="#166534">DiskSliceWriter 写 Parquet（CH03）</text>
+      <text x="740" y="381" text-anchor="middle" font-size="12" fill="#166534">WalManager 持久化+截断（CH05）</text>
+      <text x="740" y="400" text-anchor="middle" font-size="12" fill="#166534">Compaction / Index merge（CH06）</text>
+      <text x="740" y="419" text-anchor="middle" font-size="12" fill="#166534">IcebergTableSyncer 提交（CH06）</text>
+
+      <rect x="894" y="316" width="236" height="120" rx="9" fill="#dcfce7" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="1012" y="340" text-anchor="middle" font-weight="700" fill="#14532d">ReadStateManager</text>
+      <text x="1012" y="362" text-anchor="middle" font-size="12" fill="#166534">union read 合并读（CH07）</text>
+      <text x="1012" y="381" text-anchor="middle" font-size="12" fill="#166534">内存批→临时 Parquet</text>
+      <text x="1012" y="400" text-anchor="middle" font-size="12" fill="#166534">ReadState bincode 输出</text>
+      <text x="1012" y="419" text-anchor="middle" font-size="12" fill="#166534">LSN 可见性判定（CH09）</text>
+    </g>
+    <line x1="298" y1="376" x2="318" y2="376" stroke="#475569" stroke-width="1.6" marker-end="url(#na1)"/>
+    <line x1="586" y1="376" x2="606" y2="376" stroke="#475569" stroke-width="1.6" marker-end="url(#na1)"/>
+    <path d="M 874 350 C 900 350 894 340 894 340" stroke="#475569" stroke-width="0" fill="none"/>
+    <line x1="740" y1="436" x2="740" y2="520" stroke="#475569" stroke-width="1.6" marker-end="url(#na1)"/>
+    <line x1="1012" y1="436" x2="1012" y2="540" stroke="#475569" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#na1)"/>
+    <text x="752" y="482" font-size="11.5" fill="#64748b">data files + puffin DV + file index</text>
+    <text x="1024" y="500" font-size="11.5" fill="#64748b">RPC scan_table_begin</text>
+
+    <!-- Layer 4: storage -->
+    <text x="30" y="560" font-size="15" font-weight="700" fill="#ea580c">④ 物理存储</text>
+    <g font-size="13">
+      <rect x="30" y="576" width="268" height="104" rx="9" fill="#ffedd5" stroke="#ea580c" stroke-width="1.5"/>
+      <text x="164" y="600" text-anchor="middle" font-weight="700" fill="#7c2d12">本地 NVMe（write-through 缓存）</text>
+      <text x="164" y="622" text-anchor="middle" font-size="12" fill="#9a3412">_wal/&lt;table_id&gt;/wal_N.json（CH05）</text>
+      <text x="164" y="641" text-anchor="middle" font-size="12" fill="#9a3412">Parquet 数据缓存 + union read 临时文件</text>
+      <text x="164" y="660" text-anchor="middle" font-size="12" fill="#9a3412">ObjectStorageCache pin/unpin（CH07）</text>
+
+      <rect x="318" y="576" width="268" height="104" rx="9" fill="#ffedd5" stroke="#ea580c" stroke-width="1.5"/>
+      <text x="452" y="600" text-anchor="middle" font-weight="700" fill="#7c2d12">对象存储 S3 / GCS / FS</text>
+      <text x="452" y="622" text-anchor="middle" font-size="12" fill="#9a3412">data_*.parquet（大小受控 128MiB）</text>
+      <text x="452" y="641" text-anchor="middle" font-size="12" fill="#9a3412">puffin：删除向量 + 文件索引 blob</text>
+      <text x="452" y="660" text-anchor="middle" font-size="12" fill="#9a3412">经 opendal 统一访问（CH06）</text>
+
+      <rect x="606" y="576" width="268" height="104" rx="9" fill="#f3e8ff" stroke="#7c3aed" stroke-width="1.5"/>
+      <text x="740" y="600" text-anchor="middle" font-weight="700" fill="#4c1d95">Iceberg 表元数据（CH06）</text>
+      <text x="740" y="622" text-anchor="middle" font-size="12" fill="#6d28d9">metadata.json · manifest list/avro</text>
+      <text x="740" y="641" text-anchor="middle" font-size="12" fill="#6d28d9">snapshot summary 携带 flush LSN</text>
+      <text x="740" y="660" text-anchor="middle" font-size="12" fill="#6d28d9">v3 Deletion Vector 规范挂载</text>
+
+      <rect x="894" y="576" width="236" height="104" rx="9" fill="#f3e8ff" stroke="#7c3aed" stroke-width="1.5"/>
+      <text x="1012" y="600" text-anchor="middle" font-weight="700" fill="#4c1d95">Iceberg Catalog</text>
+      <text x="1012" y="622" text-anchor="middle" font-size="12" fill="#6d28d9">File（自研 Hadoop 风格）</text>
+      <text x="1012" y="641" text-anchor="middle" font-size="12" fill="#6d28d9">REST（Nessie/Polaris 等）</text>
+      <text x="1012" y="660" text-anchor="middle" font-size="12" fill="#6d28d9">Glue（AWS）</text>
+    </g>
+    <line x1="586" y1="628" x2="606" y2="628" stroke="#475569" stroke-width="1.6" marker-end="url(#na1)"/>
+    <line x1="874" y1="628" x2="894" y2="628" stroke="#475569" stroke-width="1.6" marker-end="url(#na1)"/>
+
+    <!-- cross-cutting -->
+    <rect x="30" y="708" width="1100" height="66" rx="9" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="7 5"/>
+    <text x="580" y="734" text-anchor="middle" font-size="14" font-weight="700" fill="#334155">横切关注：LSN 体系与可见性（CH09）· tokio watch 通道拓扑（CH09）· 可观测性 OTel 延迟直方图（CH08）· chaos 测试注入（CH09）</text>
+    <text x="580" y="756" text-anchor="middle" font-size="12.5" fill="#64748b">不变式：iceberg snapshot LSN ≤ mooncake snapshot LSN ≤ commit LSN ≤ replication LSN</text>
+    <text x="580" y="800" text-anchor="middle" font-size="12.5" fill="#94a3b8">Moonlink 源码深度解析 · 基于 Mooncake-Labs/moonlink main@401c1d1 · 约 93,000 行 Rust · 10 个 crate</text>
+  </svg>
+  <div class="legend">
+    <span><i style="background:#dbeafe"></i>客户端/协议</span>
+    <span><i style="background:#ccfbf1"></i>服务/接入/控制</span>
+    <span><i style="background:#dcfce7"></i>核心引擎（内存）</span>
+    <span><i style="background:#ffedd5"></i>本地/对象存储</span>
+    <span><i style="background:#f3e8ff"></i>Iceberg 生态</span>
+    <span>实线 = 数据流，虚线 = 读路径/元数据流</span>
+  </div>
+</div>
+
+<h2>图 0-2 · Workspace crate 依赖关系</h2>
+<p>仓库不是单一大 crate，而是 <b>10 个 workspace 成员</b>组成的分层结构。记忆口诀：<b>service 在最顶（组装一切）→ backend 做控制面 → connectors 管数据源 → moonlink 是发动机 → error/proto/table_metadata/rpc 是地基</b>。</p>
+
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 0-2</span> · 10 个 crate 的依赖方向（上层依赖下层）</div>
+  <div class="fig-desc">箭头 A→B 表示 A 的 Cargo.toml 依赖 B。与各 crate 的 <code>Cargo.toml</code> 逐一核对过。</div>
+  <svg viewBox="0 0 1160 560" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="na2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#475569"/></marker>
+    </defs>
+    <text x="580" y="30" text-anchor="middle" font-size="13" fill="#94a3b8">L4 · 可执行入口</text>
+    <rect x="400" y="44" width="360" height="56" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.6"/>
+    <text x="580" y="68" text-anchor="middle" font-weight="700" fill="#1e3a8a">moonlink_service</text>
+    <text x="580" y="88" text-anchor="middle" font-size="11.5" fill="#3b5ba9">main.rs · rest_api · rpc_server · otel</text>
+
+    <text x="580" y="140" text-anchor="middle" font-size="13" fill="#94a3b8">L3 · 编排与集成</text>
+    <rect x="60" y="156" width="290" height="56" rx="10" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+    <text x="205" y="180" text-anchor="middle" font-weight="700" fill="#115e59">moonlink_backend</text>
+    <text x="205" y="200" text-anchor="middle" font-size="11.5" fill="#0f766e">控制面：生命周期 / 恢复 / scan</text>
+    <rect x="435" y="156" width="290" height="56" rx="10" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+    <text x="580" y="180" text-anchor="middle" font-weight="700" fill="#115e59">moonlink_connectors</text>
+    <text x="580" y="200" text-anchor="middle" font-size="11.5" fill="#0f766e">pg_replicate（CDC）· rest_ingest</text>
+    <rect x="810" y="156" width="290" height="56" rx="10" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+    <text x="955" y="180" text-anchor="middle" font-weight="700" fill="#115e59">moonlink_datafusion</text>
+    <text x="955" y="200" text-anchor="middle" font-size="11.5" fill="#0f766e">TableProvider · catalog · 连接池</text>
+
+    <text x="580" y="252" text-anchor="middle" font-size="13" fill="#94a3b8">L2 · 核心引擎</text>
+    <rect x="400" y="268" width="360" height="64" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.8"/>
+    <text x="580" y="294" text-anchor="middle" font-weight="700" fill="#14532d" font-size="15">moonlink</text>
+    <text x="580" y="315" text-anchor="middle" font-size="11.5" fill="#166534">TableHandler · MooncakeTable · WAL · index · iceberg · union_read（最大 crate）</text>
+
+    <text x="580" y="374" text-anchor="middle" font-size="13" fill="#94a3b8">L1 · 存储/元数据支撑</text>
+    <rect x="150" y="390" width="300" height="56" rx="10" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.5"/>
+    <text x="300" y="414" text-anchor="middle" font-weight="700" fill="#713f12">moonlink_metadata_store</text>
+    <text x="300" y="434" text-anchor="middle" font-size="11.5" fill="#854d0e">SQLite（sqlx）/ PostgreSQL 元数据</text>
+    <rect x="710" y="390" width="300" height="56" rx="10" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.5"/>
+    <text x="860" y="414" text-anchor="middle" font-weight="700" fill="#713f12">moonlink_rpc</text>
+    <text x="860" y="434" text-anchor="middle" font-size="11.5" fill="#854d0e">rpcs! 宏 · length-prefixed bincode</text>
+
+    <text x="580" y="488" text-anchor="middle" font-size="13" fill="#94a3b8">L0 · 协议与基础</text>
+    <rect x="60" y="500" width="300" height="50" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="1.4"/>
+    <text x="210" y="524" text-anchor="middle" font-weight="600" fill="#334155">moonlink_proto</text>
+    <text x="210" y="541" text-anchor="middle" font-size="11" fill="#64748b">row.proto → prost 生成</text>
+    <rect x="430" y="500" width="300" height="50" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="1.4"/>
+    <text x="580" y="524" text-anchor="middle" font-weight="600" fill="#334155">moonlink_table_metadata</text>
+    <text x="580" y="541" text-anchor="middle" font-size="11" fill="#64748b">MooncakeTableMetadata 手写 bincode</text>
+    <rect x="800" y="500" width="300" height="50" rx="10" fill="#f1f5f9" stroke="#64748b" stroke-width="1.4"/>
+    <text x="950" y="524" text-anchor="middle" font-weight="600" fill="#334155">moonlink_error</text>
+    <text x="950" y="541" text-anchor="middle" font-size="11" fill="#64748b">Error / ErrorCode · io_error_utils</text>
+
+    <!-- service deps -->
+    <line x1="470" y1="100" x2="230" y2="156" stroke="#475569" stroke-width="1.4" marker-end="url(#na2)"/>
+    <line x1="580" y1="100" x2="580" y2="156" stroke="#475569" stroke-width="1.4" marker-end="url(#na2)"/>
+    <line x1="690" y1="100" x2="930" y2="156" stroke="#475569" stroke-width="1.4" marker-end="url(#na2)"/>
+    <line x1="580" y1="100" x2="580" y2="268" stroke="#94a3b8" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#na2)"/>
+    <line x1="300" y1="446" x2="300" y2="500" stroke="#475569" stroke-width="1.4" marker-end="url(#na2)"/>
+    <!-- backend deps -->
+    <line x1="205" y1="212" x2="480" y2="268" stroke="#475569" stroke-width="1.4" marker-end="url(#na2)"/>
+    <line x1="300" y1="212" x2="300" y2="390" stroke="#475569" stroke-width="1.4" marker-end="url(#na2)"/>
+    <!-- connectors deps -->
+    <line x1="580" y1="212" x2="580" y2="268" stroke="#475569" stroke-width="1.4" marker-end="url(#na2)"/>
+    <!-- datafusion deps -->
+    <line x1="955" y1="212" x2="872" y2="390" stroke="#475569" stroke-width="1.4" marker-end="url(#na2)"/>
+    <polyline points="1100,212 1100,470 738,497" fill="none" stroke="#94a3b8" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#na2)"/>
+    <!-- moonlink deps -->
+    <line x1="480" y1="332" x2="210" y2="500" stroke="#475569" stroke-width="1.4" marker-end="url(#na2)"/>
+    <line x1="580" y1="332" x2="580" y2="500" stroke="#475569" stroke-width="1.4" marker-end="url(#na2)"/>
+    <line x1="680" y1="332" x2="950" y2="500" stroke="#475569" stroke-width="1.4" marker-end="url(#na2)"/>
+    <!-- metadata_store deps -->
+    <line x1="255" y1="446" x2="490" y2="332" stroke="#475569" stroke-width="1.2" marker-end="url(#na2)"/>
+    <text x="120" y="240" font-size="11.5" fill="#64748b">service 同时直连 moonlink/proto/rpc</text>
+    <text x="1000" y="360" font-size="11.5" fill="#64748b">只依赖 rpc + metadata，</text>
+    <text x="1000" y="376" font-size="11.5" fill="#64748b">不碰核心引擎 —— 天然存算分离</text>
+  </svg>
+  <div class="callout good" style="margin-top:12px"><b>值得注意：</b><code>moonlink_datafusion</code> 不依赖核心引擎 <code>moonlink</code>，只通过 <code>moonlink_rpc</code> 远程拿 ReadState——这就是「存算分离」在代码结构上的体现：查询侧与存储侧之间只有一个 RPC 协议。</div>
+</div>
+
+<h2>图 0-3 · 推荐阅读路线（6 周）</h2>
+<div class="figure">
+  <div class="fig-title"><span class="fno">图 0-3</span> · 六周源码阅读路线，每周有明确的「读什么 + 验证标准」</div>
+  <svg viewBox="0 0 1160 420" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+    <defs>
+      <marker id="na3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#2563eb"/></marker>
+    </defs>
+    <line x1="60" y1="66" x2="1110" y2="66" stroke="#cbd5e1" stroke-width="3"/>
+    <line x1="60" y1="66" x2="1110" y2="66" stroke="#2563eb" stroke-width="3" stroke-dasharray="18 1040" marker-end="url(#na3)"/>
+    <g font-size="12.5">
+      <!-- W1 -->
+      <circle cx="130" cy="66" r="9" fill="#2563eb"/><text x="130" y="42" text-anchor="middle" font-weight="700" fill="#1e3a8a">W1</text>
+      <rect x="40" y="92" width="185" height="150" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.3"/>
+      <text x="132" y="116" text-anchor="middle" font-weight="700" fill="#1e3a8a">入口与服务</text>
+      <text x="52" y="140" font-size="11.5" fill="#1e293b">· moonlink_service/main.rs</text>
+      <text x="52" y="159" font-size="11.5" fill="#1e293b">· start_with_config()</text>
+      <text x="52" y="178" font-size="11.5" fill="#1e293b">· rest_api.rs 全部端点</text>
+      <text x="52" y="197" font-size="11.5" fill="#1e293b">· rpc_server.rs</text>
+      <text x="52" y="224" font-size="11" fill="#3b5ba9">✓ 能跑通 rest_api_demo</text>
+      <!-- W2 -->
+      <circle cx="320" cy="66" r="9" fill="#0d9488"/><text x="320" y="42" text-anchor="middle" font-weight="700" fill="#115e59">W2</text>
+      <rect x="238" y="92" width="185" height="150" rx="10" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.3"/>
+      <text x="330" y="116" text-anchor="middle" font-weight="700" fill="#115e59">摄入链路</text>
+      <text x="250" y="140" font-size="11.5" fill="#1e293b">· moonlink_sink.rs</text>
+      <text x="250" y="159" font-size="11.5" fill="#1e293b">· postgres_source.rs</text>
+      <text x="250" y="178" font-size="11.5" fill="#1e293b">· table_notify.rs 事件</text>
+      <text x="250" y="197" font-size="11.5" fill="#1e293b">· table_handler.rs</text>
+      <text x="250" y="224" font-size="11" fill="#0f766e">✓ 画出 Append→Commit 流程</text>
+      <!-- W3 -->
+      <circle cx="510" cy="66" r="9" fill="#16a34a"/><text x="510" y="42" text-anchor="middle" font-weight="700" fill="#14532d">W3</text>
+      <rect x="428" y="92" width="185" height="150" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.3"/>
+      <text x="520" y="116" text-anchor="middle" font-weight="700" fill="#14532d">存储引擎</text>
+      <text x="440" y="140" font-size="11.5" fill="#1e293b">· mooncake_table.rs</text>
+      <text x="440" y="159" font-size="11.5" fill="#1e293b">· mem_slice.rs</text>
+      <text x="440" y="178" font-size="11.5" fill="#1e293b">· disk_slice.rs（flush）</text>
+      <text x="440" y="197" font-size="11.5" fill="#1e293b">· snapshot.rs</text>
+      <text x="440" y="224" font-size="11" fill="#166534">✓ 解释一次 flush 全过程</text>
+      <!-- W4 -->
+      <circle cx="700" cy="66" r="9" fill="#dc2626"/><text x="700" y="42" text-anchor="middle" font-weight="700" fill="#7f1d1d">W4</text>
+      <rect x="618" y="92" width="185" height="150" rx="10" fill="#fee2e2" stroke="#dc2626" stroke-width="1.3"/>
+      <text x="710" y="116" text-anchor="middle" font-weight="700" fill="#7f1d1d">索引与删除</text>
+      <text x="630" y="140" font-size="11.5" fill="#1e293b">· index/mem_index.rs</text>
+      <text x="630" y="159" font-size="11.5" fill="#1e293b">· persisted_bucket_hash_map</text>
+      <text x="630" y="178" font-size="11.5" fill="#1e293b">· delete_vector.rs</text>
+      <text x="630" y="197" font-size="11.5" fill="#1e293b">· iceberg/deletion_vector.rs</text>
+      <text x="630" y="224" font-size="11" fill="#b91c1c">✓ 手推一次 upsert 定位</text>
+      <!-- W5 -->
+      <circle cx="890" cy="66" r="9" fill="#ea580c"/><text x="890" y="42" text-anchor="middle" font-weight="700" fill="#7c2d12">W5</text>
+      <rect x="808" y="92" width="185" height="150" rx="10" fill="#ffedd5" stroke="#ea580c" stroke-width="1.3"/>
+      <text x="900" y="116" text-anchor="middle" font-weight="700" fill="#7c2d12">WAL 与 Iceberg</text>
+      <text x="820" y="140" font-size="11.5" fill="#1e293b">· wal.rs（持久化/截断）</text>
+      <text x="820" y="159" font-size="11.5" fill="#1e293b">· iceberg_table_syncer.rs</text>
+      <text x="820" y="178" font-size="11.5" fill="#1e293b">· puffin_utils.rs</text>
+      <text x="820" y="197" font-size="11.5" fill="#1e293b">· compactor.rs</text>
+      <text x="820" y="224" font-size="11" fill="#9a3412">✓ 讲清两级快照关系</text>
+      <!-- W6 -->
+      <circle cx="1075" cy="66" r="9" fill="#7c3aed"/><text x="1075" y="42" text-anchor="middle" font-weight="700" fill="#4c1d95">W6</text>
+      <rect x="988" y="92" width="164" height="150" rx="10" fill="#f3e8ff" stroke="#7c3aed" stroke-width="1.3"/>
+      <text x="1070" y="116" text-anchor="middle" font-weight="700" fill="#4c1d95">查询与并发</text>
+      <text x="1000" y="140" font-size="11.5" fill="#1e293b">· union_read/*.rs</text>
+      <text x="1000" y="159" font-size="11.5" fill="#1e293b">· table_metadata.rs</text>
+      <text x="1000" y="178" font-size="11.5" fill="#1e293b">· lsn_state.rs / event_sync.rs</text>
+      <text x="1000" y="197" font-size="11.5" fill="#1e293b">· datafusion/table_provider</text>
+      <text x="1000" y="224" font-size="11" fill="#6d28d9">✓ 跑通 DataFusion 查询</text>
+    </g>
+    <text x="60" y="300" font-size="14" font-weight="700" fill="#334155">阅读方法论（来自仓库实战验证）</text>
+    <g font-size="13" fill="#475569">
+      <text x="60" y="328">1️⃣  先读每个文件头部的模块注释 —— moonlink 的核心设计（LSN 语义、MemSlice Copy-On-Read、WAL 单一真源）都写在注释里，注释质量极高。</text>
+      <text x="60" y="354">2️⃣  顺着 <tspan font-family="Menlo,monospace" font-size="12" fill="#be185d">TableEvent</tspan> 事件走 —— 摄入、flush、快照、compaction 全部是事件驱动的，抓住事件枚举就抓住了主干。</text>
+      <text x="60" y="380">3️⃣  用 <tspan font-family="Menlo,monospace" font-size="12" fill="#be185d">cargo test -p moonlink table_handler</tspan> 与 benches/ 下的微基准做实验 —— 测试名即行为文档（如 chaos_test、failure_tests）。</text>
+    </g>
+  </svg>
+</div>
+
+<h2>关键事实速查</h2>
+<table>
+  <thead><tr><th>维度</th><th>事实</th></tr></thead>
+  <tbody>
+    <tr><td>上游仓库</td><td>Mooncake-Labs/moonlink（BSL 1.1 协议，部分 crate MIT），官网文档 docs.mooncake.dev/moonlink</td></tr>
+    <tr><td>定位</td><td>Apache Iceberg 的托管摄取引擎：PG CDC / REST / Kafka(规划中) → 实时 Iceberg v3 表（含 Deletion Vector）</td></tr>
+    <tr><td>代码规模</td><td>src/ 下约 93,000 行 Rust，10 个 workspace crate，Rust 1.90.0 工具链</td></tr>
+    <tr><td>关键 git 依赖</td><td>apache/iceberg-rust 固定 rev <code>4a6ea15a</code>（v3 DV 支持）· Mooncake-Labs fork rust-postgres（逻辑复制）· arrow v56 · datafusion v50 · opendal 0.54 · roaring 0.11</td></tr>
+    <tr><td>默认端口</td><td>REST 3030 · RPC(TCP) 3031 · OTEL 3435 · readiness 5050</td></tr>
+    <tr><td>三大核心阈值</td><td>mem_slice_size = batch_size(4096)×32 = 131072 行触发 flush · parquet_file_size 128MiB · compaction 目标 512MiB</td></tr>
+    <tr><td>并发模型</td><td>每表一个单线程 actor（TableHandler）+ 后台 tokio 任务，跨线程同步只用 tokio watch/mpsc，无锁化设计</td></tr>
+  </tbody>
+</table>
+
+<div class="footer"><span></span><a href="01-overview.html">下一章：01 总体架构 →</a></div>
+</div>
+</body>
+</html>

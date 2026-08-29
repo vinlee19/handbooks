@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>06 · 扩展系统 — Pi 源码深度剖析</title>
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<nav class="topnav"><div class="topnav-inner">
+  <a class="brand" href="./index.html">pi deep-dive</a>
+  <a class="pg" href="./index.html">总览</a>
+  <a class="pg" href="./01-architecture.html">01 物理架构</a>
+  <a class="pg" href="./02-ai.html">02 pi-ai</a>
+  <a class="pg" href="./03-agent.html">03 agent-core</a>
+  <a class="pg" href="./04-coding-agent.html">04 coding-agent</a>
+  <a class="pg" href="./05-session-compaction.html">05 会话与压缩</a>
+  <a class="pg cur" href="./06-extensions.html">06 扩展系统</a>
+  <a class="pg" href="./07-tui.html">07 TUI</a>
+  <a class="pg" href="./08-rpc.html">08 RPC</a>
+  <a class="pg" href="./09-supply-chain.html">09 构建发布</a>
+</div></nav>
+
+<main>
+<div class="hero">
+  <div class="kicker">第 06 篇</div>
+  <h1>扩展系统：进程内的钩子网络</h1>
+  <div class="sub">扩展就是一个导出 <code>(pi) =&gt; void</code> 工厂函数的 TypeScript 文件——没有独立进程、没有 RPC、没有沙箱接口。它通过 jiti 被直接 import 进 pi 进程，拿到一个 1,727 行类型定义的 <code>ExtensionAPI</code>：34 种事件订阅、6 类注册、十几个动作。pi 自己没有的权限系统，官方推荐就是用扩展写确认门。</div>
+</div>
+
+<h2><span class="no">1</span>发现与加载</h2>
+<p>扩展从四个来源发现，按顺序加载（后加载的可覆盖命令同名者会收到错误提示）：</p>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 360" width="980" role="img" aria-label="扩展加载流程">
+  <defs>
+    <marker id="ar-ex1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+
+  <rect x="30" y="30" width="200" height="52" rx="6" class="n-disk"></rect>
+  <text x="130" y="52" text-anchor="middle" class="t-s t-b">① &lt;cwd&gt;/.pi/extensions/</text>
+  <text x="130" y="70" text-anchor="middle" class="t-xs">项目级（受信任门控制）</text>
+
+  <rect x="270" y="30" width="200" height="52" rx="6" class="n-disk"></rect>
+  <text x="370" y="52" text-anchor="middle" class="t-s t-b">② ~/.pi/agent/extensions/</text>
+  <text x="370" y="70" text-anchor="middle" class="t-xs">用户全局</text>
+
+  <rect x="510" y="30" width="200" height="52" rx="6" class="n-disk"></rect>
+  <text x="610" y="52" text-anchor="middle" class="t-s t-b">③ pi install 安装的包</text>
+  <text x="610" y="70" text-anchor="middle" class="t-xs">settings 里的 packages 列表</text>
+
+  <rect x="750" y="30" width="200" height="52" rx="6" class="n-user"></rect>
+  <text x="850" y="52" text-anchor="middle" class="t-s t-b">④ -e / --extension 路径</text>
+  <text x="850" y="70" text-anchor="middle" class="t-xs">命令行显式指定</text>
+
+  <rect x="300" y="130" width="380" height="96" rx="8" class="n-ca"></rect>
+  <text x="490" y="156" text-anchor="middle" class="t-s t-b">discoverAndLoadExtensions（loader.ts）</text>
+  <text x="490" y="178" text-anchor="middle" class="t-s">jiti.import(path, {default:true}) —— 直接吃 .ts 源码</text>
+  <text x="490" y="198" text-anchor="middle" class="t-s">导出非函数 → 跳过；成功 → 缓存 factory（按 cwd+generation）</text>
+
+  <rect x="300" y="270" width="380" height="70" rx="8" class="n-agent"></rect>
+  <text x="490" y="296" text-anchor="middle" class="t-s t-b">factory(pi: ExtensionAPI) 同步执行</text>
+  <text x="490" y="316" text-anchor="middle" class="t-s">pi.on(...) / registerTool / registerCommand … 全部登记进 Extension 对象</text>
+
+  <line x1="130" y1="82" x2="330" y2="128" class="edge" marker-end="url(#ar-ex1)"></line>
+  <line x1="370" y1="82" x2="430" y2="128" class="edge" marker-end="url(#ar-ex1)"></line>
+  <line x1="610" y1="82" x2="550" y2="128" class="edge" marker-end="url(#ar-ex1)"></line>
+  <line x1="850" y1="82" x2="650" y2="128" class="edge" marker-end="url(#ar-ex1)"></line>
+  <line x1="490" y1="226" x2="490" y2="268" class="edge" marker-end="url(#ar-ex1)"></line>
+
+  <rect x="720" y="270" width="240" height="70" rx="8" class="n-warn"></rect>
+  <text x="840" y="294" text-anchor="middle" class="t-xs t-b">注意：扩展 = 进程内任意代码</text>
+  <text x="840" y="314" text-anchor="middle" class="t-xs">不受信任项目默认不加载项目级扩展</text>
+  <text x="840" y="330" text-anchor="middle" class="t-xs">（ProjectTrustStore 门，见 04 篇）</text>
+</svg>
+</div>
+<figcaption>图 6-1 · 发现与加载。jiti 让扩展保持 TypeScript 源码形态（无需编译步骤）；Bun 二进制里 jiti 的模块解析走内嵌 virtualModules，保证单文件分发时 import pi 包仍能命中。</figcaption>
+</figure>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/coding-agent/src/core/extensions/loader.ts</span><span class="cb-note">L436-464</span></div>
+<pre><code>async function loadExtensionModule(extensionPath: string, cacheToken?: ExtensionCacheToken) {
+  if (isCurrentCacheToken(cacheToken)) {
+    const cachedFactory = extensionCache.get(extensionPath);   // reload 时命中缓存
+    if (cachedFactory) {
+      return cachedFactory;
+    }
+  }
+
+  const jiti = createJiti(import.meta.url, {
+    moduleCache: false,
+    // Bun uses modules embedded in the executable. Source TypeScript reuses the
+    // host-resolved modules and root tsconfig paths. Built Node uses dist aliases.
+    ...(isBunBinary
+      ? { virtualModules: VIRTUAL_MODULES, tryNative: false }
+      : isTypeScriptSourceRuntime
+        ? { virtualModules: VIRTUAL_MODULES, tsconfigPaths: true }
+        : { alias: getAliases() }),
+  });
+
+  const module = await jiti.import(extensionPath, { default: true });
+  const factory = module as ExtensionFactory;
+  if (typeof factory !== "function") {
+    return undefined;
+  }
+  if (isCurrentCacheToken(cacheToken)) {
+    extensionCache.set(extensionPath, factory);
+  }
+  return factory;
+}</code></pre>
+</div>
+
+<h2><span class="no">2</span>ExtensionAPI 的三个面</h2>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/coding-agent/src/core/extensions/types.ts</span><span class="cb-note">L1198-1244（事件订阅签名，34 种）</span></div>
+<pre><code>export interface ExtensionAPI {
+  // =========================================================================
+  // Event Subscription
+  // =========================================================================
+  on(event: "project_trust", handler: ProjectTrustHandler): void;
+  on(event: "session_start" | "session_info_changed" | "session_shutdown", ...): void;
+  on(event: "session_before_switch" | "session_before_fork" | "session_before_tree", ...): void;  // 可拦截
+  on(event: "session_before_compact", ...): void;      // 可接管压缩
+  on(event: "session_compact" | "session_tree", ...): void;
+  on(event: "context", ...): void;                     // 可改写整个 LLM 上下文
+  on(event: "before_provider_request" | "before_provider_headers", ...): void;  // 可改请求体/头
+  on(event: "after_provider_response", ...): void;     // 原始响应头可见
+  on(event: "before_agent_start", ...): void;          // 可覆盖 systemPrompt / tools
+  on(event: "agent_start" | "agent_end" | "agent_settled", ...): void;
+  on(event: "turn_start" | "turn_end", ...): void;
+  on(event: "message_start" | "message_update" | "message_end", ...): void;
+  on(event: "tool_execution_start" | "tool_execution_update" | "tool_execution_end", ...): void;
+  on(event: "tool_call" | "tool_result", ...): void;   // tool_call 可 block —— 权限门挂点
+  on(event: "user_bash", ...): void;                   // 可拦截 ! 命令
+  on(event: "input", ...): void;                       // 可 handled 接管 / transform 改写
+  on(event: "model_select" | "thinking_level_select", ...): void;
+  on(event: "resources_discover", ...): void;
+  ...
+}</code></pre>
+</div>
+
+<table class="tbl">
+<thead><tr><th>面</th><th>成员</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><strong>事件订阅</strong></td><td class="mono">pi.on(…)</td><td>34 种，覆盖会话生命周期、provider 请求前后、循环事件、工具执行、输入；带 <code>Result</code> 返回类型的事件可拦截/改写</td></tr>
+<tr><td><strong>注册</strong></td><td class="mono">registerTool / registerCommand / registerShortcut / registerFlag / registerMessageRenderer / registerMarkdownTransformer / registerEntryRenderer / registerProvider</td><td>工具进注册表、命令进 <code>/</code> 分发、快捷键进 keybindings、Flag 进 <code>--help</code>、渲染器接管会话条目显示、registerProvider 可注入全新自定义 provider（含 baseUrl/apiKey/OAuth/streamSimple）</td></tr>
+<tr><td><strong>动作</strong></td><td class="mono">sendMessage / sendUserMessage / appendEntry / setSessionName / exec / get|setActiveTools / setModel / setThinkingLevel / navigateTree / switchSession / fork / compact / getSystemPrompt …</td><td>扩展可以驱动会话本身；<code>sendMessage({triggerTurn:false})</code> 只记一条 custom_message 不触发轮次</td></tr>
+<tr><td><strong>ctx（上下文对象）</strong></td><td class="mono">ctx.ui（select/confirm/input/notify/setWidget/setFooter/custom overlay/editor/…）、ctx.sessionManager、ctx.model、ctx.waitForIdle …</td><td>交互能力全在 <code>ctx.ui</code>：TUI 模式下是真组件，RPC 模式下自动转成 <code>extension_ui_request</code> 让宿主渲染（08 篇）</td></tr>
+</tbody>
+</table>
+
+<h2><span class="no">3</span>拦截语义：谁能改什么</h2>
+<p>带 <code>Result</code> 的事件不只是通知。分发器按扩展加载顺序依次调用 handler，合并语义各不相同——例如 <code>context</code> 事件把消息数组 <code>structuredClone</code> 后逐个传给扩展改写，而 <code>tool_call</code> 的 <code>block</code> 一票否决立即短路：</p>
+
+<div class="codeblock">
+<div class="cb-head"><span class="cb-file">packages/coding-agent/src/core/extensions/runner.ts</span><span class="cb-note">L932-953 · tool_call 分发</span></div>
+<pre><code>async emitToolCall(event: ToolCallEvent): Promise&lt;ToolCallEventResult | undefined&gt; {
+  const ctx = this.createContext();
+  let result: ToolCallEventResult | undefined;
+
+  for (const ext of this.extensions) {
+    const handlers = ext.handlers.get("tool_call");
+    if (!handlers || handlers.length === 0) continue;
+
+    for (const handler of handlers) {
+      const handlerResult = await handler(event, ctx);
+
+      if (handlerResult) {
+        result = handlerResult as ToolCallEventResult;
+        if (result.block) {
+          return result;      // 一票否决：不再询问后续扩展
+        }
+      }
+    }
+  }
+
+  return result;
+}</code></pre>
+</div>
+
+<p>被 block 的工具调用不会消失：循环为它生成一条错误 ToolResultMessage（reason 就是扩展给的 reason），模型下一轮能看到"被拒绝"及其原因并调整行为。terminate 语义（03 篇）在此生效：整批结果都 terminate 才提前终止循环。</p>
+
+<h2><span class="no">4</span>拦截点全景图</h2>
+<p>把 34 个事件放回 04 篇的端到端链路上，标出哪些是纯观察、哪些能动手：</p>
+
+<figure class="fig">
+<div class="dg">
+<svg viewBox="0 0 980 470" width="980" role="img" aria-label="事件拦截点全景">
+  <defs>
+    <marker id="ar-ex2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7b8494"></path>
+    </marker>
+  </defs>
+  <style>
+    .obs { fill: #eef1f5; stroke: #b9c2cf; }
+    .act { fill: #f1eafd; stroke: #c0a6f2; }
+  </style>
+
+  <rect x="26" y="20" width="12" height="420" rx="6" class="n-ca"></rect>
+  <text x="18" y="234" class="t-xs" transform="rotate(-90 18 234)" text-anchor="middle">prompt → 回复 主链路</text>
+
+  <rect x="60" y="30" width="880" height="40" rx="5" class="act"></rect>
+  <text x="80" y="55" class="t-s"><tspan class="t-b">input</tspan>（可 handled 接管 / transform 改写）· 以 / 开头先查扩展命令 → 自管 LLM 交互</text>
+
+  <rect x="60" y="80" width="880" height="40" rx="5" class="act"></rect>
+  <text x="80" y="105" class="t-s"><tspan class="t-b">before_agent_start</tspan>（可覆盖 systemPrompt、增删工具）→ user 消息追加落盘</text>
+
+  <rect x="60" y="130" width="880" height="40" rx="5" class="act"></rect>
+  <text x="80" y="155" class="t-s"><tspan class="t-b">context</tspan>（每次 LLM 请求前改写全部消息，structuredClone 隔离）</text>
+
+  <rect x="60" y="180" width="880" height="40" rx="5" class="act"></rect>
+  <text x="80" y="205" class="t-s"><tspan class="t-b">before_provider_request</tspan>（改请求体 payload）· <tspan class="t-b">before_provider_headers</tspan>（改请求头）</text>
+
+  <rect x="60" y="230" width="880" height="40" rx="5" class="obs"></rect>
+  <text x="80" y="255" class="t-s"><tspan class="t-b">after_provider_response</tspan>（只读：status + 原始响应头）→ SSE 事件流</text>
+
+  <rect x="60" y="280" width="880" height="40" rx="5" class="obs"></rect>
+  <text x="80" y="305" class="t-s"><tspan class="t-b">agent_start</tspan> · <tspan class="t-b">turn_start</tspan> · <tspan class="t-b">message_start / message_update / message_end</tspan>（流式全程可见）</text>
+
+  <rect x="60" y="330" width="880" height="52" rx="5" class="act"></rect>
+  <text x="80" y="352" class="t-s"><tspan class="t-b">tool_call</tspan>（可 block + reason / 改参数 / terminate）</text>
+  <text x="80" y="372" class="t-s"><tspan class="t-b">tool_execution_start / update / end</tspan>（update 可见流式部分输出）· <tspan class="t-b">tool_result</tspan>（可改写结果）</text>
+
+  <rect x="60" y="392" width="880" height="40" rx="5" class="obs"></rect>
+  <text x="80" y="417" class="t-s"><tspan class="t-b">turn_end</tspan> · <tspan class="t-b">agent_end / agent_settled</tspan> · <tspan class="t-b">session_compact</tspan>（压缩完成后）</text>
+
+  <text x="60" y="456" class="t-xs t-b" style="fill:#7c3aed">紫色 = 可动手（拦截/改写）　灰色 = 只读观察</text>
+</svg>
+</div>
+<figcaption>图 6-2 · 事件在主链路上的位置与权限。设计取向：请求前可任意整形（request/headers/context），响应后只读（after_provider_response）——避免扩展把响应改得与 usage/计价不一致。</figcaption>
+</figure>
+
+<h2><span class="no">5</span>ctx.ui 与两个进程的边界</h2>
+<p>扩展调 <code>ctx.ui.confirm()</code> 时发生了什么取决于运行模式：interactive 模式直接弹真组件并 await 用户选择；RPC/无头模式下，这个调用被序列化成 <code>extension_ui_request</code> 事件发给宿主进程，宿主渲染自己的 UI 后回 <code>extension_ui_response</code>，扩展侧的 await 才返回。这就是 0.84.4 新增 <code>ui_prompt_start/ui_prompt_end</code> 事件的原因：宿主集成需要区分"agent 在推理"与"agent 在等我点按钮"这两种完全不同的等待。</p>
+
+<h2><span class="no">6</span>生态速览</h2>
+<p><code>examples/extensions/</code> 下有 70+ 个官方示例：permission-gate（确认门）、plan-mode、subagent（派生子会话）、sandbox、custom-compaction（接管压缩）、doom-overlay（在编辑器上玩 DOOM，展示 custom overlay 能力）等。pi 自身只内置一个隐藏扩展：llama.cpp 本地模型对接（<code>src/extensions/llama/</code>，含 /llama 命令、huggingface 拉取、provider 注册）——它本身就是一个"扩展能做什么"的官方标杆。</p>
+
+<nav class="pagenav">
+  <a href="./05-session-compaction.html"><span class="dir">上一篇</span>← 05 · 会话持久化与压缩</a>
+  <a class="next" href="./07-tui.html"><span class="dir">下一篇</span>07 · TUI 渲染引擎 →</a>
+</nav>
+
+<footer class="colophon">Pi 源码深度剖析 · 基于 worktree 368e013de（v0.84.1）</footer>
+</main>
+<script src="./script.js"></script>
+</body>
+</html>
