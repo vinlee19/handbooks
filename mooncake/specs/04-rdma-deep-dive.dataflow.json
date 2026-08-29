@@ -1,0 +1,217 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "一次 RDMA WRITE 的完整生命周期",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      510
+    ],
+    "views": [
+      {
+        "id": "prepare",
+        "label": "准备阶段",
+        "focus": [
+          "caller",
+          "slice",
+          "mr"
+        ],
+        "note": "切片与 MR 注册决定零拷贝能不能成立。"
+      },
+      {
+        "id": "link",
+        "label": "建链与选路",
+        "focus": [
+          "topo",
+          "qp"
+        ],
+        "note": "拓扑矩阵选 preferred HCA，QP 走四态状态机。"
+      },
+      {
+        "id": "wire",
+        "label": "上线传输",
+        "focus": [
+          "window",
+          "wr",
+          "cq",
+          "notify"
+        ],
+        "note": "三级流控放行后 post_send，CQ 轮询拿完成事件。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "发起"
+    },
+    {
+      "label": "准备"
+    },
+    {
+      "label": "建链"
+    },
+    {
+      "label": "传输与完成"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "caller",
+      "type": "backend",
+      "label": "submitTransfer",
+      "sublabel": "TE 统一入口",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "slice",
+      "type": "backend",
+      "label": "64KB 切片",
+      "sublabel": "slice_func 分片",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "mr",
+      "type": "database",
+      "label": "MR 注册",
+      "sublabel": "ibv_reg_mr · 去重表",
+      "stage": 1,
+      "row": 2
+    },
+    {
+      "id": "topo",
+      "type": "backend",
+      "label": "拓扑选路",
+      "sublabel": "matrix 选 preferred HCA",
+      "stage": 2,
+      "row": 0
+    },
+    {
+      "id": "qp",
+      "type": "security",
+      "label": "QP 建链状态机",
+      "sublabel": "RESET→INIT→RTR→RTS",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "window",
+      "type": "security",
+      "label": "三级流控",
+      "sublabel": "切片/窗口/onwire 信用",
+      "stage": 2,
+      "row": 2
+    },
+    {
+      "id": "wr",
+      "type": "backend",
+      "label": "WR 提交",
+      "sublabel": "ibv_post_send",
+      "stage": 3,
+      "row": 0
+    },
+    {
+      "id": "cq",
+      "type": "messagebus",
+      "label": "CQ 完成",
+      "sublabel": "ibv_poll_cq 轮询",
+      "stage": 3,
+      "row": 1
+    },
+    {
+      "id": "notify",
+      "type": "backend",
+      "label": "getTransferStatus",
+      "sublabel": "notify 队列 · 事务完成",
+      "stage": 3,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "from": "caller",
+      "to": "slice",
+      "label": "TransferRequest",
+      "variant": "emphasis"
+    },
+    {
+      "from": "mr",
+      "to": "slice",
+      "label": "lkey 就绪",
+      "variant": "dashed"
+    },
+    {
+      "from": "slice",
+      "to": "qp",
+      "label": "切片就绪"
+    },
+    {
+      "from": "topo",
+      "to": "qp",
+      "label": "选定 HCA / port",
+      "variant": "dashed"
+    },
+    {
+      "from": "qp",
+      "to": "wr",
+      "label": "链路 READY",
+      "variant": "emphasis",
+      "labelAt": [
+        535,
+        318
+      ]
+    },
+    {
+      "from": "window",
+      "to": "wr",
+      "label": "窗口许可",
+      "variant": "dashed",
+      "labelAt": [
+        637,
+        320
+      ]
+    },
+    {
+      "from": "wr",
+      "to": "cq",
+      "label": "post_send"
+    },
+    {
+      "from": "cq",
+      "to": "notify",
+      "label": "WC 完成事件"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "零拷贝前提",
+      "items": [
+        "内存先注册成 MR 拿到 lkey/rkey",
+        "注册表做重叠检查避免重复注册",
+        "GPUDirect 场景走 dmabuf 导入显存"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "可靠性",
+      "items": [
+        "QP 状态机只在 RTR→RTS 后可收发",
+        "三级流控防止对端接收缓冲打满",
+        "CQ 轮询驱动的完成事件回填 TransferStatus"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "选路",
+      "items": [
+        "Topology 矩阵按 NUMA/PCI 距离打分",
+        "优先本 NUMA 的 HCA 降低跨片延迟",
+        "多 HCA 间做负载均衡"
+      ]
+    }
+  ]
+}

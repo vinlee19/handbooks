@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "生态集成：vLLM 两条路径、P2P Store 与 mooncake-ep",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 640],
+    "views": [
+      { "id": "path-a", "label": "路径 A · PD 分离", "focus": ["pw", "zmq", "dw"], "note": "TE 直传：KV 显存被对端 RDMA 直写。" },
+      { "id": "path-b", "label": "路径 B · 池化", "focus": ["vi", "st", "dw"], "note": "按 block hash get/put，命中前缀跳过 prefill。" },
+      { "id": "extras", "label": "P2P 与 EP", "focus": ["p2p", "ep", "st"], "note": "P2P Store 分发大对象，mooncake-ep 承载 MoE all-to-all。" }
+    ]
+  },
+  "components": [
+    { "id": "pw", "type": "backend", "label": "Prefill worker", "sublabel": "mooncake.engine · 路径 A", "pos": [40, 110], "size": [180, 64] },
+    { "id": "dw", "type": "backend", "label": "Decode worker", "sublabel": "KV 显存被 RDMA 直写", "pos": [640, 110], "size": [190, 64] },
+    { "id": "zmq", "type": "messagebus", "label": "ZMQ side-channel :6557", "sublabel": "交换 MooncakeAgentMetadata", "pos": [340, 220], "size": [200, 62] },
+    { "id": "vi", "type": "external", "label": "任意 vLLM 实例", "sublabel": "get / put by block hash", "pos": [40, 360], "size": [180, 64] },
+    { "id": "st", "type": "database", "label": "Mooncake Store", "sublabel": "内存池 + SSD 分层容量", "pos": [640, 360], "size": [190, 64] },
+    { "id": "p2p", "type": "messagebus", "label": "P2P Store", "sublabel": "BitTorrent 式权重分发", "pos": [40, 520], "size": [180, 62] },
+    { "id": "ep", "type": "backend", "label": "mooncake-ep", "sublabel": "容错 DeepEP · MoE all-to-all", "pos": [640, 520], "size": [190, 62] }
+  ],
+  "connections": [
+    { "from": "pw", "to": "dw", "label": "RDMA 直写 KV 显存 · 路径 A", "variant": "emphasis" },
+    { "from": "pw", "to": "zmq", "label": "交换对端元数据", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 40 },
+    { "from": "zmq", "to": "dw", "label": "对端地址 + KV 基地址", "variant": "dashed" },
+    { "from": "vi", "to": "st", "label": "路径 B · 星型接入", "variant": "emphasis" },
+    { "from": "dw", "to": "st", "label": "前缀命中直读", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "vi", "to": "p2p", "label": "权重 / 大对象分发", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 45 },
+    { "from": "st", "to": "ep", "label": "MoE temporaries 池化", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 55 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "两条集成路径", "items": ["路径 A：MooncakeConnector TE 直传，面向 XpYd PD 分离", "路径 B：MooncakeStoreConnector 池化，按 block hash 复用前缀", "路径 A 支持按层 save_kv_layer / wait_for_layer_load 流水"] },
+    { "dot": "violet", "title": "路径 B 的优势", "items": ["无需两两实例互联，拓扑是星型", "数据落 Store 分层，容量远超单机显存", "vLLM 内置 connector，配置 kv-transfer-config 即用"] },
+    { "dot": "emerald", "title": "P2P 与 EP", "items": ["P2P Store 用 BitTorrent 式协议分发权重等大对象", "mooncake-ep 提供容错的 DeepEP MoE all-to-all", "兼容 SGLang / TRT-LLM 的 XpYd 路由代理"] }
+  ]
+}

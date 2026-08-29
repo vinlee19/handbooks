@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "一次 Put 的完整调用链：从推理引擎到副本落地",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1000,
+      520
+    ],
+    "views": [
+      {
+        "id": "happy-path",
+        "label": "Put 主链",
+        "focus": [
+          "py",
+          "real",
+          "master",
+          "te",
+          "confirm"
+        ],
+        "note": "沿主链看一次 put 如何穿过门面、控制面与数据面。"
+      },
+      {
+        "id": "zero-copy",
+        "label": "零拷贝",
+        "focus": [
+          "py",
+          "real"
+        ],
+        "note": "DummyClient 经 memfd + SCM_RIGHTS 共享内存直通。"
+      },
+      {
+        "id": "getpath",
+        "label": "Get 读决策",
+        "focus": [
+          "real",
+          "confirm"
+        ],
+        "note": "hot→segment→副本→SSD 逐层回退，见结论卡。"
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "client",
+      "label": "客户端层"
+    },
+    {
+      "id": "control",
+      "label": "Master 控制面"
+    },
+    {
+      "id": "dataplane",
+      "label": "数据面"
+    }
+  ],
+  "phases": [
+    {
+      "id": "intake",
+      "label": "入口",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "metadata",
+      "label": "元数据",
+      "fromCol": 2,
+      "toCol": 2,
+      "variant": "emphasis"
+    },
+    {
+      "id": "transfer",
+      "label": "传输与提交",
+      "fromCol": 3,
+      "toCol": 5
+    }
+  ],
+  "mainPath": [
+    "py",
+    "real",
+    "master",
+    "te",
+    "confirm"
+  ],
+  "nodes": [
+    {
+      "id": "py",
+      "lane": "client",
+      "col": 0,
+      "type": "frontend",
+      "label": "PyClient",
+      "sublabel": "vLLM/SGLang 调用 put"
+    },
+    {
+      "id": "real",
+      "lane": "client",
+      "col": 1,
+      "type": "backend",
+      "label": "RealClient",
+      "sublabel": "零拷贝 · shm 直通"
+    },
+    {
+      "id": "master",
+      "lane": "control",
+      "col": 2,
+      "type": "backend",
+      "label": "PutStart",
+      "sublabel": "Master 挑选副本 · 返回地址",
+      "tag": "控制面",
+      "width": 120
+    },
+    {
+      "id": "te",
+      "lane": "dataplane",
+      "col": 3,
+      "type": "backend",
+      "label": "TE 传输",
+      "sublabel": "Allocator 分配 · RDMA WRITE",
+      "width": 120
+    },
+    {
+      "id": "confirm",
+      "lane": "control",
+      "col": 4,
+      "type": "security",
+      "label": "Confirm",
+      "sublabel": "元数据对外可见",
+      "width": 120
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "from": "py",
+      "to": "real",
+      "label": "put()"
+    },
+    {
+      "id": "e2",
+      "from": "real",
+      "to": "master",
+      "label": "PutStart",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop",
+      "labelSegment": 1
+    },
+    {
+      "id": "e3",
+      "from": "master",
+      "to": "te",
+      "label": "副本地址",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop",
+      "labelSegment": 1,
+      "labelDx": 40
+    },
+    {
+      "id": "e4",
+      "from": "te",
+      "to": "confirm",
+      "label": "上报完成",
+      "role": "return",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "route": "drop",
+      "labelSegment": 1
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "客户端三层",
+      "items": [
+        "PyClient 是 Python 门面，RealClient 是数据管理者",
+        "DummyClient 跑在引擎进程，只做 shm 映射与转发",
+        "跨进程零拷贝：memfd + SCM_RIGHTS 传递 fd"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Put 协议",
+      "items": [
+        "PutStart 由 Master 挑选副本并返回地址",
+        "BufferAllocator 就地分配多副本缓冲",
+        "TE 逐副本 RDMA WRITE，完成后 Confirm 提交"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Get 读决策",
+      "items": [
+        "LocalHotCache 16MB LRU 先查",
+        "再读本地 segment 与集群副本",
+        "最后回退 SSD 层（LOCAL_DISK / 3FS）"
+      ]
+    }
+  ]
+}

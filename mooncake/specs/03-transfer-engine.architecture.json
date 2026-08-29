@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Transfer Engine 三层类结构：外观 → 实现 → 调度",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      540
+    ],
+    "views": [
+      {
+        "id": "facade",
+        "label": "外观与双实现",
+        "focus": [
+          "facade",
+          "impl",
+          "tent"
+        ],
+        "note": "MC_USE_TENT 环境变量决定 impl_ 还是 impl_tent_ 生效。"
+      },
+      {
+        "id": "metadata",
+        "label": "元数据服务",
+        "focus": [
+          "impl",
+          "metadata",
+          "etcd"
+        ],
+        "note": "segment 发布查询、QP 握手与 notify 队列都挂在元数据层。"
+      },
+      {
+        "id": "dispatch",
+        "label": "传输调度",
+        "focus": [
+          "impl",
+          "topology",
+          "multi_transport",
+          "transports"
+        ],
+        "note": "installTransport 按协议字符串实例化对应 Transport。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "facade",
+      "type": "backend",
+      "label": "TransferEngine（外观）",
+      "sublabel": "include/transfer_engine.h",
+      "pos": [
+        40,
+        200
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "impl",
+      "type": "backend",
+      "label": "TransferEngineImpl",
+      "sublabel": "src/transfer_engine_impl.cpp",
+      "pos": [
+        320,
+        200
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "tent",
+      "type": "backend",
+      "label": "TENT 实现",
+      "sublabel": "MC_USE_TENT=1 切换",
+      "pos": [
+        320,
+        360
+      ],
+      "size": [
+        186,
+        62
+      ],
+      "tag": "可选"
+    },
+    {
+      "id": "metadata",
+      "type": "backend",
+      "label": "TransferMetadata",
+      "sublabel": "segment 发布 · QP 握手 · notify",
+      "pos": [
+        620,
+        90
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "topology",
+      "type": "database",
+      "label": "Topology",
+      "sublabel": "NIC/NUMA/GPU 拓扑矩阵",
+      "pos": [
+        620,
+        210
+      ],
+      "size": [
+        196,
+        62
+      ]
+    },
+    {
+      "id": "multi_transport",
+      "type": "backend",
+      "label": "MultiTransport",
+      "sublabel": "src/multi_transport.cpp 调度",
+      "pos": [
+        620,
+        340
+      ],
+      "size": [
+        196,
+        62
+      ]
+    },
+    {
+      "id": "etcd",
+      "type": "database",
+      "label": "etcd / Redis / HTTP",
+      "sublabel": "storage_plugin_ 三选一",
+      "pos": [
+        920,
+        90
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "transports",
+      "type": "messagebus",
+      "label": "19 种 Transport",
+      "sublabel": "rdma/tcp/nvmeof/nvlink/nccl…",
+      "pos": [
+        920,
+        340
+      ],
+      "size": [
+        190,
+        64
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "facade",
+      "to": "impl",
+      "label": "impl_ 指向"
+    },
+    {
+      "from": "impl",
+      "to": "metadata",
+      "label": "元数据 + 握手",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "from": "impl",
+      "to": "topology",
+      "label": "discover() 探测拓扑",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelDy": 43
+    },
+    {
+      "from": "impl",
+      "to": "multi_transport",
+      "label": "installTransport(proto)",
+      "fromSide": "bottom",
+      "toSide": "left"
+    },
+    {
+      "from": "multi_transport",
+      "to": "transports",
+      "label": "按协议实例化",
+      "variant": "emphasis"
+    },
+    {
+      "from": "metadata",
+      "to": "etcd",
+      "label": "mooncake/ 前缀 key",
+      "variant": "dashed"
+    },
+    {
+      "from": "facade",
+      "to": "tent",
+      "label": "use_tent_ 分支",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "外观层",
+      "items": [
+        "TransferEngine 只暴露 install/transfer/batch 接口",
+        "V1 主路径走 TransferEngineImpl",
+        "TENT 新路径由环境变量切换，可回退"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "元数据层",
+      "items": [
+        "segment 发布/查询、QP 握手、notify 队列、probe",
+        "storage_plugin_ 支持_etcd/Redis/HTTP",
+        "key 前缀 mooncake/[cluster_id/]{rpc_meta,ram}"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "调度层",
+      "items": [
+        "Topology 探测 HCA/NUMA/GPU PCI 距离",
+        "MultiTransport 按协议字符串 + 编译宏选 Transport",
+        "submitTransfer/getTransferStatus 带 WITH_METRICS 埋点"
+      ]
+    }
+  ]
+}

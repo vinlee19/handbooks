@@ -1,0 +1,282 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Mooncake Store 全景：控制面与数据面协作",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      640
+    ],
+    "views": [
+      {
+        "id": "client",
+        "label": "客户端三层",
+        "focus": [
+          "realclient",
+          "buffer",
+          "hotcache",
+          "te"
+        ],
+        "note": "RealClient 统筹内存池、热缓存与传输执行。"
+      },
+      {
+        "id": "control",
+        "label": "Master 控制面",
+        "focus": [
+          "master",
+          "shards",
+          "segmgr",
+          "etcd"
+        ],
+        "note": "1024 分片元数据 + 全局段视图 + etcd HA。"
+      },
+      {
+        "id": "replica",
+        "label": "副本路径",
+        "focus": [
+          "realclient",
+          "te",
+          "allocator"
+        ],
+        "note": "分配策略决定副本落点，TE 执行跨节点复制。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "realclient",
+      "type": "backend",
+      "label": "RealClient",
+      "sublabel": "数据管理者 · real_client.cpp",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        178,
+        64
+      ]
+    },
+    {
+      "id": "master",
+      "type": "backend",
+      "label": "mooncake-master",
+      "sublabel": "MasterService :50051",
+      "pos": [
+        340,
+        110
+      ],
+      "size": [
+        178,
+        62
+      ],
+      "tag": "控制面"
+    },
+    {
+      "id": "shards",
+      "type": "database",
+      "label": "metadata_shards_[1024]",
+      "sublabel": "key → ObjectMetadata · replicas",
+      "pos": [
+        640,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "segmgr",
+      "type": "database",
+      "label": "SegmentManager",
+      "sublabel": "全局内存段视图",
+      "pos": [
+        920,
+        110
+      ],
+      "size": [
+        178,
+        64
+      ]
+    },
+    {
+      "id": "buffer",
+      "type": "database",
+      "label": "BufferAllocator",
+      "sublabel": "本地内存池 · segment",
+      "pos": [
+        40,
+        320
+      ],
+      "size": [
+        178,
+        62
+      ]
+    },
+    {
+      "id": "etcd",
+      "type": "database",
+      "label": "etcd",
+      "sublabel": "HA lease · OpLog 复制",
+      "pos": [
+        340,
+        320
+      ],
+      "size": [
+        178,
+        62
+      ]
+    },
+    {
+      "id": "allocator",
+      "type": "backend",
+      "label": "AllocatorManager",
+      "sublabel": "Random / FreeRatioFirst / Cxl",
+      "pos": [
+        640,
+        320
+      ],
+      "size": [
+        190,
+        62
+      ]
+    },
+    {
+      "id": "te",
+      "type": "backend",
+      "label": "Transfer Engine",
+      "sublabel": "跨节点复制执行者",
+      "pos": [
+        920,
+        320
+      ],
+      "size": [
+        178,
+        62
+      ],
+      "tag": "数据面"
+    },
+    {
+      "id": "hotcache",
+      "type": "database",
+      "label": "LocalHotCache",
+      "sublabel": "16MB block LRU",
+      "pos": [
+        40,
+        500
+      ],
+      "size": [
+        178,
+        62
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "realclient",
+      "to": "master",
+      "label": "coro_rpc 元数据"
+    },
+    {
+      "from": "realclient",
+      "to": "buffer",
+      "label": "分配 replica 缓冲",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    },
+    {
+      "from": "buffer",
+      "to": "hotcache",
+      "label": "LRU 16MB block",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    },
+    {
+      "from": "master",
+      "to": "shards",
+      "label": "分片锁序"
+    },
+    {
+      "from": "master",
+      "to": "etcd",
+      "label": "lease / OpLog",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    },
+    {
+      "from": "master",
+      "to": "allocator",
+      "label": "AllocationStrategy"
+    },
+    {
+      "from": "segmgr",
+      "to": "allocator",
+      "label": "挑段分配",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "realclient",
+      "to": "te",
+      "label": "RDMA 数据面",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "right",
+      "via": [
+        [
+          129,
+          60
+        ],
+        [
+          1160,
+          60
+        ],
+        [
+          1160,
+          351
+        ]
+      ],
+      "labelAt": [
+        560,
+        60
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "控制面",
+      "items": [
+        "Master 1024 分片锁序：client → shard SpinLock → segment",
+        "SegmentManager 维护全局段视图并挑段分配",
+        "etcd 提供 leader lease、客户端视图与 OpLog 复制"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "数据面",
+      "items": [
+        "RealClient 直接驱动 Transfer Engine 跨节点复制",
+        "BufferAllocator 家族管理本地 segment 内存",
+        "LocalHotCache 以 16MB block 做 LRU 热缓存"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "对象模型",
+      "items": [
+        "ObjectMetadata 携带 replicas[] 与 lease",
+        "put/get 按 key 路由到分片再定位副本",
+        "processing_keys 防止并发写冲突"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Master 深度剖析：地址簿、裁判与回收站",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 540],
+    "views": [
+      { "id": "write-path", "label": "写路径", "focus": ["mastersvc", "shards", "segmgr", "alloc"], "note": "一条写请求按锁序穿过分片、段视图与分配策略。" },
+      { "id": "threads", "label": "常驻线程", "focus": ["evict", "snapshot", "taskmgr"], "note": "淘汰、快照与任务线程构成 Master 的后台循环。" }
+    ]
+  },
+  "components": [
+    { "id": "mastersvc", "type": "backend", "label": "MasterService", "sublabel": ":50051 · 三段式写协议", "pos": [40, 110], "size": [180, 64] },
+    { "id": "shards", "type": "database", "label": "metadata_shards_[1024]", "sublabel": "key → ObjectMetadata · 锁序环", "pos": [340, 110], "size": [192, 64] },
+    { "id": "segmgr", "type": "database", "label": "SegmentManager", "sublabel": "全局段视图 · client_mutex_", "pos": [640, 110], "size": [186, 64] },
+    { "id": "alloc", "type": "backend", "label": "AllocatorManager", "sublabel": "Random / FreeRatioFirst / Cxl", "pos": [920, 110], "size": [190, 64] },
+    { "id": "evict", "type": "backend", "label": "EvictionThreadFunc", "sublabel": "10ms · 高水位 0.95 触发", "pos": [40, 330], "size": [180, 62] },
+    { "id": "snapshot", "type": "backend", "label": "SnapshotThreadFunc", "sublabel": "周期 fork 快照", "pos": [340, 330], "size": [192, 62] },
+    { "id": "taskmgr", "type": "backend", "label": "TaskManager", "sublabel": "Copy / Move / Drain 任务", "pos": [640, 330], "size": [186, 62] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "常驻线程组", "wraps": ["evict", "snapshot", "taskmgr"], "pad": 14 }
+  ],
+  "connections": [
+    { "from": "mastersvc", "to": "shards", "label": "分片路由" },
+    { "from": "shards", "to": "segmgr", "label": "锁序下探", "variant": "dashed" },
+    { "from": "segmgr", "to": "alloc", "label": "挑段分配" },
+    { "from": "mastersvc", "to": "evict", "label": "派生常驻线程", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "shards", "to": "snapshot", "label": "fork 全量状态", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "segmgr", "to": "taskmgr", "label": "任务操作对象", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 55 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "锁序纪律", "items": ["锁序：client_mutex_ → shard SpinLock → segment_mutex_", "1024 分片降低元数据竞争", "processing_keys 挡住并发写冲突"] },
+    { "dot": "violet", "title": "租约与回收", "items": ["replicas[] 带 lease，软 pin 由推理引擎持有", "硬 pin 用于离线迁移与快照一致性", "ClientMonitorFunc Ping 探活，超时回收加工中副本"] },
+    { "dot": "emerald", "title": "后台循环", "items": ["Eviction 高水位 0.95 或分配失败触发 BatchEvict", "Snapshot fork 后 msgpack 序列化上传 S3 + catalog", "TaskManager 执行 Copy/Move/Drain，客户端 FetchTasks 领取"] }
+  ]
+}

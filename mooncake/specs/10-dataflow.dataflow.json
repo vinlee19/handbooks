@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "端到端数据流：一次请求穿过的全链路",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      500
+    ],
+    "views": [
+      {
+        "id": "write-path",
+        "label": "写入半程",
+        "focus": [
+          "req",
+          "peng",
+          "put",
+          "pool"
+        ],
+        "note": "Prefill 产出 KVCache 后立即多副本落池。"
+      },
+      {
+        "id": "read-path",
+        "label": "读取半程",
+        "focus": [
+          "pool",
+          "deng",
+          "tok"
+        ],
+        "note": "Decode 从池里 RDMA 拉取或命中直读，逐 token 返回。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "请求与 Prefill"
+    },
+    {
+      "label": "落池"
+    },
+    {
+      "label": "Decode"
+    },
+    {
+      "label": "返回"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "req",
+      "type": "external",
+      "label": "用户请求",
+      "sublabel": "prompt 进入网关",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "peng",
+      "type": "backend",
+      "label": "Prefill 引擎",
+      "sublabel": "计算 prompt 产出 KVCache",
+      "stage": 0,
+      "row": 0
+    },
+    {
+      "id": "put",
+      "type": "backend",
+      "label": "Store put",
+      "sublabel": "Master 分配 + TE 复制",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "pool",
+      "type": "database",
+      "label": "KVCache 池",
+      "sublabel": "MEMORY / SSD 三层副本",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "deng",
+      "type": "backend",
+      "label": "Decode 引擎",
+      "sublabel": "RDMA 拉取 → 逐 token",
+      "stage": 3,
+      "row": 0
+    },
+    {
+      "id": "tok",
+      "type": "external",
+      "label": "流式返回",
+      "sublabel": "token stream 到客户端",
+      "stage": 3,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "from": "req",
+      "to": "peng",
+      "label": "prompt"
+    },
+    {
+      "from": "peng",
+      "to": "put",
+      "label": "KVCache 对象",
+      "variant": "emphasis"
+    },
+    {
+      "from": "put",
+      "to": "pool",
+      "label": "多副本落池",
+      "variant": "emphasis"
+    },
+    {
+      "from": "pool",
+      "to": "deng",
+      "label": "命中直读 / RDMA 拉取",
+      "variant": "emphasis"
+    },
+    {
+      "from": "deng",
+      "to": "tok",
+      "label": "逐 token 返回"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "写入半程",
+      "items": [
+        "Prefill 完成即 put：Master 挑副本，TE 复制到位",
+        "副本按 ReplicateConfig 落 MEMORY / SSD",
+        " Confirm 后元数据对全集群可见"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "读取半程",
+      "items": [
+        "Decode 按key 从池里拉取 KVCache",
+        "命中相同前缀时池直读，跳过 prefill",
+        "读 LOCAL_DISK 副本按需提升回内存"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "全局视角",
+      "items": [
+        "控制面（Master/etcd）只管元数据，不碰数据",
+        "数据面全程 RDMA 零拷贝",
+        "任一环节故障由 HA lease + 副本兜底"
+      ]
+    }
+  ]
+}

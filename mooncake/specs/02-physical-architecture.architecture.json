@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Mooncake 集群物理部署：数据面 Fabric 与控制面分网",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 560],
+    "views": [
+      { "id": "data-plane", "label": "RDMA 数据面", "focus": ["prefill_node", "rdma_fabric", "decode_node", "pool_node"], "note": "KVCache 走 RoCEv2/IB 交换机，GPU 显存被对端直接读写。" },
+      { "id": "control-plane", "label": "管理控制面", "focus": ["mgmt", "master", "etcd"], "note": "握手、注册、Master RPC 与指标全部走以太网 TCP。" }
+    ]
+  },
+  "components": [
+    { "id": "prefill_node", "type": "backend", "label": "Prefill 节点 ×P", "sublabel": "GPU 0-7 · NIC ×4 · 200G CX-6", "pos": [40, 110], "size": [178, 64] },
+    { "id": "rdma_fabric", "type": "messagebus", "label": "RDMA 数据面 Fabric", "sublabel": "RoCEv2 / IB 交换机 · 400G", "pos": [340, 110], "size": [180, 62] },
+    { "id": "decode_node", "type": "backend", "label": "Decode 节点 ×D", "sublabel": "H20 · GPUDirect RDMA", "pos": [640, 110], "size": [178, 64] },
+    { "id": "mgmt", "type": "messagebus", "label": "以太网管理面", "sublabel": "TCP · 握手 / RPC / 指标", "pos": [40, 360], "size": [178, 62] },
+    { "id": "master", "type": "backend", "label": "mooncake-master", "sublabel": "MasterService :50051", "pos": [340, 360], "size": [180, 62], "tag": "控制面" },
+    { "id": "etcd", "type": "database", "label": "etcd", "sublabel": "leader lease · OpLog 复制", "pos": [640, 360], "size": [178, 62] },
+    { "id": "pool_node", "type": "database", "label": "KVCache 池节点", "sublabel": "TB 级 DRAM segment · NVMe", "pos": [920, 360], "size": [190, 64] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "控制面", "wraps": ["master", "etcd"], "pad": 14 }
+  ],
+  "connections": [
+    { "from": "prefill_node", "to": "rdma_fabric", "label": "RDMA WRITE", "variant": "emphasis" },
+    { "from": "rdma_fabric", "to": "decode_node", "label": "RDMA READ / Recv", "variant": "emphasis" },
+    { "from": "prefill_node", "to": "mgmt", "label": "注册 / 握手 / 心跳", "variant": "dashed", "labelAt": [129, 250] },
+    { "from": "mgmt", "to": "master", "label": "Master RPC :50051", "variant": "dashed" },
+    { "from": "master", "to": "etcd", "label": "lease / OpLog", "variant": "security" },
+    { "from": "rdma_fabric", "to": "pool_node", "label": "segment 读写", "fromSide": "right", "toSide": "top", "via": [[570, 141], [570, 300], [1015, 300]], "labelAt": [800, 300] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "数据面", "items": ["KVCache 由对端 GPU 显存直接 RDMA 读写", "Prefill 发送 RDMA WRITE，Decode 端 RDMA READ/Recv", "池节点提供 TB 级 DRAM segment 与 NVMe offload"] },
+    { "dot": "amber", "title": "控制面", "items": ["握手 / segment 注册 / Master RPC 走以太网 TCP", "etcd 承载 leader lease、OpLog 与客户端视图", "指标埋点独立于数据路径，不打扰 RDMA"] },
+    { "dot": "emerald", "title": "部署形态", "items": ["XpYd：Prefill 与 Decode 集群按负载独立扩缩", "池节点可独立部署，专职提供缓存容量", "典型配置：2×H100 + 8×200G ConnectX-6"] }
+  ]
+}

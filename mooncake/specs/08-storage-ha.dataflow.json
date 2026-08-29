@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "SSD offload 链路：淘汰下沉与副本转换",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      880,
+      500
+    ],
+    "views": [
+      {
+        "id": "offload",
+        "label": "下沉链路",
+        "focus": [
+          "master",
+          "queue",
+          "hb",
+          "local",
+          "fs3"
+        ],
+        "note": "淘汰线程产出任务，客户端心跳领取并写盘。"
+      },
+      {
+        "id": "promote",
+        "label": "回执与提升",
+        "focus": [
+          "notify",
+          "release"
+        ],
+        "note": "写盘成功后副本类型转为 LOCAL_DISK，内存副本释放。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "淘汰"
+    },
+    {
+      "label": "分发"
+    },
+    {
+      "label": "写盘"
+    },
+    {
+      "label": "回执"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "master",
+      "type": "backend",
+      "label": "Master 淘汰线程",
+      "sublabel": "BatchEvict 第二遍扫描",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "queue",
+      "type": "messagebus",
+      "label": "offloading_tasks",
+      "sublabel": "待下沉对象队列",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "hb",
+      "type": "backend",
+      "label": "客户端心跳领取",
+      "sublabel": "OffloadObjectHeartbeat",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "local",
+      "type": "database",
+      "label": "本地 NVMe",
+      "sublabel": "LOCAL_DISK 副本",
+      "stage": 2,
+      "row": 0
+    },
+    {
+      "id": "fs3",
+      "type": "database",
+      "label": "3FS / Bucket",
+      "sublabel": "追加写 · USRBIO io_uring",
+      "stage": 2,
+      "row": 2
+    },
+    {
+      "id": "notify",
+      "type": "backend",
+      "label": "NotifyOffloadSuccess",
+      "sublabel": "副本类型转 LOCAL_DISK",
+      "stage": 3,
+      "row": 1,
+      "width": 150
+    },
+    {
+      "id": "release",
+      "type": "backend",
+      "label": "内存副本释放",
+      "sublabel": "原 MEMORY 副本回收",
+      "stage": 3,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "from": "master",
+      "to": "queue",
+      "label": "产出下沉对象"
+    },
+    {
+      "from": "queue",
+      "to": "hb",
+      "label": "心跳领取"
+    },
+    {
+      "from": "hb",
+      "to": "local",
+      "label": "StoreObject",
+      "labelDy": -18
+    },
+    {
+      "from": "hb",
+      "to": "fs3",
+      "label": "StoreObject",
+      "labelDy": 18
+    },
+    {
+      "from": "local",
+      "to": "notify",
+      "label": "写盘成功"
+    },
+    {
+      "from": "fs3",
+      "to": "notify",
+      "label": "写盘成功"
+    },
+    {
+      "from": "notify",
+      "to": "release",
+      "label": "释放原副本",
+      "variant": "emphasis"
+    },
+    {
+      "from": "master",
+      "to": "release",
+      "label": "积压超限强制删除",
+      "variant": "dashed",
+      "route": "bottom-channel",
+      "channelY": 442
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "三层金字塔",
+      "items": [
+        "L1 本机 LocalHotCache：16MB block LRU + CountMinSketch 准入",
+        "L2 集群内存 Segment：MEMORY 副本",
+        "L3 SSD 层：LOCAL_DISK 本地盘 / DISK 共享盘 3FS"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "两个硬核后端",
+      "items": [
+        "Bucket 追加写，USRBIO 走 io_uring",
+        "posix fallback 保证兼容",
+        "offload-on-evict 让淘汰与写盘解耦"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "兜底",
+      "items": [
+        "offload 积压超过 offload_force_evict_ 上限时强制删除",
+        "防止 SSD 成为淘汰路径的瓶颈",
+        "读 LOCAL_DISK 副本时按需提升回内存"
+      ]
+    }
+  ]
+}
