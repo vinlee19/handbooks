@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "存储与 Iceberg 持久化：两个快照、一次提交",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [900, 540],
+    "views": [
+      { "id": "mem", "label": "内存态", "focus": ["mem", "dv"], "note": "MemSlice 攒批 + 未落盘删除向量。" },
+      { "id": "persist", "label": "持久化", "focus": ["tick", "parquet", "iceberg"], "note": "周期 tick 驱动 flush 与湖仓提交。" }
+    ]
+  },
+  "stages": [
+    { "label": "内存态" },
+    { "label": "tick" },
+    { "label": "本地盘" },
+    { "label": "湖仓" }
+  ],
+  "nodes": [
+    { "id": "mem", "type": "database", "label": "MemSlice", "sublabel": "Arrow 攒批 + MemIndex", "stage": 0, "row": 0 },
+    { "id": "dv", "type": "database", "label": "内存删除向量", "sublabel": "BatchDeletionVector", "stage": 0, "row": 2 },
+    { "id": "tick", "type": "backend", "label": "周期 tick", "sublabel": "事件驱动推进", "stage": 1, "row": 1 },
+    { "id": "parquet", "type": "database", "label": "本地 Parquet", "sublabel": "DiskSliceWriter 顺序写", "stage": 2, "row": 0 },
+    { "id": "iceberg", "type": "cloud", "label": "Iceberg 提交", "sublabel": "puffin DV + 文件索引", "stage": 3, "row": 1 }
+  ],
+  "flows": [
+    { "from": "mem", "to": "tick", "label": "mooncake 快照", "variant": "dashed" },
+    { "from": "dv", "to": "tick", "label": "未落盘删改" },
+    { "from": "tick", "to": "parquet", "label": "flush", "variant": "emphasis" },
+    { "from": "parquet", "to": "iceberg", "label": "sync 提交", "variant": "emphasis" },
+    { "from": "dv", "to": "iceberg", "label": "puffin 附带", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "两个快照", "items": ["mooncake 快照：disk_files ∪ mem − deletes", "version = 提交 LSN", "周期 tick + 事件驱动共同推进"] },
+    { "dot": "violet", "title": "Puffin 行李", "items": ["删除向量与文件索引装进 puffin blob", "对象存储缓存让 S3 像本地盘", "被反复反向扫描"] },
+    { "dot": "emerald", "title": "Compaction", "items": ["把碎片与删除合并", "降低读取时的删除过滤开销", "与 Iceberg 提交协同"] }
+  ]
+}

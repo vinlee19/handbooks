@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "设计精髓：Postgres 列存分析的四条路线",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "routes",
+        "label": "四种路线",
+        "focus": [
+          "fdw",
+          "native",
+          "external",
+          "mooncake"
+        ],
+        "note": "新鲜度、增量语义与实现复杂度的权衡。"
+      },
+      {
+        "id": "choice",
+        "label": "pg_mooncake 之选",
+        "focus": [
+          "moonlink",
+          "mooncake"
+        ],
+        "note": "控制面/数据面分离的几何学。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "fdw",
+      "type": "backend",
+      "label": "① FDW / 外部队列",
+      "sublabel": "pg_parquet · duckdb_fdw · 外部 ETL",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        210,
+        64
+      ]
+    },
+    {
+      "id": "native",
+      "type": "backend",
+      "label": "② 原生列存扩展",
+      "sublabel": "hydra · citus columnar",
+      "pos": [
+        40,
+        240
+      ],
+      "size": [
+        210,
+        62
+      ]
+    },
+    {
+      "id": "external",
+      "type": "external",
+      "label": "③ 外部湖仓方案",
+      "sublabel": "全量重写 · 分钟级新鲜度",
+      "pos": [
+        40,
+        370
+      ],
+      "size": [
+        210,
+        62
+      ]
+    },
+    {
+      "id": "mooncake",
+      "type": "backend",
+      "label": "④ pg_mooncake",
+      "sublabel": "实时 CDC + Iceberg 湖仓",
+      "pos": [
+        400,
+        240
+      ],
+      "size": [
+        196,
+        64
+      ],
+      "tag": "本方案"
+    },
+    {
+      "id": "moonlink",
+      "type": "backend",
+      "label": "控制面 / 数据面分离",
+      "sublabel": "扩展薄壳 · 引擎重活",
+      "pos": [
+        760,
+        240
+      ],
+      "size": [
+        200,
+        64
+      ]
+    },
+    {
+      "id": "limits",
+      "type": "database",
+      "label": "诚实的局限清单",
+      "sublabel": "读源码才能看见的取舍",
+      "pos": [
+        760,
+        400
+      ],
+      "size": [
+        200,
+        62
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "pg_mooncake 路线",
+      "wraps": [
+        "mooncake",
+        "moonlink",
+        "limits"
+      ],
+      "pad": 16
+    }
+  ],
+  "connections": [
+    {
+      "from": "fdw",
+      "to": "mooncake",
+      "label": "新鲜度对比",
+      "variant": "dashed",
+      "labelDy": -18
+    },
+    {
+      "from": "native",
+      "to": "mooncake",
+      "label": "增量语义对比",
+      "variant": "dashed"
+    },
+    {
+      "from": "external",
+      "to": "mooncake",
+      "label": "运维成本对比",
+      "variant": "dashed",
+      "labelDy": 24
+    },
+    {
+      "from": "mooncake",
+      "to": "moonlink",
+      "label": "八个关键决策"
+    },
+    {
+      "from": "moonlink",
+      "to": "limits",
+      "label": "权衡清单",
+      "variant": "dashed",
+      "labelDy": 40
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "四种路线对比",
+      "items": [
+        "① FDW/外部 ETL：新鲜度分钟~小时，全量重写",
+        "② 原生列存：与 Postgres 一体但无湖仓开放性",
+        "④ pg_mooncake：实时 CDC + 开放 Iceberg"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "八个关键决策",
+      "items": [
+        "空壳 AM、DuckDB 劫持、每表 actor",
+        "bincode RPC、puffin 行李、LSN 不变式",
+        "每个决策都有明确的代价与收益"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "调试路线",
+      "items": [
+        "debug-learning 分支可复现实验",
+        "断点地图覆盖扩展/引擎/查询",
+        "诚实的局限清单写在文档里"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Postgres 扩展层：940 行代码的点睛之笔",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "files",
+        "label": "文件地图",
+        "focus": [
+          "init",
+          "table",
+          "functions"
+        ],
+        "note": "_PG_init 做两件事：bgworker::init + table::init。"
+      },
+      {
+        "id": "am",
+        "label": "空壳 AM",
+        "focus": [
+          "table",
+          "am"
+        ],
+        "note": "空壳表访问方法让 planner 命中 mooncake 表。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "init",
+      "type": "backend",
+      "label": "lib.rs（18 行）",
+      "sublabel": "pg_module_magic + bootstrap.sql",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "table",
+      "type": "backend",
+      "label": "table.rs（588 行）",
+      "sublabel": "最大文件 · DDL 与 AM 注册",
+      "pos": [
+        340,
+        110
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "functions",
+      "type": "backend",
+      "label": "functions.rs（232 行）",
+      "sublabel": "create_table / load_files / optimize",
+      "pos": [
+        640,
+        110
+      ],
+      "size": [
+        200,
+        64
+      ]
+    },
+    {
+      "id": "bg",
+      "type": "backend",
+      "label": "bgworker.rs（38 行）",
+      "sublabel": "内嵌 moonlink 引擎",
+      "pos": [
+        920,
+        110
+      ],
+      "size": [
+        176,
+        64
+      ]
+    },
+    {
+      "id": "am",
+      "type": "security",
+      "label": "MOONCAKE_AM 空壳",
+      "sublabel": "RegisterDuckdbTableAm(\"mooncake\")",
+      "pos": [
+        340,
+        340
+      ],
+      "size": [
+        210,
+        64
+      ],
+      "tag": "点睛之笔"
+    },
+    {
+      "id": "trigger",
+      "type": "backend",
+      "label": "DROP 事件触发器",
+      "sublabel": "两阶段同步删除",
+      "pos": [
+        642,
+        340
+      ],
+      "size": [
+        196,
+        62
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "init",
+      "to": "table",
+      "label": "_PG_init 启动"
+    },
+    {
+      "from": "table",
+      "to": "functions",
+      "label": "SQL 函数挂载"
+    },
+    {
+      "from": "init",
+      "to": "bg",
+      "label": "拉起引擎",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [
+        [
+          133,
+          60
+        ],
+        [
+          1008,
+          60
+        ]
+      ]
+    },
+    {
+      "from": "table",
+      "to": "am",
+      "label": "注册访问方法",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    },
+    {
+      "from": "functions",
+      "to": "trigger",
+      "label": "DROP 同步",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight",
+      "labelAt": [
+        740,
+        260
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "_PG_init 两件事",
+      "items": [
+        "bgworker::init() 拉起内嵌引擎",
+        "table::init() 注册表访问方法",
+        "pg_module_magic 打包 bootstrap.sql"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "空壳 AM",
+      "items": [
+        "TableAmRoutine 全是空实现",
+        "唯一作用：让 planner 认出 mooncake 表",
+        "真正的执行被劫持进 DuckDB"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "SQL 函数族",
+      "items": [
+        "mooncake.create_table / create_snapshot",
+        "list_tables / load_files / optimize_table",
+        "DROP 两阶段：事件触发器 + 引擎清理"
+      ]
+    }
+  ]
+}

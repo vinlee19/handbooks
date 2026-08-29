@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "moonlink 引擎核心：12 crate 分层与每表 actor",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 600],
+    "views": [
+      { "id": "layers", "label": "接入形态", "focus": ["service", "datafusion", "rpc"], "note": "RPC/REST/DataFusion 三种接入形态。" },
+      { "id": "actor", "label": "每表 actor", "focus": ["handler", "mooncake"], "note": "TableHandler 单写者，MooncakeTable 是镜像表状态。" }
+    ]
+  },
+  "components": [
+    { "id": "service", "type": "backend", "label": "moonlink_service", "sublabel": "RPC(Unix/TCP) + REST(axum) + OTEL", "pos": [40, 110], "size": [210, 64], "tag": "第 1 层" },
+    { "id": "datafusion", "type": "backend", "label": "moonlink_datafusion", "sublabel": "DataFusion TableProvider", "pos": [340, 110], "size": [196, 64] },
+    { "id": "rpc", "type": "database", "label": "moonlink_rpc / proto", "sublabel": "协议层 · 行级 protobuf", "pos": [640, 110], "size": [190, 64] },
+    { "id": "handler", "type": "backend", "label": "TableHandler", "sublabel": "每表一个 actor · 单写者", "pos": [340, 340], "size": [196, 64], "tag": "第 2 层" },
+    { "id": "mooncake", "type": "database", "label": "MooncakeTable", "sublabel": "一张镜像表的全部状态", "pos": [640, 340], "size": [190, 64] },
+    { "id": "common", "type": "database", "label": "moonlink_common / error", "sublabel": "快照 · 文件 · 类型 · 工具", "pos": [920, 340], "size": [186, 62] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "第 1 层 · 接入形态", "wraps": ["service", "datafusion", "rpc"], "pad": 14 },
+    { "kind": "region", "label": "第 2 层 · 引擎内核", "wraps": ["handler", "mooncake", "common"], "pad": 14 }
+  ],
+  "connections": [
+    { "from": "service", "to": "handler", "label": "TableEvent 指令集", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "datafusion", "to": "mooncake", "label": "查询下推", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "handler", "to": "mooncake", "label": "维护状态" },
+    { "from": "mooncake", "to": "common", "label": "基础类型", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "接入形态", "items": ["moonlink_service：RPC(Unix/TCP) + REST + OTEL", "moonlink_datafusion：DataFusion TableProvider", "datafusion-cli 可直接查询"] },
+    { "dot": "violet", "title": "协议层", "items": ["moonlink_rpc 被两侧客户端复用", "moonlink_proto 行级 protobuf", "moonlink_error 统一错误"] },
+    { "dot": "emerald", "title": "TableEvent", "items": ["一张表的指令集：ingest/flush/sync…", "TableHandler 每表一个 actor 单写者", "MooncakeTable 承载全部镜像状态"] }
+  ]
+}

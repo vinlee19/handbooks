@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "端到端数据流：CREATE / INSERT / SELECT 三链路",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [900, 500],
+    "views": [
+      { "id": "create", "label": "CREATE 链", "focus": ["client", "ext", "engine"], "note": "CALL create_table 起全链。" },
+      { "id": "dml", "label": "INSERT 与 SELECT", "focus": ["put", "scan"], "note": "写入走 actor，查询被劫持进 DuckDB。" }
+    ]
+  },
+  "stages": [
+    { "label": "客户端" },
+    { "label": "扩展" },
+    { "label": "引擎" },
+    { "label": "持久层" }
+  ],
+  "nodes": [
+    { "id": "client", "type": "external", "label": "客户端", "sublabel": "SQL / 事务", "stage": 0, "row": 1 },
+    { "id": "ext", "type": "backend", "label": "pg_mooncake 扩展", "sublabel": "空壳 AM · 函数", "stage": 1, "row": 1 },
+    { "id": "engine", "type": "backend", "label": "moonlink 引擎", "sublabel": "TableEvent 驱动", "stage": 2, "row": 1 },
+    { "id": "put", "type": "backend", "label": "INSERT 落引擎", "sublabel": "写 → 攒批 → flush", "stage": 2, "row": 0 },
+    { "id": "scan", "type": "backend", "label": "SELECT 劫持", "sublabel": "DuckDB mooncake_scan", "stage": 2, "row": 2 },
+    { "id": "store", "type": "database", "label": "磁盘 / Iceberg", "sublabel": "LSN 不变式收束", "stage": 3, "row": 1 }
+  ],
+  "flows": [
+    { "from": "client", "to": "ext", "label": "CALL / SQL" },
+    { "from": "ext", "to": "engine", "label": "RPC 事件" },
+    { "from": "engine", "to": "put", "label": "行进 MemSlice", "variant": "dashed" },
+    { "from": "engine", "to": "scan", "label": "union read", "variant": "dashed" },
+    { "from": "put", "to": "store", "label": "flush / sync" },
+    { "from": "scan", "to": "store", "label": "读时裁剪", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "CREATE 链", "items": ["CALL mooncake.create_table 规整表名", "get_loopback_uri 连接源库", "pg_attribute 列定义含 NOT NULL"] },
+    { "dot": "violet", "title": "INSERT 旅程", "items": ["一行数据：写入 → 攒批 → flush 全链", "CDC/REST 双入口殊途同归", "LSN 贯穿持久化语义"] },
+    { "dot": "emerald", "title": "SELECT / DROP", "items": ["SELECT 时序：劫持 → scan → 返回", "DROP 两阶段同步清理", "崩溃恢复靠 WAL 重放"] }
+  ]
+}

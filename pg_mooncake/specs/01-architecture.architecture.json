@@ -1,0 +1,193 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "pg_mooncake 架构总览：四大组件、一条 RPC",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "components",
+        "label": "四大组件",
+        "focus": [
+          "ext",
+          "duckdb",
+          "moonlink",
+          "disk"
+        ],
+        "note": "pg_mooncake.so 撬动 moonlink 引擎与 DuckDB 查询。"
+      },
+      {
+        "id": "contract",
+        "label": "磁盘契约",
+        "focus": [
+          "moonlink",
+          "disk"
+        ],
+        "note": "$PGDATA/pg_mooncake 是组件间的磁盘契约。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "ext",
+      "type": "backend",
+      "label": "pg_mooncake.so",
+      "sublabel": "Rust/pgrx · 空壳表 AM",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ],
+      "tag": "扩展"
+    },
+    {
+      "id": "duckdb",
+      "type": "backend",
+      "label": "pg_duckdb.so",
+      "sublabel": "内嵌 DuckDB + planner 钩子",
+      "pos": [
+        400,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "moonlink",
+      "type": "backend",
+      "label": "moonlink 引擎",
+      "sublabel": "每表一个 actor · 摄取/存储",
+      "pos": [
+        760,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ],
+      "tag": "核心"
+    },
+    {
+      "id": "disk",
+      "type": "database",
+      "label": "$PGDATA/pg_mooncake",
+      "sublabel": "磁盘契约 · 数据目录",
+      "pos": [
+        760,
+        340
+      ],
+      "size": [
+        186,
+        62
+      ]
+    },
+    {
+      "id": "rpc",
+      "type": "messagebus",
+      "label": "RPC：4B 长度 + bincode",
+      "sublabel": "扩展 ↔ 引擎通信",
+      "pos": [
+        400,
+        340
+      ],
+      "size": [
+        196,
+        62
+      ]
+    },
+    {
+      "id": "sql",
+      "type": "external",
+      "label": "SQL 客户端",
+      "sublabel": "psql / 业务连接",
+      "pos": [
+        45,
+        340
+      ],
+      "size": [
+        180,
+        62
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "sql",
+      "to": "ext",
+      "label": "CREATE TABLE / DML",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "route": "straight",
+      "labelAt": [
+        230,
+        240
+      ]
+    },
+    {
+      "from": "ext",
+      "to": "duckdb",
+      "label": "查询劫持"
+    },
+    {
+      "from": "ext",
+      "to": "rpc",
+      "label": "调用引擎",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    },
+    {
+      "from": "duckdb",
+      "to": "moonlink",
+      "label": "mooncake_scan",
+      "variant": "dashed"
+    },
+    {
+      "from": "moonlink",
+      "to": "disk",
+      "label": "flush / WAL",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "仓库组成",
+      "items": [
+        "pg_mooncake v0.2.0（Rust，~940 行）",
+        "moonlink/ 工作区：12 个 crate",
+        "duckdb_mooncake：DuckDB 社区扩展"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "构建体系",
+      "items": [
+        "pgrx 0.16.1 · cdylib 产出 pg_mooncake.so",
+        "feature bgworker = 内嵌引擎",
+        "feature pg14–pg18（默认 pg18）"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "通信协议",
+      "items": [
+        "4 字节长度前缀 + bincode 序列化",
+        "Unix/TCP 双通道",
+        "磁盘布局是唯一的跨进程契约"
+      ]
+    }
+  ]
+}

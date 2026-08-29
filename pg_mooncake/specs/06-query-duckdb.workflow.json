@@ -1,0 +1,184 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "查询路径：一条 SQL 如何被劫持进 DuckDB",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1020,
+      568
+    ],
+    "views": [
+      {
+        "id": "route",
+        "label": "路由决策",
+        "focus": [
+          "planner",
+          "check",
+          "duck",
+          "pg"
+        ],
+        "note": "扫描查询树：每个 RangeTblEntry 查 rd_tableam。"
+      },
+      {
+        "id": "attach",
+        "label": "ATTACH 链",
+        "focus": [
+          "check",
+          "duck",
+          "scan"
+        ],
+        "note": "五个环节自动接力到 mooncake_scan。"
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "planner",
+      "label": "Planner 钩子"
+    },
+    {
+      "id": "duck",
+      "label": "DuckDB 执行"
+    },
+    {
+      "id": "postgres",
+      "label": "Postgres 原生",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "enter",
+      "label": "进入 planner",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "decide",
+      "label": "路由决策",
+      "fromCol": 2,
+      "toCol": 3
+    },
+    {
+      "id": "exec",
+      "label": "执行",
+      "fromCol": 4,
+      "toCol": 4
+    }
+  ],
+  "mainPath": [
+    "planner",
+    "check",
+    "duck",
+    "scan"
+  ],
+  "nodes": [
+    {
+      "id": "planner",
+      "lane": "planner",
+      "col": 0,
+      "type": "backend",
+      "label": "SQL 进 planner",
+      "sublabel": "DuckdbPlannerHook"
+    },
+    {
+      "id": "check",
+      "lane": "planner",
+      "col": 1,
+      "type": "security",
+      "label": "扫描查询树",
+      "sublabel": "RTE 查 rd_tableam"
+    },
+    {
+      "id": "duck",
+      "lane": "duck",
+      "col": 2,
+      "type": "backend",
+      "label": "交 DuckDB",
+      "sublabel": "ATTACH · NeedsDuckdb",
+      "width": 120
+    },
+    {
+      "id": "scan",
+      "lane": "duck",
+      "col": 4,
+      "type": "database",
+      "label": "mooncake_scan",
+      "sublabel": "parquet_scan+DV"
+    },
+    {
+      "id": "pg",
+      "lane": "postgres",
+      "col": 4,
+      "type": "backend",
+      "label": "Postgres 原生",
+      "sublabel": "完全无感 · 零开销"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "from": "planner",
+      "to": "check"
+    },
+    {
+      "id": "e2",
+      "from": "check",
+      "to": "duck",
+      "label": "命中 mooncake",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop",
+      "labelSegment": 1
+    },
+    {
+      "id": "e3",
+      "from": "duck",
+      "to": "scan",
+      "label": "LSN 快照一致性"
+    },
+    {
+      "id": "e5",
+      "from": "check",
+      "to": "pg",
+      "label": "未命中",
+      "variant": "dashed",
+      "role": "branch",
+      "route": "outside-right",
+      "fromSide": "right",
+      "toSide": "right"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "路由决策树",
+      "items": [
+        "DuckdbPlannerHook_Cpp 拦截 planner",
+        "每个 RangeTblEntry 查 rd_tableam",
+        "命中 mooncake AM → NeedsDuckdbExecution=true"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "DML 检查",
+      "items": [
+        "INSERT/UPDATE/DELETE 额外检查 IsAllowedStatement",
+        "只允许结果关系是 DuckDB 表的 DML",
+        "普通表 JOIN 一并交给 DuckDB"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "零开销原则",
+      "items": [
+        "未命中 mooncake 的 SQL 走原生 planner",
+        "Postgres 原生执行完全无感",
+        "mooncake_scan = parquet_scan + 删除向量过滤"
+      ]
+    }
+  ]
+}

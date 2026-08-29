@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "CDC 复制引擎：把 WAL 变成列存",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      540
+    ],
+    "views": [
+      {
+        "id": "stream",
+        "label": "复制流",
+        "focus": [
+          "src",
+          "slot",
+          "fanout"
+        ],
+        "note": "一条 pgoutput 流按表扇出到各自 actor。"
+      },
+      {
+        "id": "init",
+        "label": "初始拷贝",
+        "focus": [
+          "copy",
+          "fanout"
+        ],
+        "note": "先复制存量，再衔接增量。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "源库"
+    },
+    {
+      "label": "复制槽"
+    },
+    {
+      "label": "扇出"
+    },
+    {
+      "label": "摄取"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "src",
+      "type": "database",
+      "label": "源 Postgres",
+      "sublabel": "rowstore 源表 · 产生 WAL",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "slot",
+      "type": "messagebus",
+      "label": "逻辑复制槽",
+      "sublabel": "walsender pgoutput 协议流",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "copy",
+      "type": "backend",
+      "label": "初始拷贝通道",
+      "sublabel": "COPY BINARY 按 CTID 分片",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "fanout",
+      "type": "backend",
+      "label": "按表扇出",
+      "sublabel": "BEGIN/INSERT/…/COMMIT",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "actor",
+      "type": "backend",
+      "label": "表 actor 摄取",
+      "sublabel": "大事务流式 · 高位 LSN",
+      "stage": 3,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "from": "src",
+      "to": "slot",
+      "label": "WAL",
+      "variant": "emphasis"
+    },
+    {
+      "from": "slot",
+      "to": "fanout",
+      "label": "pgoutput 事件",
+      "route": "straight",
+      "labelDy": 20,
+      "labelAt": [
+        470,
+        320
+      ]
+    },
+    {
+      "from": "copy",
+      "to": "fanout",
+      "label": "存量快照",
+      "variant": "dashed",
+      "labelDy": -18
+    },
+    {
+      "from": "fanout",
+      "to": "actor",
+      "label": "表事件",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "复制槽",
+      "items": [
+        "逻辑复制槽 pg_mooncake_* 保留未确认 WAL",
+        "回压关键：消费慢则源库 WAL 膨胀",
+        "水位回传决定 WAL 可否删除"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "初始拷贝",
+      "items": [
+        "COPY (SELECT…) TO BINARY",
+        "按 CTID 范围分片并发读",
+        "spawn_sharded_copy_readers"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "其他通道",
+      "items": [
+        "REST / Avro / Kafka 摄取并行支持",
+        "大事务流式摄取：高位 LSN 空间技巧",
+        "每表组件独立装配"
+      ]
+    }
+  ]
+}
