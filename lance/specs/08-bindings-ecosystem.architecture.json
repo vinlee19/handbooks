@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "多语言绑定与生态：FFI 边界与内核",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 600],
+    "views": [
+      { "id": "bindings", "label": "绑定栈", "focus": ["py", "java", "ffi", "core"], "note": "Arrow FFI 零拷贝过界，GIL 在耗时处释放。" },
+      { "id": "storage", "label": "存储栈", "focus": ["core", "objstore"], "note": "Session 级缓存跨语言共享。" }
+    ]
+  },
+  "components": [
+    { "id": "py", "type": "external", "label": "Python 用户层", "sublabel": "lancedb / DataFrame", "pos": [40, 110], "size": [180, 62] },
+    { "id": "java", "type": "external", "label": "Java 用户层", "sublabel": "Maven 工程 · Spark/Flink 连接器", "pos": [40, 250], "size": [180, 62] },
+    { "id": "ffi", "type": "backend", "label": "PyO3 / JNI 边界", "sublabel": "python/src/*.rs · lance-jni", "pos": [340, 180], "size": [210, 64], "tag": "FFI" },
+    { "id": "core", "type": "backend", "label": "Rust 内核 workspace", "sublabel": "dataset · scanner · 事务", "pos": [640, 180], "size": [200, 64] },
+    { "id": "session", "type": "database", "label": "Session 缓存", "sublabel": "index_cache / metadata_cache", "pos": [640, 340], "size": [200, 62] },
+    { "id": "objstore", "type": "cloud", "label": "object_store", "sublabel": "S3 / Azure / GCS / OSS / TOS", "pos": [940, 180], "size": [186, 64] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "内核（前 7 篇全部内容）", "wraps": ["core", "session", "objstore"], "pad": 16 }
+  ],
+  "connections": [
+    { "from": "py", "to": "ffi", "label": "PyO3" },
+    { "from": "java", "to": "ffi", "label": "JNI" },
+    { "from": "ffi", "to": "core", "label": "Arrow FFI 零拷贝", "variant": "emphasis" },
+    { "from": "core", "to": "session", "label": "缓存共享", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "core", "to": "objstore", "label": "lance-io" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "PyO3 边界", "items": ["lib.rs 注册 dataset/scanner/fragment", "耗时的 Rust future 用 pyo3_asyncio 回调", "GIL 释放点精心布置"] },
+    { "dot": "violet", "title": "Java 侧", "items": ["JNI 独立于 workspace 编译", "公开 API + spotless 规范", "Spark/Flink 连接器构建其上"] },
+    { "dot": "emerald", "title": "对象存储矩阵", "items": ["provider 矩阵覆盖主流云", "Naming 机制统一路径语义", "Session 级缓存跨语言共享"] }
+  ]
+}

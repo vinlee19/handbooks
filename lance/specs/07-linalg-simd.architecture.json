@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "lance-linalg：SIMD 距离内核分发表",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 560],
+    "views": [
+      { "id": "matrix", "label": "分发表", "focus": ["types", "dist", "isa"], "note": "类型 × 算法 × 指令集三维分发。" },
+      { "id": "pq", "label": "PQ 加速", "focus": ["dist", "lut"], "note": "PQ 距离表把 O(dim) 变成查表。" }
+    ]
+  },
+  "components": [
+    { "id": "types", "type": "database", "label": "类型维度", "sublabel": "f32 · f16 · bf16 · u8 · binary", "pos": [40, 200], "size": [200, 64] },
+    { "id": "dist", "type": "backend", "label": "距离内核分发", "sublabel": "L2 / Cosine / Dot / Hamming / PQ LUT", "pos": [340, 200], "size": [220, 64] },
+    { "id": "isa", "type": "backend", "label": "指令集维度", "sublabel": "AVX2 / AVX512 / NEON 退化", "pos": [660, 110], "size": [200, 62] },
+    { "id": "lut", "type": "database", "label": "PQ 距离表", "sublabel": "子量化器查表 O(1)", "pos": [660, 290], "size": [200, 62] },
+    { "id": "math", "type": "backend", "label": "量化数学修正", "sublabel": "量化误差补偿", "pos": [940, 200], "size": [186, 62] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "双层抽象：类型 trait × SIMD", "wraps": ["types", "dist", "isa", "lut", "math"], "pad": 16 }
+  ],
+  "connections": [
+    { "from": "types", "to": "dist", "label": "类型 trait" },
+    { "from": "dist", "to": "isa", "label": "运行时派发" },
+    { "from": "dist", "to": "lut", "label": "查表加速", "variant": "emphasis" },
+    { "from": "lut", "to": "math", "label": "误差修正", "variant": "dashed" },
+    { "from": "isa", "to": "math", "label": "avx512 内核", "variant": "dashed" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "关键内核", "items": ["l2.rs：AVX2 gather 内核", "NEON 退化 loadu 路径兜底", "l2_bf16_avx512 / _f16_avx512 专用内核"] },
+    { "dot": "violet", "title": "PQ 距离表", "items": ["子量化器预先建 LUT", "距离计算变成查表累加", "O(dim) → O(子量化器数)"] },
+    { "dot": "emerald", "title": "上下游接线", "items": ["向 05 篇 IVF/HNSW 提供距离计算", "向 03 篇 scan 提供排序打分", "类型 trait 保持零虚函数开销"] }
+  ]
+}

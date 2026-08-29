@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "IVF 向量索引构建：从采样到落盘",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [900, 500],
+    "views": [
+      { "id": "train", "label": "训练", "focus": ["sample", "kmeans"], "note": "MiniBatch KMeans 多轮重分配，距离内核用 SIMD。" },
+      { "id": "assign", "label": "分配落盘", "focus": ["assign", "shuffle"], "note": "每向量归最近质心，按分区重排写入。" }
+    ]
+  },
+  "stages": [
+    { "label": "采样" },
+    { "label": "训练" },
+    { "label": "分配" },
+    { "label": "落盘" }
+  ],
+  "nodes": [
+    { "id": "sample", "type": "backend", "label": "采样训练集", "sublabel": "256×num_partitions ≤64万行", "stage": 0, "row": 1 },
+    { "id": "kmeans", "type": "backend", "label": "K-means 质心", "sublabel": "MiniBatch · 多轮重分配", "stage": 1, "row": 1 },
+    { "id": "assign", "type": "backend", "label": "compute_partitions", "sublabel": "每向量 → 最近质心 id", "stage": 2, "row": 1 },
+    { "id": "shuffle", "type": "messagebus", "label": "Shuffle 落盘", "sublabel": "按分区重排写入", "stage": 3, "row": 1 }
+  ],
+  "flows": [
+    { "from": "sample", "to": "kmeans", "label": "shuffle 后随机采样" },
+    { "from": "kmeans", "to": "assign", "label": "质心就绪", "variant": "emphasis" },
+    { "from": "assign", "to": "shuffle", "label": "分区 id 分组", "variant": "emphasis" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "PQ 乘积量化", "items": ["768 维压成 96 字节子量化器", "SQ / BQ 一览：标量与二值量化", "距离表把 O(dim) 变成查表"] },
+    { "dot": "violet", "title": "HNSW", "items": ["多层跳表式邻近图（源码级拆解）", "与 IVF 组合成三级复合索引", "IVF_HNSW_PQ 兼顾召回与速度"] },
+    { "dot": "emerald", "title": "索引家族", "items": ["向量：IVF / HNSW / PQ / SQ / BQ", "标量：BTree / Inverted / Bitmap", "索引本体也用 Lance 文件格式存储"] }
+  ]
+}

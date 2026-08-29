@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "写路径与 ACID 提交：InsertBuilder 内部视角",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [900, 500],
+    "views": [
+      { "id": "pipeline", "label": "写入流水线", "focus": ["input", "encoder", "filewriter"], "note": "逐列并行编码，page 满才 flush。" },
+      { "id": "commit", "label": "原子提交", "focus": ["commit", "manifest"], "note": "乐观并发重试，Manifest 发布即原子。" }
+    ]
+  },
+  "stages": [
+    { "label": "输入" },
+    { "label": "编码" },
+    { "label": "写文件" },
+    { "label": "提交" }
+  ],
+  "nodes": [
+    { "id": "input", "type": "external", "label": "RecordBatch 流", "sublabel": "可无限大 · 流式处理", "stage": 0, "row": 1 },
+    { "id": "encoder", "type": "backend", "label": "BatchEncoder", "sublabel": "逐列 FieldEncoder 并行", "stage": 1, "row": 1 },
+    { "id": "filewriter", "type": "backend", "label": "FileWriter v2.1", "sublabel": "page 满 8-32MiB flush", "stage": 2, "row": 0 },
+    { "id": "commit", "type": "security", "label": "乐观并发提交", "sublabel": "重试循环 · 冲突消解", "stage": 2, "row": 2 },
+    { "id": "manifest", "type": "database", "label": "新 Manifest 发布", "sublabel": "原子性来源", "stage": 3, "row": 1 }
+  ],
+  "flows": [
+    { "from": "input", "to": "encoder", "label": "schema 规范化" },
+    { "from": "encoder", "to": "filewriter", "label": "EncodedBatch", "variant": "emphasis" },
+    { "from": "filewriter", "to": "manifest", "label": "finish 写 footer" },
+    { "from": "commit", "to": "manifest", "label": "发布协议", "variant": "emphasis" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "三种写入口", "items": ["InsertBuilder 语义差别：append / overwrite / merge", "输入流可无限大，全流式", "schema 规范化可选"] },
+    { "dot": "violet", "title": "删除链路", "items": ["Delete 写 fragment 级 bitmap", "{read_ver}-{id}.bitmap 落盘", "读取时应用删除掩码"] },
+    { "dot": "emerald", "title": "Compaction", "items": ["optimize 合并小 fragment", "回收删除位图占用的行", "与新 Manifest 一起原子发布"] }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Lance 物理存储布局：Dataset 目录树与 Manifest",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 560],
+    "views": [
+      { "id": "tree", "label": "目录树", "focus": ["root", "manifests", "frags"], "note": "对象存储上目录=前缀，同样成立。" },
+      { "id": "naming", "label": "V2 命名法", "focus": ["manifests", "hint"], "note": "版本号倒置补零，字典序最大=最新，O(1) 定位。" }
+    ]
+  },
+  "components": [
+    { "id": "root", "type": "database", "label": "my_table.lance/", "sublabel": "数据集根前缀", "pos": [40, 110], "size": [186, 64] },
+    { "id": "manifests", "type": "database", "label": "N.manifest", "sublabel": "Manifest 协议 · 版本切换", "pos": [340, 110], "size": [190, 64] },
+    { "id": "frags", "type": "database", "label": "data/{frag}.lance", "sublabel": "fragment · {read_ver}-{id}.bitmap", "pos": [640, 110], "size": [200, 64] },
+    { "id": "aux", "type": "database", "label": "auxiliary/ 与索引", "sublabel": "辅助文件 · 索引存储页", "pos": [920, 110], "size": [186, 64] },
+    { "id": "hint", "type": "database", "label": "latest_version_hint.json", "sublabel": "S3 等无 List 语义的加速", "pos": [340, 330], "size": [210, 64] },
+    { "id": "txn", "type": "database", "label": "_transactions/{uuid}.txn", "sublabel": "proto Transaction · 审计与冲突消解", "pos": [640, 330], "size": [210, 64] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "一个 .lance 数据集", "wraps": ["root", "manifests", "frags", "aux", "hint", "txn"], "pad": 16 }
+  ],
+  "connections": [
+    { "from": "root", "to": "manifests", "label": "版本链" },
+    { "from": "manifests", "to": "frags", "label": "引用 fragment" },
+    { "from": "frags", "to": "aux", "label": "索引引用" },
+    { "from": "manifests", "to": "hint", "label": "V2 倒置命名", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "frags", "to": "txn", "label": "事务记录", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 55 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "关键物理事实", "items": ["通过新 Manifest 引用新文件实现版本切换", "无 footer：列式随机访问靠定位表", "目录=前缀，对象存储同样成立"] },
+    { "dot": "violet", "title": "V2 命名法", "items": ["版本号倒置 u64::MAX−v 并补零 20 位", "字典序最大者=最新版本 → O(1) 定位", "latest_version_hint.json 兜底加速"] },
+    { "dot": "emerald", "title": "事务文件", "items": ["{read_version}-{uuid}.txn 内容为 proto Transaction", "用于审计与冲突消解", "与 Parquet 根本差异：无行组、全列随机访问"] }
+  ]
+}

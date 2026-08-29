@@ -1,0 +1,200 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "标量索引与全文检索：BTree 与 Inverted",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "btree",
+        "label": "BTree",
+        "focus": [
+          "root",
+          "inner",
+          "leaf"
+        ],
+        "note": "页式存储 + sub-lookup 并行下探。"
+      },
+      {
+        "id": "inverted",
+        "label": "Inverted",
+        "focus": [
+          "tokenizer",
+          "posting"
+        ],
+        "note": "词表 → posting list 的查询管线。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "root",
+      "type": "database",
+      "label": "根：分区描述",
+      "sublabel": "max 值数组",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        180,
+        62
+      ]
+    },
+    {
+      "id": "inner",
+      "type": "database",
+      "label": "内部节点（页）",
+      "sublabel": "sub-lookup 并行下探",
+      "pos": [
+        340,
+        110
+      ],
+      "size": [
+        190,
+        62
+      ]
+    },
+    {
+      "id": "leaf",
+      "type": "database",
+      "label": "叶子页",
+      "sublabel": "排序键数组 + row id 序列",
+      "pos": [
+        640,
+        110
+      ],
+      "size": [
+        200,
+        62
+      ]
+    },
+    {
+      "id": "tokenizer",
+      "type": "backend",
+      "label": "分词器",
+      "sublabel": "lance-tokenizer 构建",
+      "pos": [
+        40,
+        340
+      ],
+      "size": [
+        180,
+        62
+      ]
+    },
+    {
+      "id": "posting",
+      "type": "database",
+      "label": "词表 → posting list",
+      "sublabel": "Inverted 倒排结构",
+      "pos": [
+        340,
+        340
+      ],
+      "size": [
+        190,
+        62
+      ]
+    },
+    {
+      "id": "prefilter",
+      "type": "backend",
+      "label": "谓词下推 prefilter",
+      "sublabel": "三路融合查询",
+      "pos": [
+        640,
+        340
+      ],
+      "size": [
+        200,
+        62
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "BTree 页式存储",
+      "wraps": [
+        "root",
+        "inner",
+        "leaf"
+      ],
+      "pad": 14
+    },
+    {
+      "kind": "region",
+      "label": "全文检索 FTS",
+      "wraps": [
+        "tokenizer",
+        "posting",
+        "prefilter"
+      ],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    {
+      "from": "root",
+      "to": "inner",
+      "label": "逐级下探"
+    },
+    {
+      "from": "inner",
+      "to": "leaf",
+      "label": "命中页"
+    },
+    {
+      "from": "tokenizer",
+      "to": "posting",
+      "label": "doc → 词项"
+    },
+    {
+      "from": "posting",
+      "to": "prefilter",
+      "label": "倒排检索"
+    },
+    {
+      "from": "leaf",
+      "to": "prefilter",
+      "label": "列裁剪复用",
+      "variant": "dashed",
+      "labelDy": 30
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "BTree 形态",
+      "items": [
+        "根：分区描述 + max 值数组",
+        "内部节点页 + 叶子页（排序键 + row id）",
+        "训练子索引 TrainingLeaf"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "索引存储",
+      "items": [
+        "索引本体用 Lance 文件格式存储",
+        "查询命中部分只需读相关页",
+        "列裁剪思想在索引上复用"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "三路融合",
+      "items": [
+        "向量索引 + 标量索引 + 全文检索",
+        "谓词下推 prefilter 统一入口",
+        "ANN 分支与标量过滤结果融合"
+      ]
+    }
+  ]
+}

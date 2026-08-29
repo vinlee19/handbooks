@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "编码体系：两层正交架构（写方向）",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      500
+    ],
+    "views": [
+      {
+        "id": "structural",
+        "label": "结构编码",
+        "focus": [
+          "arrow",
+          "structural"
+        ],
+        "note": "切 page、RepDef 层级、定位表——随机访问能力。"
+      },
+      {
+        "id": "compress",
+        "label": "压缩编码",
+        "focus": [
+          "compressive",
+          "proto"
+        ],
+        "note": "只管体积与 CPU，对块边界一无所知。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "输入"
+    },
+    {
+      "label": "结构编码"
+    },
+    {
+      "label": "压缩编码"
+    },
+    {
+      "label": "落盘"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "arrow",
+      "type": "external",
+      "label": "Arrow RecordBatch",
+      "sublabel": "类型系统归 Arrow",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "structural",
+      "type": "backend",
+      "label": "结构编码",
+      "sublabel": "切 page · RepDef · 定位表",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "layouts",
+      "type": "database",
+      "label": "PageLayout ×5",
+      "sublabel": "MiniBlock / FullZip…",
+      "stage": 2,
+      "row": 0
+    },
+    {
+      "id": "compressive",
+      "type": "backend",
+      "label": "压缩编码",
+      "sublabel": "DataBlock 树变换",
+      "stage": 2,
+      "row": 2
+    },
+    {
+      "id": "proto",
+      "type": "database",
+      "label": "CompressiveEncoding",
+      "sublabel": "proto 描述 + 压缩 buffer",
+      "stage": 3,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "from": "arrow",
+      "to": "structural",
+      "label": "逐列 FieldEncoder",
+      "variant": "emphasis"
+    },
+    {
+      "from": "structural",
+      "to": "layouts",
+      "label": "按值大小选布局"
+    },
+    {
+      "from": "structural",
+      "to": "compressive",
+      "label": "DataBlock 树",
+      "variant": "emphasis"
+    },
+    {
+      "from": "compressive",
+      "to": "proto",
+      "label": "压缩后 buffer"
+    },
+    {
+      "from": "layouts",
+      "to": "proto",
+      "label": "页边界元数据",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "两层正交",
+      "items": [
+        "类型 × 布局正交，结构 × 压缩正交",
+        "结构层吸干全部 I/O 调度细节",
+        "压缩层对块边界一无所知"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "五种布局",
+      "items": [
+        "MiniBlock：默认（小值）",
+        "FullZip：大值布局（≥256KiB）",
+        "Constant / Blob / Sp… 各司其职"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "RepDef",
+      "items": [
+        "嵌套结构的统一编码",
+        "repeated / def 层级还原 Arrow 结构",
+        "定位表记录 miniblock 元数据与重复索引"
+      ]
+    }
+  ]
+}

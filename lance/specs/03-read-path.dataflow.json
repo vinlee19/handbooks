@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "读路径全链路：执行计划树与 I/O 调度",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      540
+    ],
+    "views": [
+      {
+        "id": "plan",
+        "label": "计划树",
+        "focus": [
+          "user",
+          "limit",
+          "filter",
+          "take"
+        ],
+        "note": "自底向上流式 pull，DataFusion 拆分谓词。"
+      },
+      {
+        "id": "ann",
+        "label": "ANN 分支",
+        "focus": [
+          "ann",
+          "take"
+        ],
+        "note": "两级并行分区/子索引，row_addr 集合取数。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "消费端"
+    },
+    {
+      "label": "执行算子"
+    },
+    {
+      "label": "索引分支"
+    },
+    {
+      "label": "取数"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "scanner.to_batches",
+      "sublabel": "RecordBatch 流消费",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "limit",
+      "type": "backend",
+      "label": "LimitExec",
+      "sublabel": "limit/offset 下推 scan",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "filter",
+      "type": "backend",
+      "label": "LanceFilterExec",
+      "sublabel": "残余谓词",
+      "stage": 1,
+      "row": 2
+    },
+    {
+      "id": "ann",
+      "type": "backend",
+      "label": "ANN 分支",
+      "sublabel": "IVF 两级并行 · 距离 top-k",
+      "stage": 2,
+      "row": 0
+    },
+    {
+      "id": "take",
+      "type": "backend",
+      "label": "TakeExec",
+      "sublabel": "row_addr 取列 + 删除掩码",
+      "stage": 3,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "from": "user",
+      "to": "limit",
+      "label": "pull",
+      "variant": "dashed"
+    },
+    {
+      "from": "user",
+      "to": "filter",
+      "label": "pull",
+      "variant": "dashed"
+    },
+    {
+      "from": "filter",
+      "to": "ann",
+      "label": "可下推部分走索引",
+      "variant": "dashed"
+    },
+    {
+      "from": "ann",
+      "to": "take",
+      "label": "row_addr 集合",
+      "variant": "emphasis"
+    },
+    {
+      "from": "limit",
+      "to": "take",
+      "label": "顺序扫描",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [
+        [
+          315,
+          60
+        ],
+        [
+          745,
+          60
+        ]
+      ],
+      "labelAt": [
+        530,
+        60
+      ]
+    },
+    {
+      "from": "filter",
+      "to": "take",
+      "label": "残余过滤"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "DataFusion 角色",
+      "items": [
+        "优化器拆分谓词：可下推的移到索引/scan",
+        "残余谓词留在 LanceFilterExec",
+        "计划树自底向上流式 pull"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "I/O 调度器",
+      "items": [
+        "Lance 性能的心脏",
+        "u128 优先级编码决定调度顺序",
+        "字节背压 io_buffer_size_bytes 限流"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "删除掩码",
+      "items": [
+        "ANN/标量索引给出 row_addr 集合",
+        "TakeExec 按地址取列数据",
+        "RowAddrMaskFilterExec 应用删除掩码"
+      ]
+    }
+  ]
+}
