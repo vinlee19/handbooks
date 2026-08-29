@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Pi 物理架构：终端、PTY 与单进程形态",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1000,
+      520
+    ],
+    "views": [
+      {
+        "id": "io",
+        "label": "字节流链路",
+        "focus": [
+          "term",
+          "pty",
+          "pi"
+        ],
+        "note": "键盘进字节流，渲染回字符网格。"
+      },
+      {
+        "id": "modes",
+        "label": "运行形态",
+        "focus": [
+          "pi",
+          "modes",
+          "probe"
+        ],
+        "note": "四种运行模式与启动期能力探测。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "term",
+      "type": "external",
+      "label": "终端模拟器",
+      "sublabel": "iTerm2 / VS Code / tmux / SSH",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "pty",
+      "type": "messagebus",
+      "label": "PTY 字节流",
+      "sublabel": "键盘 ↓ · 渲染 ↑（双向）",
+      "pos": [
+        340,
+        110
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "pi",
+      "type": "backend",
+      "label": "pi 进程",
+      "sublabel": "单个 Node ≥22 / Bun 进程",
+      "pos": [
+        640,
+        110
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "tag": "默认仅此一个"
+    },
+    {
+      "id": "modes",
+      "type": "backend",
+      "label": "四种运行模式",
+      "sublabel": "interactive / print / json / rpc",
+      "pos": [
+        340,
+        330
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "probe",
+      "type": "database",
+      "label": "能力探测",
+      "sublabel": "Kitty 键盘 · 真彩 · 图片",
+      "pos": [
+        640,
+        330
+      ],
+      "size": [
+        196,
+        64
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "term",
+      "to": "pty",
+      "label": "键盘字节"
+    },
+    {
+      "from": "pty",
+      "to": "pi",
+      "label": "stdin / stdout"
+    },
+    {
+      "from": "pi",
+      "to": "modes",
+      "label": "运行形态",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    },
+    {
+      "from": "pi",
+      "to": "probe",
+      "label": "启动时逐一探测",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "right",
+      "via": [
+        [
+          900,
+          142
+        ],
+        [
+          900,
+          362
+        ]
+      ],
+      "labelAt": [
+        900,
+        250
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "终端只认字符网格",
+      "items": [
+        "VT 解析器处理 ANSI / OSC 52 / SGR",
+        "屏幕网格 + 滚动区是渲染的最终画布",
+        "pi 的全部输出最终都落在字符网格上"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "能力不假定",
+      "items": [
+        "Kitty 键盘协议？真彩？图片协议？超链接？",
+        "启动时逐一探测终端能力",
+        "不支持的特性优雅降级"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "进程模型",
+      "items": [
+        "默认整机只有 pi 一个进程",
+        "实验形态提供 server-client 模式",
+        "Node ≥22 或 Bun 均可运行"
+      ]
+    }
+  ]
+}

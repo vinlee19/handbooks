@@ -1,0 +1,223 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "模型解析：六级逐级回退链",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1100,
+      590
+    ],
+    "views": [
+      {
+        "id": "chain",
+        "label": "回退主链",
+        "focus": [
+          "cli",
+          "session",
+          "scoped",
+          "proj",
+          "global",
+          "default"
+        ],
+        "note": "从显式指定到 provider 默认，逐级回退。"
+      },
+      {
+        "id": "fail",
+        "label": "兜底",
+        "focus": [
+          "default"
+        ],
+        "note": "六级回退全空则报错退出。"
+      }
+    ]
+  },
+  "lanes": [
+    {
+      "id": "explicit",
+      "label": "显式指定"
+    },
+    {
+      "id": "session",
+      "label": "会话恢复"
+    },
+    {
+      "id": "settings",
+      "label": "设置文件"
+    },
+    {
+      "id": "fallback",
+      "label": "默认与兜底",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "user",
+      "label": "用户显式",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "restored",
+      "label": "会话恢复",
+      "fromCol": 2,
+      "toCol": 2
+    },
+    {
+      "id": "config",
+      "label": "配置与默认",
+      "fromCol": 3,
+      "toCol": 5
+    }
+  ],
+  "mainPath": [
+    "cli",
+    "session",
+    "scoped",
+    "proj",
+    "global",
+    "default"
+  ],
+  "nodes": [
+    {
+      "id": "cli",
+      "lane": "explicit",
+      "col": 0,
+      "type": "external",
+      "label": "CLI 参数",
+      "sublabel": "--model/--provider"
+    },
+    {
+      "id": "session",
+      "lane": "session",
+      "col": 1,
+      "type": "backend",
+      "label": "会话记录",
+      "sublabel": "model_change 事件"
+    },
+    {
+      "id": "scoped",
+      "lane": "explicit",
+      "col": 2,
+      "type": "backend",
+      "label": "scoped models",
+      "sublabel": "--models Ctrl+P"
+    },
+    {
+      "id": "proj",
+      "lane": "settings",
+      "col": 3,
+      "type": "database",
+      "label": "项目设置",
+      "sublabel": ".pi/settings.json",
+      "width": 120
+    },
+    {
+      "id": "global",
+      "lane": "session",
+      "col": 4,
+      "type": "database",
+      "label": "全局设置",
+      "sublabel": "~/.pi/agent/settings",
+      "width": 120
+    },
+    {
+      "id": "default",
+      "lane": "fallback",
+      "col": 5,
+      "type": "backend",
+      "label": "provider 默认",
+      "sublabel": "目录首个模型",
+      "width": 100
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "from": "cli",
+      "to": "session",
+      "label": "未指定则",
+      "variant": "dashed",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelSegment": 1
+    },
+    {
+      "id": "e2",
+      "from": "session",
+      "to": "scoped",
+      "label": "无记录则",
+      "variant": "dashed",
+      "route": "drop",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelSegment": 1
+    },
+    {
+      "id": "e3",
+      "from": "scoped",
+      "to": "proj",
+      "label": "继续回退",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop",
+      "labelSegment": 1
+    },
+    {
+      "id": "e4",
+      "from": "proj",
+      "to": "global",
+      "label": "无项目级",
+      "variant": "dashed",
+      "route": "drop",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelSegment": 1
+    },
+    {
+      "id": "e5",
+      "from": "global",
+      "to": "default",
+      "label": "无全局级",
+      "variant": "dashed",
+      "route": "drop",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelSegment": 1
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "解析顺序",
+      "items": [
+        "CLI 显式指定最优先",
+        "会话恢复读取 model_change / thinking 记录",
+        "scoped models 支持 Ctrl+P 循环切换"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "设置层级",
+      "items": [
+        "项目级 .pi/settings.json 覆盖全局",
+        "全局 ~/.pi/agent/settings.json",
+        "最后落到 provider 目录首个模型"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "硬约束",
+      "items": [
+        "六级全空 → 报错退出",
+        "thinking 级别同样逐级回退",
+        "任何一级命中即停止回退",
+        "六级全空 → 报错退出（硬约束）"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,200 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "pi-ai：一次流式请求的事件协议",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      500
+    ],
+    "views": [
+      {
+        "id": "fanout",
+        "label": "三路事件",
+        "focus": [
+          "call",
+          "raw",
+          "think",
+          "text",
+          "tool"
+        ],
+        "note": "手写 SSE 解析器产出三路语义事件。"
+      },
+      {
+        "id": "stop",
+        "label": "收尾",
+        "focus": [
+          "done",
+          "err"
+        ],
+        "note": "stopReason 决定上层循环的下一步。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "调用"
+    },
+    {
+      "label": "SSE"
+    },
+    {
+      "label": "语义事件"
+    },
+    {
+      "label": "收尾"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "call",
+      "type": "backend",
+      "label": "streamText",
+      "sublabel": "Models · Provider · lazyApi",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "raw",
+      "type": "messagebus",
+      "label": "SSE 字节流",
+      "sublabel": "手写解析器",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "think",
+      "type": "backend",
+      "label": "thinking 块",
+      "sublabel": "start/_delta/_end · 签名",
+      "stage": 2,
+      "row": 0
+    },
+    {
+      "id": "text",
+      "type": "backend",
+      "label": "正文文本",
+      "sublabel": "text_start/_delta/_end",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "tool",
+      "type": "backend",
+      "label": "toolcall 增量",
+      "sublabel": "参数 JSON 增量解析",
+      "stage": 2,
+      "row": 2
+    },
+    {
+      "id": "done",
+      "type": "security",
+      "label": "done",
+      "sublabel": "stop|length|toolUse|deferred",
+      "stage": 3,
+      "row": 1
+    },
+    {
+      "id": "err",
+      "type": "database",
+      "label": "error",
+      "sublabel": "上层循环重试/降级",
+      "stage": 3,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "from": "call",
+      "to": "raw",
+      "label": "prompt + history"
+    },
+    {
+      "from": "raw",
+      "to": "think",
+      "label": "事件",
+      "fromSide": "top",
+      "toSide": "left",
+      "via": [
+        [
+          315,
+          157
+        ]
+      ]
+    },
+    {
+      "from": "raw",
+      "to": "text",
+      "route": "straight",
+      "label": "事件"
+    },
+    {
+      "from": "raw",
+      "to": "tool",
+      "label": "事件",
+      "fromSide": "bottom",
+      "toSide": "left",
+      "via": [
+        [
+          315,
+          385
+        ]
+      ]
+    },
+    {
+      "from": "text",
+      "to": "done",
+      "label": "自然收尾",
+      "route": "straight"
+    },
+    {
+      "from": "tool",
+      "to": "done",
+      "label": "toolUse → 循环",
+      "variant": "emphasis"
+    },
+    {
+      "from": "raw",
+      "to": "err",
+      "label": "解析失败 / 网络错误",
+      "variant": "dashed",
+      "route": "bottom-channel",
+      "channelY": 430,
+      "labelAt": [
+        300,
+        442
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "核心零副作用",
+      "items": [
+        "pi-ai 包核心不依赖 Node API，可跑在任何运行时",
+        "provider 适配器按需加载（lazyApi 包装）",
+        "一套类型抹平 40+ 家供应商"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "事件协议",
+      "items": [
+        "每类块都是 start / _delta / _end 三段",
+        "thinking 块含加密签名可回传",
+        "toolcall 参数是 JSON 增量，边收边解析"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "历史消毒",
+      "items": [
+        "跨 provider 历史转换清洗不兼容字段",
+        "stopReason 语义统一为四值",
+        "error 事件交由 agent 包决定重试策略"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "TUI 帧循环：16ms 节流与主屏差分",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      500
+    ],
+    "views": [
+      {
+        "id": "render",
+        "label": "渲染管线",
+        "focus": [
+          "state",
+          "req",
+          "sched",
+          "render"
+        ],
+        "note": "requestRender 去重后按 16ms 节流出帧。"
+      },
+      {
+        "id": "input",
+        "label": "输入旁路",
+        "focus": [
+          "state",
+          "sched",
+          "render"
+        ],
+        "note": "键盘输入取消节流帧，立即渲染。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "状态"
+    },
+    {
+      "label": "调度"
+    },
+    {
+      "label": "差分"
+    },
+    {
+      "label": "上屏"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "state",
+      "type": "backend",
+      "label": "组件状态变化",
+      "sublabel": "setData / append …",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "req",
+      "type": "messagebus",
+      "label": "requestRender",
+      "sublabel": "renderRequested 去重",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "sched",
+      "type": "backend",
+      "label": "scheduleRender",
+      "sublabel": "距上帧 ≥16ms",
+      "stage": 1,
+      "row": 2
+    },
+    {
+      "id": "render",
+      "type": "backend",
+      "label": "doRender",
+      "sublabel": "组件树 → string[] → 差分",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "term",
+      "type": "database",
+      "label": "terminal.write",
+      "sublabel": "单 buffer + DECSYNC 2026",
+      "stage": 3,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "from": "state",
+      "to": "req",
+      "label": "请求重绘"
+    },
+    {
+      "from": "state",
+      "to": "sched",
+      "label": "请求重绘"
+    },
+    {
+      "from": "req",
+      "to": "render",
+      "label": "节流帧"
+    },
+    {
+      "from": "sched",
+      "to": "render",
+      "label": "到时出帧"
+    },
+    {
+      "from": "render",
+      "to": "term",
+      "label": "差分写入",
+      "variant": "emphasis",
+      "labelDy": 20
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "设计立场",
+      "items": [
+        "字符串是一等公民：组件树渲染为 string[]",
+        "差分算法只写变化的行",
+        "16ms 节流对齐 60fps"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "输入旁路",
+      "items": [
+        "键盘输入取消节流帧",
+        "requestImmediateRender 立即出帧",
+        "打字延迟优先于渲染合批"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "上屏优化",
+      "items": [
+        "单 buffer + DECSYNC 2026 同步",
+        "上一帧 previousLines 对比新帧 newLines",
+        "overlay 合成弹层与浮窗"
+      ]
+    }
+  ]
+}

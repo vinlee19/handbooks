@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "构建与发布：从源码到可信任安装物",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      500
+    ],
+    "views": [
+      {
+        "id": "build",
+        "label": "编译",
+        "focus": [
+          "entry",
+          "compile",
+          "platforms"
+        ],
+        "note": "bun build --compile 双入口，六平台产物。"
+      },
+      {
+        "id": "harden",
+        "label": "供应链防线",
+        "focus": [
+          "platforms",
+          "npm"
+        ],
+        "note": "防项目级 preload 注入等分层防线。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "入口"
+    },
+    {
+      "label": "编译"
+    },
+    {
+      "label": "产物"
+    },
+    {
+      "label": "发布"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "entry",
+      "type": "backend",
+      "label": "src/bun/cli.ts",
+      "sublabel": "16 行薄入口 · 延迟 import",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "compile",
+      "type": "backend",
+      "label": "bun build --compile",
+      "sublabel": "双入口 · 禁 autoload bunfig",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "image-resize-worker",
+      "sublabel": "worker_threads · photon WASM",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "platforms",
+      "type": "database",
+      "label": "六平台目录",
+      "sublabel": "pi 主程序 + wasm + 主题",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "npm",
+      "type": "cloud",
+      "label": "npm 发布",
+      "sublabel": "依赖卫生 · 发布流水线",
+      "stage": 3,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "from": "entry",
+      "to": "compile",
+      "label": "延迟 import",
+      "route": "straight",
+      "labelAt": [
+        300,
+        226
+      ]
+    },
+    {
+      "from": "entry",
+      "to": "worker",
+      "label": "附属入口",
+      "variant": "dashed"
+    },
+    {
+      "from": "compile",
+      "to": "platforms",
+      "label": "单文件编译",
+      "variant": "emphasis",
+      "route": "straight",
+      "labelDy": 28
+    },
+    {
+      "from": "worker",
+      "to": "platforms",
+      "label": "wasm 产物",
+      "variant": "dashed",
+      "labelDy": 18
+    },
+    {
+      "from": "platforms",
+      "to": "npm",
+      "label": "供应链防线分层",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "产物矩阵",
+      "items": [
+        "npm 包 + Bun 单文件二进制双形态",
+        "每平台：pi 主程序 / photon_rs_bg.wasm / theme",
+        "×6 平台覆盖主流桌面"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "防注入",
+      "items": [
+        "--no-compile-autoload-bunfig 防项目级 preload",
+        "延迟 import 真正 cli.ts 缩小攻击面",
+        "依赖卫生检查进入流水线"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "测试体系",
+      "items": [
+        "单元 + SQLLogic 式行为测试",
+        "发布前全矩阵回归",
+        "供应链防线分层叠加"
+      ]
+    }
+  ]
+}

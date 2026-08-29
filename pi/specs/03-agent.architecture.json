@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "pi-agent-core：12,416 行的三层内核",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 540],
+    "views": [
+      { "id": "kernel", "label": "低层内核", "focus": ["host", "loop", "agent", "types"], "note": "无状态循环 + 薄壳状态，纯函数可测。" },
+      { "id": "harness", "label": "装配层", "focus": ["harness", "tools"], "note": "可复用装配件把内核变成产品能力。" }
+    ]
+  },
+  "components": [
+    { "id": "host", "type": "external", "label": "coding-agent 宿主", "sublabel": "组装 AgentSession（04 篇）", "pos": [40, 110], "size": [186, 64] },
+    { "id": "loop", "type": "backend", "label": "agent-loop.ts", "sublabel": "纯函数 · 796 行", "pos": [340, 110], "size": [180, 64] },
+    { "id": "agent", "type": "backend", "label": "agent.ts", "sublabel": "队列 / abort / 监听器", "pos": [640, 110], "size": [180, 64] },
+    { "id": "types", "type": "database", "label": "types.ts", "sublabel": "契约 · stream-fn 注入点", "pos": [920, 110], "size": [180, 64] },
+    { "id": "harness", "type": "backend", "label": "harness 层", "sublabel": "可复用装配件", "pos": [40, 330], "size": [186, 62] },
+    { "id": "tools", "type": "messagebus", "label": "tools/", "sublabel": "bash/read/edit/write · compaction", "pos": [340, 330], "size": [196, 62] }
+  ],
+  "connections": [
+    { "from": "host", "to": "loop", "label": "驱动主循环" },
+    { "from": "loop", "to": "agent", "label": "纯函数核心" },
+    { "from": "agent", "to": "types", "label": "依赖契约", "variant": "dashed" },
+    { "from": "host", "to": "harness", "label": "复用装配", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "harness", "to": "tools", "label": "挂载工具" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "低层内核", "items": ["agent-loop.ts 是纯函数，输入状态输出动作", "agent.ts 持有队列、abort 与监听器", "types.ts 定义契约与 stream-fn 注入点"] },
+    { "dot": "violet", "title": "harness 层", "items": ["会话事件溯源树（05 篇）", "压缩与 AgentHarness 脚手架", "工具流水线：bash/read/edit/write"] },
+    { "dot": "emerald", "title": "双队列", "items": ["steering 与 follow-up 双队列分离", "工具执行流水线可被 steering 打断", "abort 语义贯穿整条调用链"] }
+  ]
+}

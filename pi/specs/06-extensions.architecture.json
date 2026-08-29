@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "扩展系统：进程内的发现、加载与钩子网络",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 560],
+    "views": [
+      { "id": "discover", "label": "四个来源", "focus": ["proj", "user", "pkg", "cli"], "note": "项目级扩展受信任门控制。" },
+      { "id": "load", "label": "加载管线", "focus": ["loader", "factory"], "note": "jiti 直接吃 .ts 源码，factory 缓存按 cwd+generation。" }
+    ]
+  },
+  "components": [
+    { "id": "proj", "type": "database", "label": "<cwd>/.pi/extensions/", "sublabel": "项目级 · 受信任门", "pos": [40, 110], "size": [196, 64] },
+    { "id": "user", "type": "database", "label": "~/.pi/agent/extensions/", "sublabel": "用户全局", "pos": [340, 110], "size": [196, 64] },
+    { "id": "pkg", "type": "database", "label": "pi install 安装包", "sublabel": "settings packages 列表", "pos": [640, 110], "size": [196, 64] },
+    { "id": "cli", "type": "external", "label": "-e / --extension", "sublabel": "命令行显式指定", "pos": [920, 110], "size": [186, 64] },
+    { "id": "loader", "type": "backend", "label": "discoverAndLoadExtensions", "sublabel": "loader.ts · jiti.import", "pos": [340, 340], "size": [210, 64] },
+    { "id": "factory", "type": "backend", "label": "factory(pi: ExtensionAPI)", "sublabel": "同步执行 · 缓存", "pos": [640, 340], "size": [196, 64] },
+    { "id": "hooks", "type": "messagebus", "label": "30+ 事件钩子网络", "sublabel": "拦截语义：谁能改什么", "pos": [920, 340], "size": [186, 64] }
+  ],
+  "connections": [
+    { "from": "proj", "to": "loader", "label": "扫描", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "user", "to": "loader", "label": "扫描", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "pkg", "to": "loader", "label": "读取列表", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "cli", "to": "loader", "label": "显式注入", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "loader", "to": "factory", "label": "导出函数才加载" },
+    { "from": "factory", "to": "hooks", "label": "注册钩子", "variant": "emphasis" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "四个来源", "items": ["项目级 <cwd>/.pi/extensions/", "用户全局 ~/.pi/agent/extensions/", "pi install 包 + 命令行 -e 显式路径"] },
+    { "dot": "violet", "title": "加载规则", "items": ["jiti.import 直接吃 .ts 源码", "导出非函数 → 跳过", "factory 按 cwd+generation 缓存"] },
+    { "dot": "rose", "title": "信任边界", "items": ["扩展 = 进程内任意代码", "不受信任项目默认不加载项目级扩展", "ctx.ui 处理两个进程的边界"] }
+  ]
+}

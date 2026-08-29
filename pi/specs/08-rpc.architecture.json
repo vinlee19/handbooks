@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "无头模式与协议栈：print / json / RPC",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1100,
+      520
+    ],
+    "views": [
+      {
+        "id": "headless",
+        "label": "无头链路",
+        "focus": [
+          "shell",
+          "print",
+          "session"
+        ],
+        "note": "pi -p 走 runPrintMode，事件流逐条输出。"
+      },
+      {
+        "id": "clean",
+        "label": "stdout 接管",
+        "focus": [
+          "takeover",
+          "out"
+        ],
+        "note": "杂散打印无法污染 JSONL 协议流。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "shell",
+      "type": "external",
+      "label": "shell / CI 脚本",
+      "sublabel": "pi -p \"...\" + stdin",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "print",
+      "type": "backend",
+      "label": "runPrintMode",
+      "sublabel": "首个事件前输出 session header",
+      "pos": [
+        340,
+        110
+      ],
+      "size": [
+        200,
+        64
+      ]
+    },
+    {
+      "id": "session",
+      "type": "backend",
+      "label": "AgentSession",
+      "sublabel": "prompt → 事件流 · 工具照常执行",
+      "pos": [
+        640,
+        110
+      ],
+      "size": [
+        200,
+        64
+      ]
+    },
+    {
+      "id": "takeover",
+      "type": "security",
+      "label": "takeOverStdout",
+      "sublabel": "非 interactive 启动即接管",
+      "pos": [
+        340,
+        340
+      ],
+      "size": [
+        200,
+        62
+      ]
+    },
+    {
+      "id": "out",
+      "type": "messagebus",
+      "label": "stdout",
+      "sublabel": "text：仅最终回答 · json：逐事件 JSONL",
+      "pos": [
+        640,
+        340
+      ],
+      "size": [
+        210,
+        64
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "shell",
+      "to": "print",
+      "label": "prompt"
+    },
+    {
+      "from": "print",
+      "to": "session",
+      "label": "驱动会话"
+    },
+    {
+      "from": "session",
+      "to": "out",
+      "label": "事件流",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    },
+    {
+      "from": "takeover",
+      "to": "out",
+      "label": "接管写入",
+      "variant": "dashed"
+    },
+    {
+      "from": "print",
+      "to": "takeover",
+      "label": "模式启动",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "两种输出",
+      "items": [
+        "text 模式只输出最终回答",
+        "json 模式逐事件 JSONL（message_update 只留 delta）",
+        "首个事件前先输出 session header"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "实验协议栈",
+      "items": [
+        "内建 JSONL RPC 可双向通信",
+        "实验性 CBOR 协议栈（protocol 包）更紧凑",
+        "两套协议按集成场景选择"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "纯净输出",
+      "items": [
+        "takeOverStdout 接管 stdout 写入",
+        "工具/依赖的杂散打印不污染协议流",
+        "工具副作用照常落盘"
+      ]
+    }
+  ]
+}

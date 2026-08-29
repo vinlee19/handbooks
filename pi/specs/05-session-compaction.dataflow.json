@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "会话持久化：JSONL v3 与上下文构建",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      500
+    ],
+    "views": [
+      {
+        "id": "read",
+        "label": "读取路径",
+        "focus": [
+          "file",
+          "list",
+          "build"
+        ],
+        "note": "只并行扫 header，picker 秒开。"
+      },
+      {
+        "id": "compact",
+        "label": "压缩",
+        "focus": [
+          "build",
+          "cut",
+          "llm"
+        ],
+        "note": "findCutPoint 定切点，compaction 折叠历史。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "磁盘"
+    },
+    {
+      "label": "扫描"
+    },
+    {
+      "label": "构建"
+    },
+    {
+      "label": "压缩"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "file",
+      "type": "database",
+      "label": "session.jsonl",
+      "sublabel": "每行一个 JSON 对象",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "list",
+      "type": "backend",
+      "label": "list / listAll",
+      "sublabel": "并行扫 header",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "build",
+      "type": "backend",
+      "label": "buildSessionContext",
+      "sublabel": "沿 leaf→parent 回溯",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "cut",
+      "type": "security",
+      "label": "findCutPoint",
+      "sublabel": "压缩不等式判位",
+      "stage": 3,
+      "row": 0
+    },
+    {
+      "id": "llm",
+      "type": "backend",
+      "label": "LLM 消息数组",
+      "sublabel": "compaction / branch 折叠",
+      "stage": 3,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "from": "file",
+      "to": "list",
+      "label": "header 扫描",
+      "variant": "dashed"
+    },
+    {
+      "from": "file",
+      "to": "build",
+      "label": "append-only 树",
+      "route": "straight"
+    },
+    {
+      "from": "build",
+      "to": "cut",
+      "label": "超阈值触发"
+    },
+    {
+      "from": "build",
+      "to": "llm",
+      "label": "折叠产出"
+    },
+    {
+      "from": "cut",
+      "to": "llm",
+      "label": "切点之前折叠",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "JSONL v3",
+      "items": [
+        "append-only：每行一个事件对象",
+        "branch(e3) 改变 leaf 指针实现分叉",
+        "v1/v2 读入自动迁移，写回即 v3"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "何时压缩",
+      "items": [
+        "一个不等式：上下文预算 vs 剩余空间",
+        "findCutPoint 找安全切点",
+        "切点之前折叠为 compaction 摘要"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "树语义",
+      "items": [
+        "e1 user → e2 assistant → e3 toolResult",
+        "沿 leaf→parent 链回溯构建上下文",
+        "branch_summary 节点折叠整条分支"
+      ]
+    }
+  ]
+}
