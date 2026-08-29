@@ -38,12 +38,49 @@ while IFS='|' read -r -u 3 name icon title desc accent src; do
     rsync -a --delete \
       --exclude='*visual-check*' \
       --exclude='.git/' --exclude='node_modules/' --exclude='.mimosa/' \
-      --exclude='.DS_Store' \
+      --exclude='.DS_Store' --exclude='interactive/index.html' \
       "$src"/ "$name"/
   else
     # Markdown 手册：用 md2html.py 转换成同风格 HTML（含 mermaid 渲染与资源拷贝）
     rm -rf "$name"
     python3 md2html.py "$src" "$name" "$title" "$icon" "$accent" < /dev/null
+  fi
+
+  # 互补模式：源目录带 interactive/ 子目录时，生成图集目录页，
+  # 并在原手册目录页注入入口横幅（原文阅读为主，交互图为辅）
+  if [ -d "$name/interactive" ]; then
+    python3 - "$name" <<'PY'
+import sys, pathlib, re, html
+name = sys.argv[1]
+idir = pathlib.Path(name) / "interactive"
+rows = []
+for p in sorted(idir.glob("[01]*.html")):
+    m = re.search(r"<title>([^<]*)</title>", p.read_text(encoding="utf-8", errors="ignore"))
+    title = m.group(1).strip() if m else p.stem
+    rows.append(f'<a href="interactive/{p.name}"><b>{html.escape(title)}</b>archify 交互图 · 可缩放/追踪</a>')
+toc = (f'<h1>{html.escape(name)} · 交互图集</h1>'
+       f'<div class="toc-grid">{"".join(rows)}</div>'
+       f'<p><a href="../index.html">← 返回图文手册目录</a></p>')
+page = ('<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">'
+        f'<title>{html.escape(name)} 交互图集</title><style>'
+        'body{margin:0;background:#0a0e16;color:#dbe6f5;font:15px/1.7 -apple-system,"PingFang SC",sans-serif}'
+        '.wrap{max-width:1000px;margin:0 auto;padding:40px 28px}h1{font-size:26px}'
+        'a{color:#38bdf8;text-decoration:none}'
+        '.toc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;margin:24px 0}'
+        '.toc-grid a{display:block;background:#0f1524;border:1px solid #22304a;border-radius:12px;padding:16px}'
+        '.toc-grid a b{display:block;margin-bottom:4px}'
+        '</style></head><body><div class="wrap">' + toc + '</div></body></html>')
+(idir / "index.html").write_text(page, encoding="utf-8")
+idx = pathlib.Path(name) / "index.html"
+txt = idx.read_text(encoding="utf-8", errors="ignore")
+banner = ('<div style="position:fixed;right:14px;bottom:14px;z-index:99999;background:#0f1524;'
+          'border:1px solid #2c3d5c;border-radius:10px;padding:8px 12px;box-shadow:0 4px 16px rgba(0,0,0,.4)">'
+          '<a href="interactive/index.html" style="color:#38bdf8;text-decoration:none;'
+          'font:13px -apple-system,sans-serif">\U0001F9ED \u4ea4\u4e92\u56fe\u7248</a></div>')
+if "interactive/index.html" not in txt and "</body>" in txt:
+    idx.write_text(txt.replace("</body>", banner + "</body>", 1), encoding="utf-8")
+print(f"   {name}: 交互图集目录页已生成，原目录页已注入入口")
+PY
   fi
 
   # 已知修复：duckdb 的 index 里有指向本机 vane 项目的相对链接，站内改为根导航页

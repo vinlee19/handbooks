@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>07 · 持久化与断点恢复 — Apache Burr 源码剖析</title>
+<style>
+:root{
+  --bg:#f8fafc; --card:#ffffff; --ink:#0f172a; --muted:#475569; --line:#e2e8f0;
+  --blue:#2563eb; --blue-bg:#eff6ff; --green:#16a34a; --green-bg:#f0fdf4;
+  --amber:#d97706; --amber-bg:#fffbeb; --purple:#9333ea; --purple-bg:#faf5ff;
+  --red:#dc2626; --red-bg:#fef2f2; --code-bg:#0f172a;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--ink);line-height:1.75}
+.topnav{position:sticky;top:0;z-index:50;background:rgba(15,23,42,.94);backdrop-filter:blur(6px);color:#e2e8f0;display:flex;gap:12px;align-items:center;padding:10px 24px;font-size:13px;flex-wrap:wrap}
+.topnav a{color:#cbd5e1;text-decoration:none;padding:3px 8px;border-radius:6px}
+.topnav a:hover{background:#334155;color:#fff}
+.topnav .brand{font-weight:700;color:#fff;font-size:14px;letter-spacing:.5px;margin-right:8px}
+.topnav .brand span{color:#60a5fa}
+.wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+.hero{background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:40px 0;margin-bottom:28px}
+.hero h1{margin:0 0 8px;font-size:28px}
+.hero p{margin:0;color:#cbd5e1;font-size:14.5px;max-width:880px}
+main{padding-bottom:64px}
+h2{font-size:23px;border-left:5px solid var(--blue);padding-left:12px;margin:42px 0 10px}
+h3{font-size:18px;margin:26px 0 6px;color:#1d4ed8}
+h4{font-size:15.5px;margin:18px 0 6px}
+p,li{color:#334155;font-size:14.5px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 24px;margin:16px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.grid{display:grid;gap:16px}
+.grid.c2{grid-template-columns:1fr 1fr}.grid.c3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:860px){.grid.c2,.grid.c3{grid-template-columns:1fr}}
+figure{margin:20px 0;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;overflow-x:auto}
+figcaption{font-size:13px;color:var(--muted);text-align:center;margin-top:10px;border-top:1px dashed var(--line);padding-top:8px}
+figcaption b{color:#1d4ed8}
+pre{background:var(--code-bg);color:#e2e8f0;padding:16px 18px;border-radius:10px;overflow-x:auto;font-size:12.8px;line-height:1.65}
+code{font-family:"SF Mono",Menlo,Consolas,"Courier New",monospace}
+p code,li code,td code,h3 code,h4 code,figcaption code{background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:5px;font-size:.9em}
+pre code{background:none;color:inherit;padding:0}
+.c-key{color:#7dd3fc}.c-str{color:#fbbf24}.c-com{color:#94a3b8;font-style:italic}.c-fn{color:#a5b4fc}.c-num{color:#f472b6}.c-dec{color:#fde047}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:#fff}
+th{background:#1e293b;color:#fff;text-align:left;padding:8px 12px;font-weight:600}
+td{border:1px solid var(--line);padding:7px 12px;vertical-align:top}
+tr:nth-child(even) td{background:#f8fafc}
+.path{font-family:monospace;background:#f1f5f9;border:1px solid var(--line);padding:1px 7px;border-radius:5px;font-size:12.5px;color:#0f766e;word-break:break-all}
+.note{border-left:4px solid var(--amber);background:var(--amber-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.note b{color:#92400e}
+.tip{border-left:4px solid var(--green);background:var(--green-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.tip b{color:#166534}
+.warn{border-left:4px solid var(--red);background:var(--red-bg);padding:12px 16px;border-radius:0 10px 10px 0;margin:14px 0;font-size:14px}
+.pager{display:flex;justify-content:space-between;margin:40px 0 8px}
+.pager a{background:#fff;border:1px solid var(--line);padding:10px 18px;border-radius:10px;text-decoration:none;color:var(--ink);font-size:14px}
+.pager a:hover{border-color:var(--blue);color:var(--blue)}
+footer.foot{text-align:center;color:#94a3b8;font-size:12.5px;padding:24px 0 40px}
+svg text{font-family:inherit}
+svg .t{fill:#1e293b;font-size:13px}
+svg .tb{fill:#fff;font-weight:700;font-size:13px}
+svg .ts{fill:#475569;font-size:11px}
+svg .tt{fill:#0f172a;font-weight:700;font-size:15px}
+svg .tc{fill:#64748b;font-size:11px;font-family:Menlo,monospace}
+svg .lbl{fill:#334155;font-size:11.5px}
+svg .ar{stroke:#64748b;stroke-width:1.5;fill:none}
+svg .ar-b{stroke:#2563eb;stroke-width:1.8;fill:none}
+svg .ar-dash{stroke:#94a3b8;stroke-width:1.3;fill:none;stroke-dasharray:5 4}
+svg .zone{fill:#f8fafc;stroke:#cbd5e1;stroke-dasharray:6 4}
+svg .bx{stroke-width:1.5}
+svg .b-blue{fill:#eff6ff;stroke:#3b82f6}
+svg .b-blue-d{fill:#dbeafe;stroke:#2563eb}
+svg .b-green{fill:#f0fdf4;stroke:#22c55e}
+svg .b-green-d{fill:#dcfce7;stroke:#16a34a}
+svg .b-amber{fill:#fffbeb;stroke:#f59e0b}
+svg .b-purple{fill:#faf5ff;stroke:#a855f7}
+svg .b-red{fill:#fef2f2;stroke:#ef4444}
+svg .b-slate{fill:#f1f5f9;stroke:#94a3b8}
+svg .b-dark{fill:#1e293b;stroke:#0f172a}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <span class="brand">Apache&nbsp;Burr<span>·源码深度剖析</span></span>
+  <a href="index.html">总导航</a><a href="01-overview.html">项目全景</a>
+  <a href="02-core-state.html">State</a><a href="03-core-action.html">Action</a>
+  <a href="04-core-application.html">运行时</a><a href="05-graph-builder.html">Graph/Builder</a>
+  <a href="06-lifecycle-hooks.html">Hooks/Tracing</a><a href="07-persistence.html"><b>持久化</b></a>
+  <a href="08-parallelism.html">并行</a><a href="09-tracking.html">追踪系统</a>
+  <a href="10-ui-frontend.html">遥测 UI</a><a href="11-integrations.html">集成生态</a>
+  <a href="12-execution-flow.html">端到端全景</a>
+</nav>
+
+<header class="hero"><div class="wrap">
+  <h1>07 · 持久化与断点恢复：可恢复执行的全部机制</h1>
+  <p>源码：<span class="path">burr/core/persistence.py</span>（725 行）+ <span class="path">burr/integrations/persisters/</span>。因为位置活在 State 里（04 篇），持久化只需要保存「一份序列化 State + 位置元数据」就能实现完整的时间旅行。</p>
+</div></header>
+
+<main class="wrap">
+
+<h2>7.1 协议：读/写两个小接口</h2>
+<div class="grid c2">
+<div class="card">
+<h3>写侧 BaseStateSaver（:112）</h3>
+<pre><code>save(partition_key, app_id,
+     sequence_id,      <span class="c-com"># 第几步</span>
+     position,         <span class="c-com"># 哪个 action</span>
+     state,            <span class="c-com"># 序列化后的 State</span>
+     status)           <span class="c-com"># "completed"|"failed"</span>
+initialize() / is_initialized()</code></pre>
+<p>每步一条记录（不是覆盖），天然形成<b>逐步快照链</b>——UI 的时间滑杆、fork 到任意历史点都靠它。</p>
+</div>
+<div class="card">
+<h3>读侧 BaseStateLoader（:54）</h3>
+<pre><code>load(partition_key, app_id,
+     sequence_id=None
+     ) -&gt; PersistedStateData | None
+list_app_ids(partition_key)</code></pre>
+<p><code>sequence_id=None</code> 表示取<b>最新</b>一条。返回的 <code>PersistedStateData</code>（TypedDict，:44）含 <code>partition_key / app_id / sequence_id / position / state / created_at / status</code> 七个字段。</p>
+</div>
+</div>
+<div class="card">
+<h3>合体与异步孪生</h3>
+<p><code>BaseStatePersister = BaseStateLoader + BaseStateSaver</code>（:202）；每个接口都有 <code>AsyncBase*</code> 孪生（:83/:157），并约定 <code>is_async()</code> 判别——Builder 在 build 时据此强制 sync 应用配 sync persister、async 应用配 async persister（<span class="path">application.py:2700-2705, 2594-2599</span>）。</p>
+</div>
+
+<h2>7.2 PersisterHook：持久化只是一个钩子</h2>
+<figure>
+<svg viewBox="0 0 1060 360" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<rect class="bx b-blue-d" x="40" y="40" width="250" height="120" rx="10" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="60" y="66" font-weight="700">with_state_persister(p)</text>
+<text class="ts" x="60" y="92">builder 把 p 包装成</text>
+<text class="tc" x="60" y="114">PersisterHook(p)</text>
+<text class="tc" x="60" y="136">application.py:2565-2588</text>
+<rect class="bx b-green" x="380" y="40" width="300" height="160" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="400" y="66" font-weight="700">PersisterHook(PostRunStepHook)</text>
+<text class="ts" x="400" y="90">persistence.py:214-234</text>
+<text class="tc" x="400" y="118">post_run_step(..., exception):</text>
+<text class="tc" x="400" y="138">  status = "failed" if exception</text>
+<text class="tc" x="400" y="158">           else "completed"</text>
+<text class="tc" x="400" y="178">  p.save(pk, app_id, seq, action.name,</text>
+<text class="tc" x="400" y="196">         state, status)</text>
+<rect class="bx b-amber" x="770" y="40" width="250" height="160" rx="10" style="fill:#fffbeb" style="stroke:#f59e0b"/>
+<text class="t" x="790" y="66" font-weight="700">SQLitePersister(:312)</text>
+<text class="tc" x="790" y="92">表: burr_state</text>
+<text class="tc" x="790" y="114">主键 (partition_key, app_id,</text>
+<text class="tc" x="790" y="132">      sequence_id)</text>
+<text class="ts" x="790" y="158">state 字段存 serde JSON；</text>
+<text class="ts" x="790" y="176">另存 position/status/created_at</text>
+<rect class="bx b-purple" x="380" y="240" width="640" height="90" rx="10" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="t" x="400" y="266" font-weight="700">关键推论</text>
+<text class="ts" x="400" y="290">① 引擎没有任何持久化分支 —— 想换存储 = 换钩子里的对象；② 异常步骤也会存（status="failed"），</text>
+<text class="ts" x="400" y="310">失败现场被完整保留 → 重启后可「从失败步原地重试」（05 篇决策树）；③ async 版 PersisterHookAsync(:237) 同构。</text>
+<path class="ar-b" d="M290 100 L378 100" marker-end="url(#arr)"/>
+<path class="ar-b" d="M680 120 L768 120" marker-end="url(#arr)"/>
+</svg>
+<figcaption><b>图 7-1 · PersisterHook 桥接</b> —— <code>with_state_persister</code> 的全部魔法就是「把 saver 包成一个 PostRunStepHook」。持久化失败会让步骤抛错吗？源码里 save 异常会随钩子向上传播——所以生产中应把重试/兜底做在自定义 persister 内部。</figcaption>
+</figure>
+
+<h2>7.3 断点恢复端到端时序</h2>
+<figure>
+<svg viewBox="0 0 1060 560" width="100%" xmlns="http://www.w3.org/2000/svg">
+<defs><marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:#2563eb"/></marker></defs>
+<rect class="bx b-red" x="30" y="20" width="990" height="80" rx="10" style="fill:#fef2f2" style="stroke:#ef4444"/>
+<text class="t" x="50" y="46" font-weight="700" style="fill:#7f1d1d">事故现场：进程在执行第 4 步（action=prompt）时崩溃</text>
+<text class="tc" x="50" y="72">数据库里已有 seq=1..3 的 completed 记录（每步一条快照），第 4 步未来得及写</text>
+<rect class="bx b-slate" x="30" y="130" width="200" height="180" rx="10" style="fill:#f1f5f9" style="stroke:#94a3b8"/>
+<text class="t" x="50" y="156" font-weight="700">重启进程</text>
+<text class="tc" x="50" y="184">ApplicationBuilder()</text>
+<text class="tc" x="50" y="204">  .with_identifiers(</text>
+<text class="tc" x="50" y="222">    partition_key=...,</text>
+<text class="tc" x="50" y="240">    app_id=同一个)</text>
+<text class="tc" x="50" y="266">  .initialize_from(persister,</text>
+<text class="tc" x="50" y="284">    resume_at_next_action=True,</text>
+<text class="tc" x="50" y="302">    default_state=...)</text>
+<rect class="bx b-blue" x="290" y="130" width="280" height="130" rx="10" style="fill:#eff6ff" style="stroke:#3b82f6"/>
+<text class="t" x="310" y="156" font-weight="700">build() 时：load(pk, app_id)</text>
+<text class="ts" x="310" y="182">seq=None → 取最新记录</text>
+<text class="ts" x="310" y="206">命中 seq=3 · position="prompt"</text>
+<text class="ts" x="310" y="226">· status="completed"</text>
+<text class="ts" x="310" y="248">反序列化 State（含 __PRIOR_STEP）</text>
+<rect class="bx b-green" x="620" y="130" width="400" height="130" rx="10" style="fill:#f0fdf4" style="stroke:#22c55e"/>
+<text class="t" x="640" y="156" font-weight="700">恢复决策（application.py:2678-2686）</text>
+<text class="tc" x="640" y="184">completed → state[PRIOR_STEP]="prompt"</text>
+<text class="tc" x="640" y="206">→ get_next_node 从 prompt 的出边继续</text>
+<text class="tc" x="640" y="232">（若 status=failed → entrypoint=失败动作，</text>
+<text class="tc" x="640" y="250">__PRIOR_STEP 清空 → 原地重试）</text>
+<rect class="bx b-blue-d" x="30" y="330" width="990" height="90" rx="10" style="fill:#dbeafe" style="stroke:#2563eb"/>
+<text class="t" x="50" y="356" font-weight="700">app.run(halt_after=[...]) —— 用户代码与首次运行完全一致</text>
+<text class="ts" x="50" y="382">run → iterate → get_next_action 读 __PRIOR_STEP="prompt" → 直接落到第 4 步 → SEQUENCE_ID 从 3 继续自增</text>
+<text class="ts" x="50" y="402">→ 追踪/日志无缝衔接（UI 里看起来像一次连续执行）</text>
+<rect class="bx b-purple" x="30" y="450" width="990" height="80" rx="10" style="fill:#faf5ff" style="stroke:#a855f7"/>
+<text class="t" x="50" y="476" font-weight="700">变体能力（同一套机制）</text>
+<text class="tc" x="50" y="500">initialize_from(fork_from_app_id=X, fork_from_sequence_id=N)：复制任意历史点的快照开新 app_id —— 时间旅行；</text>
+<text class="tc" x="50" y="520">override_state_values（default_state 在有记录时作为覆盖项）—— 修数重跑。</text>
+</svg>
+<figcaption><b>图 7-2 · 断点恢复端到端</b> —— 恢复的全部逻辑集中在 build() 的装载阶段；执行代码零改动。快照链 + status 字段共同支撑「续跑」与「重试」两种语义。</figcaption>
+</figure>
+
+<h2>7.4 后端全景</h2>
+<div class="card">
+<table>
+<tr><th>后端</th><th>位置</th><th>说明</th></tr>
+<tr><td><code>SQLitePersister</code></td><td><span class="path">core/persistence.py:312</span></td><td>内置零依赖主力；实现 <code>BaseCopyable</code>（<code>copy()</code> 换表名/串行化参数），供并行子任务各自落盘（08 篇）；兼容别名 <code>SQLLitePersister</code></td></tr>
+<tr><td><code>InMemoryPersister / AsyncInMemoryPersister</code></td><td><span class="path">:612 / :665</span></td><td>测试与短生命周期场景</td></tr>
+<tr><td><code>DevNullPersister</code></td><td><span class="path">:264</span></td><td>显式「不持久化」的占位</td></tr>
+<tr><td><code>SQLLitePersister(aiosqlite)</code></td><td><span class="path">integrations/persisters/b_aiosqlite.py</span></td><td>异步 SQLite</td></tr>
+<tr><td>PostgreSQL（×2 实现）</td><td><span class="path">b_asyncpg.py / b_psycopg2.py</span></td><td>asyncpg 异步版与 psycopg2 同步版；<span class="path">postgresql.py</span> 是废弃别名</td></tr>
+<tr><td>MongoDB</td><td><span class="path">b_pymongo.py / b_mongodb.py(废弃)</span></td><td>文档型存储</td></tr>
+<tr><td>Redis</td><td><span class="path">b_redis.py</span></td><td>KV 存储，键按 (partition, app, seq) 组织</td></tr>
+</table>
+</div>
+
+<h2>7.5 使用范式与陷阱</h2>
+<div class="grid c2">
+<div class="card">
+<h3>标准三件套</h3>
+<pre><code>p = SQLLitePersister(<span class="c-str">"app.db"</span>, <span class="c-str">"myapp"</span>)
+p.initialize()                 <span class="c-com"># 建表（幂等）</span>
+ApplicationBuilder()\
+  .with_identifiers(<span class="c-com"># 定位身份</span>
+    partition_key=<span class="c-str">"user-42"</span>,
+    app_id=<span class="c-str">"session-abc"</span>)\
+  .initialize_from(p,          <span class="c-com"># 读</span>
+    resume_at_next_action=<span class="c-key">True</span>,
+    default_state={<span class="c-str">"counter"</span>: 0},
+    default_entrypoint=<span class="c-str">"counter"</span>)\
+  .with_state_persister(p)\    <span class="c-com"># 写</span>
+  .build()</code></pre>
+</div>
+<div class="card">
+<h3>易踩的坑</h3>
+<ul>
+<li><b>忘了 initialize()</b>：表不存在，首步 save 即失败（async 版会在 build 时直接 RuntimeError，:2606-2610）。</li>
+<li><b>identity 漂移</b>：app_id 用随机 uuid 又想断点恢复——两次构建 uid 不同，永远查不到记录。要恢复必须显式固定 app_id。</li>
+<li><b>大对象状态</b>：每步全量序列化整份 State；大 DataFrame 应注册 serde 压缩，或把重数据放外部存储、State 里只留引用。</li>
+<li><b>多进程写同一 SQLite 文件</b>：注意连接参数（如 <code>check_same_thread=False</code> + WAL）。</li>
+</ul>
+</div>
+</div>
+
+<div class="tip"><b>本篇要点：</b>① 协议极小：load(三参)/save(六参)，返回七字段快照记录；② 持久化 = PersisterHook，异常步骤也留痕（failed）；③ 恢复在 build() 完成：completed 续下步、failed 重试当前步；④ 快照链天然支持 fork 时间旅行；⑤ 内置 SQLite 开箱即用，6 种数据库实现按 extras 安装。</div>
+
+<div class="pager"><a href="06-lifecycle-hooks.html">← 06 Hooks/Tracing</a><a href="08-parallelism.html">下一篇：08 并行执行 →</a></div>
+</main>
+<footer class="foot">Apache Burr 源码学习笔记 · 07 持久化 · 基于 v0.42.0</footer>
+</body>
+</html>
