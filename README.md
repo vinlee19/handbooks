@@ -1,6 +1,11 @@
 # 源码深度学习手册集 · Source Study Handbooks
 
-一个仓库收录多个开源项目的**源码深度分析手册**。HTML 手册为纯静态页面 + 内联 SVG 图解；Markdown 手册由 `md2html.py` 自动转换为同风格页面（mermaid 图经 CDN 渲染）。零构建、浏览器打开即读。
+一个仓库收录多个开源项目的**源码深度分析手册**。每个手册包含两部分，互为补充：
+
+- **图文手册**（主阅读）：原章节页，多张 SVG 图解 + 文字讲解
+- **交互图集**（`interactive/` 子目录）：archify 生成的单图交互版，支持明暗主题、缩放、关系追踪
+
+原手册目录页右下角有「🧭 交互图版」入口横幅。Markdown 手册由 `md2html.py` 自动转换（mermaid 经 CDN 渲染）。零构建、浏览器打开即读。
 
 **在线阅读**：<https://vinlee19.github.io/handbooks/>
 
