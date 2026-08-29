@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>07 · 数据内联与 Compaction — DuckLake 源码深度解析</title>
+<link rel="stylesheet" href="assets/ducklake.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <a class="brand" href="index.html"><span class="logo-dot"></span>DUCKLAKE·源码解析</a>
+  <a href="index.html">首页</a>
+  <a href="01-architecture.html">01 总体架构</a>
+  <a href="02-metadata-catalog.html">02 元数据目录</a>
+  <a href="03-snapshot-timetravel.html">03 快照与Time Travel</a>
+  <a href="04-read-path.html">04 读路径</a>
+  <a href="05-write-path.html">05 写路径</a>
+  <a href="06-transaction-concurrency.html">06 事务与并发</a>
+  <a href="07-inline-compaction.html" class="active">07 内联与Compaction</a>
+  <a href="08-functions-api.html">08 函数与宏</a>
+  <a href="09-backends-encryption.html">09 后端与加密</a>
+  <a href="10-debug-guide.html">10 调试指南</a>
+</nav>
+
+<div class="page">
+
+<div class="hero">
+  <h1>CH 07 · <span class="hl">数据内联</span>与 Compaction</h1>
+  <p class="subtitle">小表进数据库、大表进对象存储、碎片文件定期重写 —— DuckLake 的两级存储与自愈机制</p>
+</div>
+
+<div class="toc">
+  <div class="toc-title">本章目录</div>
+  <ol>
+    <li><a href="#s1">数据内联：小表的零文件之路</a></li>
+    <li><a href="#s2">内联数据的物理布局</a></li>
+    <li><a href="#s3">flush：内联数据刷成 Parquet</a></li>
+    <li><a href="#s4">Compaction 的两种模式</a></li>
+    <li><a href="#s5">文件布局前后对比</a></li>
+    <li><a href="#s6">候选文件选择算法</a></li>
+  </ol>
+</div>
+
+<h2 id="s1"><span class="sec-no">§7.1</span>数据内联：小表的零文件之路</h2>
+<p class="lead">为一张只有 5 行的维表写一个 Parquet 文件是纯浪费。DuckLake 让<b>低于行数阈值的小表数据直接存进元数据库的表里</b>——INSERT 全程不碰对象存储。</p>
+
+<div class="diagram">
+  <div class="fig-title">图 7-1 · 写入时的内联决策（DuckLakeInlineData 算子）</div>
+<pre class="mermaid">
+flowchart TD
+    A["INSERT 管道 chunk 流"] --> B["DuckLakeInlineData 算子<br>ducklake_inline_data.cpp<br>Execute :80"]
+    B --> C{"表开启内联?<br>DataInliningRowLimit &gt; 0<br>(catalog.cpp:1044)"}
+    C -- "否（大表/显式关闭）" --> D["直接放行 → COPY 写 Parquet"]
+    C --> E{"累计行数 &lt; 阈值?<br>默认 10 行<br>ducklake_default_data_inlining_row_limit<br>(extension.cpp:36-38)"}
+    E -- 是 --> F["截留进内存<br>ColumnDataCollection<br>（事务本地 inlined data）"]
+    E -- "超限（FinalExecute :122）" --> G["已截留的行吐给下游<br>→ COPY 写 Parquet（转型为普通文件表）"]
+    F --> H["COMMIT：<br>WriteNewInlinedData 写进元数据库<br>per-table 内联物理表<br>+ 登记 ducklake_inlined_data_tables"]
+    D --> I["COMMIT：data_file 账本登记"]
+    G --> I
+</pre>
+  <div class="fig-caption">阈值三级可配（全局 SET / schema / table）；事务内"写后读"通过 §4.3 的内联伪文件实现</div>
+</div>
+
+<h2 id="s2"><span class="sec-no">§7.2</span>内联数据的物理布局</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 7-2 · 小表的"双世界"布局：账本一致，物理位置不同</div>
+  <svg viewBox="0 0 1140 480" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC, Microsoft YaHei, sans-serif">
+    <!-- 左：元数据库 -->
+    <rect x="30" y="30" width="540" height="410" rx="16" fill="#12294d" stroke="#4dd0e1" stroke-width="1.5"/>
+    <text x="300" y="62" text-anchor="middle" fill="#4dd0e1" font-size="15" font-weight="700">元数据 Catalog 数据库（内联世界）</text>
+    <rect x="52" y="84" width="496" height="60" rx="10" fill="#0b1020" stroke="#4dd0e1"/>
+    <text x="68" y="110" fill="#dbe4ff" font-size="12.5" font-family="Menlo,monospace">ducklake_inlined_data_tables</text>
+    <text x="68" y="132" fill="#8b9bc7" font-size="11">table_id=14 → 登记：该表当前走内联</text>
+    <rect x="52" y="156" width="496" height="120" rx="10" fill="#0b1020" stroke="#69db7c"/>
+    <text x="68" y="182" fill="#69db7c" font-size="12.5" font-weight="700" font-family="Menlo,monospace">ducklake_inline_data_14（按需 CREATE 的物理表）</text>
+    <text x="68" y="208" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">row_id BIGINT │ begin_snapshot │ 业务列 a,b,c…</text>
+    <text x="68" y="234" fill="#8b9bc7" font-size="11.5">真实行数据！SELECT 时由 DuckLakeInlinedDataReader</text>
+    <text x="68" y="256" fill="#8b9bc7" font-size="11.5">当"文件"读出（BaseFileReader 派生，伪文件名标识）</text>
+    <rect x="52" y="288" width="496" height="76" rx="10" fill="#0b1020" stroke="#ff8787"/>
+    <text x="68" y="314" fill="#ff8787" font-size="12.5" font-weight="700" font-family="Menlo,monospace">ducklake_inline_delete_…（内联删除表，按需创建）</text>
+    <text x="68" y="340" fill="#8b9bc7" font-size="11.5">row_id │ begin_snapshot —— 小表删除同样零 Parquet</text>
+    <text x="68" y="358" fill="#8b9bc7" font-size="11">InlinedFileDeletionTableName :3232 · GetInlinedDeletionTableName :3375</text>
+    <text x="300" y="402" text-anchor="middle" fill="#5f6f9e" font-size="11.5">行内数据带 begin_snapshot 列 —— 与账本同一套时态可见性</text>
+
+    <!-- 右：对象存储 -->
+    <rect x="620" y="30" width="490" height="410" rx="16" fill="#12331f" stroke="#69db7c" stroke-width="1.5"/>
+    <text x="865" y="62" text-anchor="middle" fill="#69db7c" font-size="15" font-weight="700">对象存储（文件世界）</text>
+    <rect x="642" y="84" width="446" height="76" rx="10" fill="#0b1020" stroke="#2a3763"/>
+    <text x="658" y="110" fill="#dbe4ff" font-size="12.5" font-family="Menlo,monospace">s3://lake/schema=main/table=14/</text>
+    <text x="658" y="136" fill="#8b9bc7" font-size="11.5">内联表触发转型前的目录甚至可能为空</text>
+    <rect x="642" y="176" width="446" height="130" rx="10" fill="#0b1020" stroke="#2a3763"/>
+    <text x="658" y="202" fill="#dbe4ff" font-size="12.5" font-family="Menlo,monospace">大表 table=15/</text>
+    <text x="658" y="228" fill="#ffd43b" font-size="12" font-family="Menlo,monospace">├── ducklake-0198….parquet (512MB)</text>
+    <text x="658" y="254" fill="#ffd43b" font-size="12" font-family="Menlo,monospace">└── ducklake-0199….parquet</text>
+    <text x="658" y="284" fill="#8b9bc7" font-size="11.5">DataInliningRowLimit=0 的表永远走这里</text>
+    <rect x="642" y="322" width="446" height="92" rx="10" fill="#0b1020" stroke="#1f2a4d"/>
+    <text x="658" y="348" fill="#dbe4ff" font-size="12.5" font-weight="700">统一抽象的关键</text>
+    <text x="658" y="374" fill="#8b9bc7" font-size="11.5">两条世界都产出"行集 + 统计 + rowid 区间"，</text>
+    <text x="658" y="396" fill="#8b9bc7" font-size="11.5">scan 层看到的是统一的文件列表（含内联伪文件）</text>
+
+    <!-- 中间箭头 -->
+    <text x="594" y="240" text-anchor="middle" fill="#5f6f9e" font-size="11.5">同一张表的</text>
+    <text x="594" y="258" text-anchor="middle" fill="#5f6f9e" font-size="11.5">两种化身</text>
+  </svg>
+  <div class="fig-caption">inline_data_{table_id} 物理表由 WriteNewInlinedData 首次提交时按需创建；flush 后行被删除、文件进账本，账本语义无缝衔接</div>
+</div>
+
+<h2 id="s3"><span class="sec-no">§7.3</span>flush：内联数据刷成 Parquet</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 7-3 · ducklake_flush_inlined_data 的执行计划（函数注册 :787）</div>
+<pre class="mermaid">
+flowchart TD
+    A["CALL ducklake_flush_inlined_data(<br>ATTACH, 'main', 't'可选)"] --> B["找出待 flush 的内联表<br>（行数 &gt; 0 或存在内联删除）"]
+    B --> C["DuckLakeDataFlusher::<br>GenerateFlushCommand :281"]
+    C --> D["构造并执行三段式计划：<br>① SELECT * FROM 内联物理表<br>② COPY → ducklake-{uuid}.parquet<br>③ DELETE 已刷行 + 删除内联登记"]
+    D --> E{"有内联删除?"}
+    E -- 是 --> F["FlushInlinedFileDeletions :418<br>把内联删除转成 delete 文件<br>指向刚写出的新 Parquet"]
+    E -- 否 --> G["直接登记"]
+    F --> H["COMMIT：新 data_file/delete_file<br>+ 事务性清除内联数据"]
+    G --> H
+</pre>
+  <div class="fig-caption">flush 是普通表函数、普通事务——没有后台守护进程；可以在表达到阈值后手动调用，也可定时任务调度</div>
+</div>
+
+<h2 id="s4"><span class="sec-no">§7.4</span>Compaction 的两种模式</h2>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th></th><th><code>ducklake_merge_adjacent_files</code>（:949）</th><th><code>ducklake_rewrite_data_files</code>（:976）</th></tr></thead>
+  <tbody>
+    <tr><td>目标</td><td>合并<b>时间相邻的小文件</b>，消除写放大碎片</td><td>消除<b>删除痕迹</b>：重写被 delete 大量污染的文件</td></tr>
+    <tr><td>输入选择</td><td>相邻且 schema 兼容（<code>can_merge_into_latest</code> :306-328）的小文件；<code>newer_than</code> 只看新提交（:295，SQL 过滤 metadata_manager.cpp:2409-2419）</td><td>按 <code>delete_ratio</code> 估剩余行数，超过 <code>rewrite_delete_threshold</code>（默认 0.95，:817-818）的重写</td></tr>
+    <tr><td>输出</td><td>更少更大的 data_file，无 delete 残留合并</td><td>净数据新文件；旧文件 + delete 文件全部退役</td></tr>
+    <tr><td>统计</td><td colspan="2">重算 per-file 统计 → <code>RecomputeGlobalStatsAfterRewrite</code>（transaction_state.cpp:844）聚合表级</td></tr>
+    <tr><td>提交记录</td><td colspan="2"><code>WriteMergeAdjacent</code> :5226 / <code>WriteDeleteRewrites</code> :5270（compaction 也走事务，与并发 DELETE 互斥见 CH 06 §6.5）</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="s5"><span class="sec-no">§7.5</span>文件布局前后对比</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 7-4 · Compaction 前后的物理布局变化</div>
+  <svg viewBox="0 0 1140 560" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC, Microsoft YaHei, sans-serif">
+    <defs>
+      <marker id="a7-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#8b9bc7"/>
+      </marker>
+    </defs>
+    <!-- BEFORE -->
+    <text x="285" y="40" text-anchor="middle" fill="#dbe4ff" font-size="15" font-weight="700">Before：碎片化 + 删除污染</text>
+    <rect x="40" y="60" width="490" height="420" rx="14" fill="#0b1020" stroke="#2a3763"/>
+    <!-- files -->
+    <rect x="70" y="90" width="130" height="52" rx="8" fill="#241f0a" stroke="#ffd43b"/>
+    <text x="135" y="112" text-anchor="middle" fill="#ffd43b" font-size="11.5" font-family="Menlo,monospace">f1.parquet</text>
+    <text x="135" y="130" text-anchor="middle" fill="#8b9bc7" font-size="10">8MB · 5%删除</text>
+    <rect x="70" y="158" width="130" height="52" rx="8" fill="#241f0a" stroke="#ffd43b"/>
+    <text x="135" y="180" text-anchor="middle" fill="#ffd43b" font-size="11.5" font-family="Menlo,monospace">f2.parquet</text>
+    <text x="135" y="198" text-anchor="middle" fill="#8b9bc7" font-size="10">5MB</text>
+    <rect x="70" y="226" width="130" height="52" rx="8" fill="#241f0a" stroke="#ffd43b"/>
+    <text x="135" y="248" text-anchor="middle" fill="#ffd43b" font-size="11.5" font-family="Menlo,monospace">f3.parquet</text>
+    <text x="135" y="266" text-anchor="middle" fill="#8b9bc7" font-size="10">12MB</text>
+    <rect x="220" y="90" width="130" height="52" rx="8" fill="#2a1f0a" stroke="#ff8787"/>
+    <text x="285" y="112" text-anchor="middle" fill="#ff8787" font-size="11.5" font-family="Menlo,monospace">f4.parquet</text>
+    <text x="285" y="130" text-anchor="middle" fill="#ff8787" font-size="10">被删 96% ★</text>
+    <rect x="220" y="158" width="130" height="52" rx="8" fill="#241f0a" stroke="#ffd43b"/>
+    <text x="285" y="180" text-anchor="middle" fill="#ffd43b" font-size="11.5" font-family="Menlo,monospace">f5.parquet</text>
+    <text x="285" y="198" text-anchor="middle" fill="#8b9bc7" font-size="10">3MB</text>
+    <rect x="220" y="226" width="130" height="52" rx="8" fill="#2a1f0a" stroke="#ff8787"/>
+    <text x="285" y="248" text-anchor="middle" fill="#ff8787" font-size="11.5" font-family="Menlo,monospace">f6.parquet</text>
+    <text x="285" y="266" text-anchor="middle" fill="#ff8787" font-size="10">被删 92% ★</text>
+    <!-- delete files -->
+    <rect x="370" y="90" width="140" height="40" rx="8" fill="#12294d" stroke="#ff8787"/>
+    <text x="440" y="115" text-anchor="middle" fill="#ff8787" font-size="11" font-family="Menlo,monospace">del-A(delete.parquet)</text>
+    <rect x="370" y="146" width="140" height="40" rx="8" fill="#12294d" stroke="#ff8787"/>
+    <text x="440" y="171" text-anchor="middle" fill="#ff8787" font-size="11" font-family="Menlo,monospace">del-B(puffin)</text>
+    <text x="285" y="320" text-anchor="middle" fill="#5f6f9e" font-size="12">问题①：小文件多 → 文件列表长、对象存储 GET 多</text>
+    <text x="285" y="348" text-anchor="middle" fill="#5f6f9e" font-size="12">问题②：删除痕迹 → 每次读都要加载删除过滤</text>
+    <text x="285" y="376" text-anchor="middle" fill="#5f6f9e" font-size="12">问题③：统计碎 → 表级 min/max 变宽、裁剪变钝</text>
+    <rect x="70" y="400" width="440" height="60" rx="10" fill="#101731" stroke="#1f2a4d"/>
+    <text x="290" y="426" text-anchor="middle" fill="#8b9bc7" font-size="11.5">读 f4 时：100 行加载 → 96 行被过滤 → 4 行有效</text>
+    <text x="290" y="448" text-anchor="middle" fill="#8b9bc7" font-size="11.5">读放大 = 25×</text>
+
+    <!-- arrow -->
+    <path d="M 545 270 C 590 270, 590 270, 615 270" fill="none" stroke="#ffd43b" stroke-width="3" marker-end="url(#a7-arrow)"/>
+    <text x="580" y="250" text-anchor="middle" fill="#ffd43b" font-size="11.5">compaction</text>
+
+    <!-- AFTER -->
+    <text x="865" y="40" text-anchor="middle" fill="#dbe4ff" font-size="15" font-weight="700">After：整洁的大文件</text>
+    <rect x="640" y="60" width="470" height="420" rx="14" fill="#12331f" stroke="#69db7c"/>
+    <rect x="670" y="90" width="180" height="52" rx="8" fill="#0b1020" stroke="#69db7c"/>
+    <text x="760" y="112" text-anchor="middle" fill="#69db7c" font-size="11.5" font-family="Menlo,monospace">merged-1.parquet</text>
+    <text x="760" y="130" text-anchor="middle" fill="#8b9bc7" font-size="10">f1+f2+f3+f5 ≈ 28MB</text>
+    <rect x="670" y="158" width="180" height="52" rx="8" fill="#0b1020" stroke="#69db7c"/>
+    <text x="760" y="180" text-anchor="middle" fill="#69db7c" font-size="11.5" font-family="Menlo,monospace">merged-2.parquet</text>
+    <text x="760" y="198" text-anchor="middle" fill="#8b9bc7" font-size="10">…贴近 target_file_size</text>
+    <rect x="880" y="90" width="200" height="52" rx="8" fill="#0b1020" stroke="#69db7c"/>
+    <text x="980" y="112" text-anchor="middle" fill="#69db7c" font-size="11.5" font-family="Menlo,monospace">rewritten-f4.parquet</text>
+    <text x="980" y="130" text-anchor="middle" fill="#8b9bc7" font-size="10">只剩 4 净行（rewrite）</text>
+    <rect x="880" y="158" width="200" height="52" rx="8" fill="#0b1020" stroke="#69db7c"/>
+    <text x="980" y="180" text-anchor="middle" fill="#69db7c" font-size="11.5" font-family="Menlo,monospace">rewritten-f6.parquet</text>
+    <text x="980" y="198" text-anchor="middle" fill="#8b9bc7" font-size="10">删除痕迹清零</text>
+    <text x="875" y="250" text-anchor="middle" fill="#5f6f9e" font-size="12">退役文件闭合 end_snapshot → 登记</text>
+    <text x="875" y="272" text-anchor="middle" fill="#5f6f9e" font-size="12">ducklake_files_scheduled_for_deletion</text>
+    <text x="875" y="294" text-anchor="middle" fill="#5f6f9e" font-size="12">（等引用它的历史快照过期后才物理删除）</text>
+    <rect x="670" y="330" width="410" height="110" rx="10" fill="#0b1020" stroke="#1f2a4d"/>
+    <text x="875" y="356" text-anchor="middle" fill="#69db7c" font-size="12" font-weight="700">Transaction Safety</text>
+    <text x="875" y="382" text-anchor="middle" fill="#8b9bc7" font-size="11">重写输出 + 账本变更 + 旧文件退役 在同一事务提交；</text>
+    <text x="875" y="404" text-anchor="middle" fill="#8b9bc7" font-size="11">与并发 DELETE 互斥（冲突检测）；</text>
+    <text x="875" y="426" text-anchor="middle" fill="#8b9bc7" font-size="11">Time Travel 不受影响（旧文件物理上还在，直到过期）</text>
+    <text x="875" y="462" text-anchor="middle" fill="#5f6f9e" font-size="11">读放大 25× → 1×</text>
+  </svg>
+  <div class="fig-caption">两种模式常常一起用：merge 消碎片、rewrite 消删除——输出都是"贴近 target_file_size 的净文件"</div>
+</div>
+
+<h2 id="s6"><span class="sec-no">§7.6</span>候选文件选择算法</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 7-5 · GenerateCompactions（compaction_functions.cpp:284-413）与 SQL 端候选下沉</div>
+<pre class="mermaid">
+flowchart TD
+    A["绑定：解析 target_file_size /<br>delete_threshold / newer_than / WHERE"] --> B["GetFilesForCompaction<br>metadata_manager.cpp:2367"]
+    B --> C["SQL 内预筛（★性能优化）：<br>candidate_files CTE :2436-2444<br>+ 内联删除候选 UNION :2424-2434"]
+    C --> D["GenerateCompactions :284"]
+    D --> E{"模式?"}
+    E -- MERGE_ADJACENT --> F["按提交序分组相邻小文件<br>→ can_merge_into_latest 校验<br>schema 兼容 :306-328"]
+    E -- REWRITE_DELETES --> G["delete_ratio ≥ 阈值 → 候选<br>估剩余行数 :376-379"]
+    F --> H["贴 target 截断分组<br>（避免产出超大盘子 :380-388）"]
+    G --> H
+    H --> I["生成每组一个 compaction 任务<br>→ DuckLakeLogicalCompaction 接入计划<br>→ DuckLakeCompaction 物理算子执行"]
+    I --> J["新文件统计回传 → commit 时<br>WriteCompactions + 退役旧文件"]
+</pre>
+  <div class="fig-caption">近期提交把"哪些文件值得重写"的判定下沉到元数据库 SQL（CTE 预筛），避免把海量文件行拉到客户端再筛</div>
+</div>
+
+<div class="callout cyan">
+  <div class="co-title">🔗 内联与 compaction 的联动</div>
+  flush（§7.3）产出的第一批小 Parquet 正是 merge_adjacent_files 的典型输入。推荐的运维节奏：<b>写入 → 小表自动内联 → 达阈值 flush → 定期 merge 相邻文件 → 删除多的表定期 rewrite</b>。全部环节都是普通 SQL 函数，可用任意调度器编排。
+</div>
+
+<div class="pager">
+  <a href="06-transaction-concurrency.html">
+    <div class="pg-label">← 上一章</div>
+    <div class="pg-title">06 · 事务与乐观并发</div>
+  </a>
+  <a class="next" href="08-functions-api.html">
+    <div class="pg-label">下一章 →</div>
+    <div class="pg-title">08 · SQL 函数与宏全景</div>
+  </a>
+</div>
+
+<div class="footer">DuckLake 源码深度解析 · CH 07 · 基于 duckdb/ducklake @ 27c14caf</div>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      primaryColor: '#1a2447',
+      primaryTextColor: '#dbe4ff',
+      primaryBorderColor: '#4dd0e1',
+      lineColor: '#8b9bc7',
+      secondaryColor: '#241f0a',
+      tertiaryColor: '#12294d',
+      fontFamily: 'PingFang SC, Microsoft YaHei, sans-serif',
+      fontSize: '14px'
+    },
+    flowchart: { curve: 'basis', htmlLabels: true },
+    sequence: { actorMargin: 40, width: 170 }
+  });
+</script>
+</body>
+</html>

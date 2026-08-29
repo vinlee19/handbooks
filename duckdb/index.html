@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DuckDB 从 0 到 1：源码深度分析</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --card: #ffffff; --ink: #1a2233; --muted: #5b667a;
+    --line: #e3e7ee; --accent: #0f6f4f; --accent2: #b54708; --code-bg: #eef1f6; --tag-bg: #e6f2ec;
+  }
+  html.dark {
+    --bg: #10131b; --card: #181c27; --ink: #e6e9f2; --muted: #98a2b8;
+    --line: #2a3040; --accent: #52c99a; --accent2: #f0a35e; --code-bg: #1f2432; --tag-bg: #1d3229;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.75 "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 48px 28px 96px; }
+  header.hero { border-bottom: 3px solid var(--accent); padding-bottom: 28px; margin-bottom: 40px; }
+  h1 { font-size: 34px; margin: 0 0 10px; letter-spacing: .5px; }
+  .sub { color: var(--muted); font-size: 17px; }
+  h2 { font-size: 24px; margin: 52px 0 16px; padding-left: 14px; border-left: 5px solid var(--accent); }
+  h3 { font-size: 19px; margin: 30px 0 10px; color: var(--accent); }
+  p, li { color: var(--ink); }
+  .muted { color: var(--muted); }
+  code { background: var(--code-bg); padding: 2px 7px; border-radius: 6px;
+         font: 14px/1.6 "SF Mono", Menlo, Consolas, monospace; }
+  table { border-collapse: collapse; width: 100%; margin: 18px 0; font-size: 15px; }
+  th, td { border: 1px solid var(--line); padding: 9px 13px; text-align: left; vertical-align: top; }
+  th { background: var(--tag-bg); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; margin: 22px 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px;
+          box-shadow: 0 1px 4px rgba(15,23,42,.05); }
+  .card h4 { margin: 0 0 10px; font-size: 16.5px; }
+  .card p, .card li { font-size: 14.5px; color: var(--muted); }
+  .card ul { margin: 6px 0 0; padding-left: 18px; }
+  .card li { margin: 5px 0; }
+  a.dia { display: flex; align-items: center; gap: 14px; background: var(--card); border: 1px solid var(--line);
+          border-radius: 14px; padding: 18px 20px; margin: 14px 0; text-decoration: none; color: var(--ink);
+          transition: transform .12s ease, border-color .12s ease; }
+  a.dia:hover { transform: translateY(-2px); border-color: var(--accent); }
+  .num { flex: 0 0 46px; height: 46px; border-radius: 12px; background: var(--tag-bg); color: var(--accent);
+         display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 19px; }
+  a.dia b { font-size: 16.5px; display: block; }
+  a.dia span { color: var(--muted); font-size: 14px; }
+  .kicker { display: inline-block; background: var(--tag-bg); color: var(--accent); border-radius: 999px;
+            padding: 2px 12px; font-size: 13px; margin-right: 6px; }
+  .theme-btn { position: fixed; top: 18px; right: 18px; border: 1px solid var(--line); background: var(--card);
+               color: var(--ink); border-radius: 999px; padding: 7px 16px; cursor: pointer; font-size: 14px; }
+  .footer { margin-top: 70px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13.5px; }
+</style>
+</head>
+<body>
+<button class="theme-btn" onclick="document.documentElement.classList.toggle('dark')">🌓 主题</button>
+<div class="wrap">
+
+<header class="hero">
+  <h1>DuckDB 从 0 到 1：源码深度分析</h1>
+  <div class="sub">duckdb/duckdb · 基线 <code>0f8f010560</code>（v2.0-dev，存储版本 69）· 分析分支 <code>debug/learning</code> · 2026-08</div>
+  <p class="sub" style="margin-top:14px">DuckDB 是<strong>进程内嵌的列式 OLAP 数据库</strong>：SQLite 的部署形态 + 向量化执行 + 列存压缩。没有服务端、没有网络协议，整台引擎以库链接进宿主进程，数据就是一个文件。它是 <a href="../index.html">vane</a> 的上游地基——vane 正是在这份代码上叠加了分布式与 AI 能力。</p>
+  <p style="margin-top:10px">
+    <span class="kicker">C++ 内核 ~1400 源文件</span><span class="kicker">MIT 协议</span><span class="kicker">单文件存储 v69</span><span class="kicker">向量 2048</span>
+  </p>
+</header>
+
+<h2>一、图目录（交互式）</h2>
+<a class="dia" href="01-physical-architecture.html"><div class="num">01</div><div><b>物理架构图</b><span>进程内嵌 + 单文件 + 签名扩展（architecture）</span></div></a>
+<a class="dia" href="02-query-pipeline.html"><div class="num">02</div><div><b>核心原理图</b><span>一条 SQL 的五段流水线（dataflow）</span></div></a>
+<a class="dia" href="03-pipeline-execution.html"><div class="num">03</div><div><b>核心交互图</b><span>流水线执行的调度与推送回路（architecture）</span></div></a>
+<a class="dia" href="04-mvcc-conflict.html"><div class="num">04</div><div><b>时序图</b><span>乐观 MVCC 下的并发更新与冲突（sequence）</span></div></a>
+<a class="dia" href="05-wal-checkpoint.html"><div class="num">05</div><div><b>持久化数据流</b><span>从 WAL 追加到单文件重写（dataflow）</span></div></a>
+<a class="dia" href="06-transaction-lifecycle.html"><div class="num">06</div><div><b>事务生命周期图</b><span>快照、提交与撤销（lifecycle）</span></div></a>
+
+<h2>二、一次一个进程：总体分层</h2>
+<table>
+  <tr><th>子系统</th><th>位置</th><th>一句话职责</th></tr>
+  <tr><td>SQL 前端</td><td><code>third_party/libpg_query</code> + <code>src/parser/</code></td><td>PostgreSQL 语法解析，Transformer 转成 DuckDB 语句树</td></tr>
+  <tr><td>绑定</td><td><code>src/planner/binder/</code></td><td>名称解析 → BoundStatement（逻辑计划 + 表达式树）</td></tr>
+  <tr><td>优化</td><td><code>src/optimizer/</code></td><td>35 遍有序 pass：表达式重写、下推、DPhyp 连接序、统计传播</td></tr>
+  <tr><td>物理化</td><td><code>src/execution/physical_plan/</code></td><td>逻辑算子 → 物理算子（哈希连接/完美哈希聚合/TopN…）</td></tr>
+  <tr><td>并行执行</td><td><code>src/parallel/</code></td><td>Pipeline + 事件 DAG + 无锁任务队列，chunk 推送执行</td></tr>
+  <tr><td>存储</td><td><code>src/storage/</code></td><td>单文件块管理、行组列段压缩、WAL、检查点</td></tr>
+  <tr><td>事务</td><td><code>src/transaction/</code></td><td>乐观 MVCC：UndoBuffer 版本链 + 冲突即报错</td></tr>
+  <tr><td>目录</td><td><code>src/catalog/</code></td><td>CatalogSet 条目版本链 + 依赖管理器</td></tr>
+  <tr><td>扩展</td><td><code>src/main/extension/</code></td><td>RSA 签名 .duckdb_extension，自动加载/安装</td></tr>
+</table>
+
+<h2>三、五条核心原理</h2>
+
+<h3>1. 推送式向量化执行：一推到底的 DataChunk</h3>
+<p>执行单位是 <code>DataChunk</code>（2048 行 × N 列的 <code>Vector</code> 数组）。Vector 有六种物理形态（FLAT/CONSTANT/DICTIONARY/FSST/SEQUENCE/SHREDDED），算子统一经 <code>ToUnifiedFormat</code> 读取——常量与字典向量"零成本"适配，谓词过滤只产 selection vector 不物化。字符串 <code>string_t</code> 定长 16 字节：≤12 字节内联，长串存 4 字节前缀 + 指针，比较走前缀整数。</p>
+
+<h3>2. Pipeline + 事件 DAG：没有 MorselInfo 的 morsel 并行</h3>
+<p>查询切成多 条 Pipeline（1 source → N operators → 1 sink，阻塞算子截断）；<code>Executor</code> 以事件 DAG 驱动（Initialize→Run→PrepareFinish→Finish→Complete 五段），Join 构建靠"全部 Combine 后统一 PrepareFinalize"保证顺序。每线程领一个 <code>PipelineTask</code>，内部 <code>PipelineExecutor</code> 每次推 50 个 chunk 让出调度；并发拉取同一 source 即"morsel"语义，跨线程保序靠 batch index。背压是协作式的：sink BLOCKED → 任务挂起 → <code>InterruptState</code> 回调复活。</p>
+
+<h3>3. 35 遍有序优化 + DPhyp 连接序</h3>
+<p>优化器按<strong>固定顺序</strong>跑 35 遍 pass（每遍后有列绑定校验）：表达式重写 → CTE 内联/过滤推拉 → Deliminator 清理关联子查询展平产物 → <strong>JoinOrderOptimizer（DPhyp 超图 DP，1 万对上限后退化为贪心）</strong> → 统计传播（可触发 CompressedMaterialization 与空结果剪枝）。物理化阶段做算法选择：完美哈希聚合（组位宽 ≤ 阈值）、哈希/IEJoin/MergeJoin/NLJ 分派、ORDER BY+LIMIT 改写 TopN、LateMaterialization。</p>
+
+<h3>4. 乐观 MVCC：读永远无锁</h3>
+<p>事务拿 <code>start_time</code> 作读快照；写不改基表，而是压 <code>UndoBuffer</code>（由 BufferPool 管理，可卸盘）挂出 <code>UpdateInfo</code> 版本链。第二个更新同一行的人在 <code>UpdateSegment::CheckForConflicts</code> 处立即收到 <code>TransactionException</code>——没有等待、没有死锁检测。提交 = 遍历 undo 把版本号改写为 commit_id + WAL fsync；回滚 = 逆序回放 undo。</p>
+
+<h3>5. 单文件 + 双 Header + 签名扩展</h3>
+<p>数据文件以 magic "DUCK" 开头，两个 <code>DatabaseHeader</code> 交替写（meta_block 根指针），崩溃时任一时刻都有完好快照；提交只追加 WAL（fsync），WAL 超 <code>checkpoint_wal_size</code> 自动触发检查点：WAL 切到旁路文件 → 整库序列化（catalog 按依赖拓扑排序、行组按列段压缩）→ 新 Header 原子生效 → 截断旧 WAL。扩展是 512 字节 footer + 256 字节 RSA 签名的 <code>.duckdb_extension</code>，ABI 分 CPP/C_STRUCT/UNSTABLE 三档，scanner 类扩展可自动加载安装。</p>
+
+<h2>四、设计模式（代码证据）</h2>
+<table>
+  <tr><th>模式</th><th>用在哪里</th><th>证据</th></tr>
+  <tr><td>事件驱动的 DAG 编排</td><td>流水线完成顺序</td><td><code>src/parallel/event.cpp</code> 依赖计数 + Schedule/Finish 回调</td></tr>
+  <tr><td>状态机 + 中断回调</td><td>背压协议</td><td><code>InterruptState::Callback()</code>（interrupt.hpp）驱动任务重排</td></tr>
+  <tr><td>访问者 / 重写规则</td><td>表达式化简、列绑定校验</td><td><code>src/optimizer/rule/</code> 23 条规则；<code>LogicalOperatorVisitor</code></td></tr>
+  <tr><td>策略 + 工厂</td><td>排序框架、压缩算法</td><td><code>SortStrategy</code>（FullSort/HashedSort）；<code>CompressionFunction</code> Analyze/Compress/Scan 三回调</td></tr>
+  <tr><td>版本链（多版本）</td><td>行数据与 catalog 条目</td><td><code>UpdateInfo</code> prev/next 链；<code>CatalogSet</code> 时间戳父子链</td></tr>
+  <tr><td>双缓冲切换</td><td>文件头原子替换</td><td><code>SingleFileBlockManager::WriteHeader</code> 交替两个 DatabaseHeader</td></tr>
+  <tr><td>模板特化消除分支</td><td>排序键、ART 节点</td><td><code>SortKeyType::NO_PAYLOAD_FIXED_8…</code>；N4/N16/N48/N256 分文件实现</td></tr>
+  <tr><td>钩子扩展点家族</td><td>解析/规划/优化/算子/存储</td><td><code>ParserExtension/PlannerExtension/OptimizerExtension/OperatorExtension/StorageExtension</code></td></tr>
+</table>
+
+<h2>五、创新点</h2>
+<div class="cards">
+  <div class="card"><h4>1️⃣ 零部署 OLAP</h4><p>把"数据库 = 进程外服务"的假设推翻：查询、事务、存储、扩展全部库内化，配置就地取材（内存 80%、线程 = 物理核）。</p></div>
+  <div class="card"><h4>2️⃣ 事件 DAG 并行运行时</h4><p>不用传统调度器阻塞等待：任务可 BLOCKED 挂起、回调复活，线程永远有事可做；50 chunk 预算切片让取消与进度条都自然成立。</p></div>
+  <div class="card"><h4>3️⃣ 统计驱动的物理化</h4><p>统计传播不止选 join 顺序：能触发压缩物化、空结果剪枝、perfect hash 降级——优化器与存储格式深度耦合。</p></div>
+  <div class="card"><h4>4️⃣ 分析库里的乐观事务</h4><p>为 OLAP 定制的 MVCC：读零锁、写冲突即败、undo 走缓冲池——小事务可用，大扫描不受影响。</p></div>
+  <div class="card"><h4>5️⃣ 签名扩展分发</h4><p>扩展 = 带版权签名的制品：RSA 双密钥环（官方/社区）、SHA-256 分段哈希、ABI 三档兼容承诺、autoload 白名单。</p></div>
+  <div class="card"><h4>6️⃣ 一切皆表函数</h4><p>scan、range、read_parquet、checkpoint 语句都是 table function；文件路径替换扫描让 <code>FROM 'x.parquet'</code> 成立。</p></div>
+</div>
+
+<h2>六、与 vane fork 的对照</h2>
+<table>
+  <tr><th>维度</th><th>DuckDB 上游（本仓库）</th><th>vane 的增量</th></tr>
+  <tr><td>执行范围</td><td>单进程，pipeline 内并行</td><td>物理计划碎片化，Ray 集群分布式执行（<code>execution/distributed/</code>）</td></tr>
+  <tr><td>数据交换</td><td>进程内 DataChunk 传递</td><td>节点本地 shuffle IPC + Arrow Flight DoGet</td></tr>
+  <tr><td>容错</td><td>查询失败即终止</td><td>FTE：attempt 重试、split 重放、投机执行</td></tr>
+  <tr><td>算子</td><td>标准关系算子</td><td>新增 STREAMING_UDF / VLLM_PROJECT（AI 一等公民）</td></tr>
+  <tr><td>类型</td><td>标量 + LIST/STRUCT</td><td>新增 FILE 与 TENSOR 类型</td></tr>
+  <tr><td>扩展</td><td>RSA 签名 autoload</td><td>连接快照 + 分布式 scan/write 契约（worker 重建一致性环境）</td></tr>
+</table>
+
+<h2>七、建议学习路径</h2>
+<ol>
+  <li><strong>01 物理架构</strong>：建立"一切在进程内"的空间观。</li>
+  <li><strong>02 查询流水线</strong>：跟一条 SQL 从 libpg_query 走到物理计划（对照 <code>src/optimizer/optimizer.cpp</code> 的 pass 列表）。</li>
+  <li><strong>03 执行交互</strong>：精读 <code>pipeline_executor.cpp</code> 的推送循环与三种返回态。</li>
+  <li><strong>04 + 06</strong>：用两个客户端并发更新同一行，亲眼看冲突（对照 <code>update_segment.cpp</code>）。</li>
+  <li><strong>05</strong>：修改数据后观察 WAL 增长与 CHECKPOINT 后的文件变化。</li>
+</ol>
+
+<div class="footer">
+  分析产物：<code>analysis/*.html</code>（6 张交互图 + 本页），规格 JSON 在 <code>analysis/specs/</code>。姊妹篇：vane 深度分析（<code>../vane/analysis/index.html</code>）。生成：ZCode · archify。
+</div>
+
+</div>
+</body>
+</html>

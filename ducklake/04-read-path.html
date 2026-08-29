@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>04 · 读取路径 — DuckLake 源码深度解析</title>
+<link rel="stylesheet" href="assets/ducklake.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <a class="brand" href="index.html"><span class="logo-dot"></span>DUCKLAKE·源码解析</a>
+  <a href="index.html">首页</a>
+  <a href="01-architecture.html">01 总体架构</a>
+  <a href="02-metadata-catalog.html">02 元数据目录</a>
+  <a href="03-snapshot-timetravel.html">03 快照与Time Travel</a>
+  <a href="04-read-path.html" class="active">04 读路径</a>
+  <a href="05-write-path.html">05 写路径</a>
+  <a href="06-transaction-concurrency.html">06 事务与并发</a>
+  <a href="07-inline-compaction.html">07 内联与Compaction</a>
+  <a href="08-functions-api.html">08 函数与宏</a>
+  <a href="09-backends-encryption.html">09 后端与加密</a>
+  <a href="10-debug-guide.html">10 调试指南</a>
+</nav>
+
+<div class="page">
+
+<div class="hero">
+  <h1>CH 04 · <span class="hl">读取路径</span></h1>
+  <p class="subtitle">从一条 SELECT 到 Parquet 字节 —— 文件裁剪、列映射、删除过滤与虚拟列</p>
+</div>
+
+<div class="toc">
+  <div class="toc-title">本章目录</div>
+  <ol>
+    <li><a href="#s1">端到端读取时序</a></li>
+    <li><a href="#s2">文件裁剪流水线</a></li>
+    <li><a href="#s3">GetFilesForTable 与事务本地数据</a></li>
+    <li><a href="#s4">MultiFileReader 与 field_id 映射</a></li>
+    <li><a href="#s5">删除过滤的三种来源</a></li>
+    <li><a href="#s6">虚拟列与 rowid 布局</a></li>
+    <li><a href="#s7">动态过滤与统计</a></li>
+  </ol>
+</div>
+
+<h2 id="s1"><span class="sec-no">§4.1</span>端到端读取时序</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 4-1 · SELECT 全链路时序（读一次元数据 + N 次 Parquet）</div>
+<pre class="mermaid">
+sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant CT as DuckLakeCatalog
+    participant TE as DuckLakeTableEntry
+    participant SF as ducklake_scan<br>表函数
+    participant ML as DuckLakeMultiFileList
+    participant MM as MetadataManager
+    participant MR as DuckLakeMultiFileReader
+    participant PQ as Parquet Reader
+
+    U->>CT: SELECT … WHERE amount > 100
+    CT->>TE: GetSchemaForSnapshot → 表绑定
+    TE->>SF: GetScanFunction(at_clause)<br>table_entry.cpp:363
+    SF->>ML: DuckLakeFunctionInfo{snapshot,filter}
+    Note over ML: MultiFileList 惰性求值<br>文件列表在 scan 打开时才拉取
+    ML->>MM: GetFilesForTable(table, snapshot, filters)<br>metadata_manager.cpp:1866
+    MM->>MM: SQL 带分区/统计/TopN 裁剪 §4.2
+    MM-->>ML: 文件列表 + 统计 + 关联 delete_file
+    ML->>ML: 叠加事务本地新增/删除<br>+ 内联数据伪文件 (multi_file_list.cpp:324)
+    ML-->>MR: 文件清单
+    MR->>MR: Bind：BY_FIELD_ID 映射模式 (:225)
+    MR->>MR: MapColumns 物理名→field_id→逻辑名 (:458)
+    MR->>PQ: 逐文件打开 Parquet（并行）
+    PQ->>PQ: row group 级 zone map 再裁剪
+    PQ-->>MR: chunks
+    MR->>MR: FinalizeChunk 应用删除过滤 §4.5
+    MR-->>U: 可见行集（虚拟列按需合成）
+</pre>
+  <div class="fig-caption">控制面交互只有第 6 步一次 SQL；其余全是数据面流式执行——这就是"读路径零协调"的落地</div>
+</div>
+
+<h2 id="s2"><span class="sec-no">§4.2</span>文件裁剪流水线</h2>
+<p>读路径最核心的优化发生在 <strong>生成文件列表的 SQL 里</strong>（<code class="ref">ducklake_metadata_manager.cpp:1866</code> 起）：把谓词下推翻译成对账本表的过滤，不碰任何 Parquet 就排除绝大多数文件。</p>
+
+<div class="diagram">
+  <div class="fig-title">图 4-2 · 四层裁剪漏斗（账本 SQL 内完成）</div>
+  <svg viewBox="0 0 1140 560" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC, Microsoft YaHei, sans-serif">
+    <defs>
+      <marker id="a4-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#ffd43b"/>
+      </marker>
+      <linearGradient id="a4-funnel" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#12294d"/><stop offset="1" stop-color="#0b1020"/>
+      </linearGradient>
+    </defs>
+    <!-- 漏斗 -->
+    <path d="M 120 40 L 1020 40 L 930 130 L 210 130 Z" fill="url(#a4-funnel)" stroke="#4dd0e1"/>
+    <text x="570" y="78" text-anchor="middle" fill="#4dd0e1" font-size="14" font-weight="700">L1 快照区间过滤（必有）</text>
+    <text x="570" y="106" text-anchor="middle" fill="#8b9bc7" font-size="12">begin_snapshot ≤ snap &lt; end_snapshot（或 NULL）—— 时态表的万能谓词</text>
+
+    <path d="M 210 145 L 930 145 L 870 235 L 270 235 Z" fill="url(#a4-funnel)" stroke="#ffa94d"/>
+    <text x="570" y="183" text-anchor="middle" fill="#ffa94d" font-size="14" font-weight="700">L2 分区值裁剪</text>
+    <text x="570" y="211" text-anchor="middle" fill="#8b9bc7" font-size="12">file_partition_value 与谓词比对；bucket 分区经 murmur3 计算目标桶（:2304）</text>
+
+    <path d="M 270 250 L 870 250 L 800 340 L 340 340 Z" fill="url(#a4-funnel)" stroke="#69db7c"/>
+    <text x="570" y="288" text-anchor="middle" fill="#69db7c" font-size="14" font-weight="700">L3 列统计 min/max（zone map）</text>
+    <text x="570" y="316" text-anchor="middle" fill="#8b9bc7" font-size="12">file_column_stats 的 min/max 与 WHERE 比较，字符串用 collate 比较、NULL 计数单独判</text>
+
+    <path d="M 340 355 L 800 355 L 730 445 L 410 445 Z" fill="url(#a4-funnel)" stroke="#b197fc"/>
+    <text x="570" y="393" text-anchor="middle" fill="#b197fc" font-size="14" font-weight="700">L4 partial_max Top-N 裁剪 ★</text>
+    <text x="570" y="421" text-anchor="middle" fill="#8b9bc7" font-size="12">排序键前缀最大值 vs LIMIT N 的当前阈值 —— Top-N 查询可跳过整段文件</text>
+
+    <!-- 输出 -->
+    <path d="M 410 460 L 730 460 L 690 520 L 450 520 Z" fill="#241f0a" stroke="#ffd43b" stroke-width="1.6"/>
+    <text x="570" y="490" text-anchor="middle" fill="#ffd43b" font-size="14" font-weight="700">候选文件列表</text>
+    <text x="570" y="512" text-anchor="middle" fill="#8b9bc7" font-size="11.5">（每个文件附 row_id_start、delete_file 引用、统计）</text>
+
+    <path d="M 570 130 L 570 142" fill="none" stroke="#ffd43b" stroke-width="2" marker-end="url(#a4-arrow)"/>
+    <path d="M 570 235 L 570 247" fill="none" stroke="#ffd43b" stroke-width="2" marker-end="url(#a4-arrow)"/>
+    <path d="M 570 340 L 570 352" fill="none" stroke="#ffd43b" stroke-width="2" marker-end="url(#a4-arrow)"/>
+    <path d="M 570 445 L 570 457" fill="none" stroke="#ffd43b" stroke-width="2" marker-end="url(#a4-arrow)"/>
+  </svg>
+  <div class="fig-caption">四层全部发生在一条 SQL 里；把"读哪些文件"的决策变成对索引友好的关系查询，是 DuckLake 性能的根</div>
+</div>
+
+<h2 id="s3"><span class="sec-no">§4.3</span>GetFilesForTable 与事务本地数据</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 4-3 · DuckLakeMultiFileList::GetFilesForTable（multi_file_list.cpp:324）</div>
+<pre class="mermaid">
+flowchart TD
+    A["GetFiles() 首次调用<br>(:441→:447)"] --> B{"scan_type 分派"}
+    B -- TABLE_SCAN --> C["GetFilesForTable() :324"]
+    C --> D["① 元数据账本文件<br>metadata_manager.GetFilesForTable<br>(含 §4.2 四层裁剪)"]
+    D --> E["② 减去本事务已删文件<br>local_changes.dropped_files<br>(事务内 DELETE 后自见)"]
+    E --> F["③ 叠加事务本地 inlined 文件删除"]
+    F --> G["④ 追加事务本地新文件<br>（同事务写后读）"]
+    G --> H["⑤ 追加内联数据伪文件<br>__ducklake_inlined_transaction_local_data<br>把内存 ColumnDataCollection 当文件读"]
+    B -- DELETE_SCAN --> I["删除扫描：<br>读 delete 文件内容本身"]
+    B -- CHANGE_SCAN --> J["insertions/deletions 差集扫描"]
+    H --> K["vector&lt;DuckLakeFileListEntry&gt;<br>（含 per-file 统计/分区值/加密key）"]
+    I --> K
+    J --> K
+</pre>
+  <div class="fig-caption">"内联数据也是文件"的抽象让上层 scan 完全不感知数据是 Parquet 还是元数据库里的行</div>
+</div>
+
+<h2 id="s4"><span class="sec-no">§4.4</span>MultiFileReader 与 field_id 映射</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 4-4 · 列映射决策树（CreateMappingWithGlobalState，multi_file_reader.cpp:534）</div>
+<pre class="mermaid">
+flowchart TD
+    A["打开一个数据文件"] --> B{"文件在 Parquet footer<br>里带 field_id?"}
+    B -- "是（新文件）" --> C["BY_FIELD_ID 模式<br>bind_data.mapping = BY_FIELD_ID (:225)"]
+    C --> D["MapColumns :458：<br>逻辑列 field_id → 物理 column index<br>（含嵌套 children 递归 :515）"]
+    B -- "否（老文件）" --> E{"data_file.mapping_id<br>有 name_mapping?"}
+    E -- 是 --> F["按 ducklake_name_mapping：<br>物理名 → field_id → 逻辑名 (:550-563)"]
+    E -- 否 --> G["位置映射 CreatePositionalMapping<br>按列顺序对齐 (:564-579)"]
+    D --> H{"查询列不在文件里?<br>（后加的列）"}
+    F --> H
+    G --> H
+    H -- 是 --> I["stub 常量列<br>__ducklake_unknown_identifier (:480)<br>分区列从文件路径 hive 段提取 (:485-503)"]
+    H -- 否 --> J["正常投影"]
+</pre>
+  <div class="fig-caption">三种映射模式覆盖了 schema evolution 的全部历史形态；分区列永远不在 Parquet 里，从目录名还原</div>
+</div>
+
+<div class="diagram">
+  <div class="fig-title">图 4-5 · 读取侧类图</div>
+<pre class="mermaid">
+classDiagram
+    class MultiFileReader {
+        &lt;&lt;DuckDB抽象&gt;&gt;
+        +Bind / CreateMapping
+        +CreateReader / FinalizeChunk
+    }
+    class DuckLakeMultiFileReader {
+        -COLUMN_IDENTIFIER_SNAPSHOT_ID = 1e19
+        +Bind() BY_FIELD_ID
+        +MapColumns() field_id翻译
+        +CreateMappingWithGlobalState()
+        +TryCreateInlinedDataReader() :389
+        +GetVirtualColumnExpression() rowid合成
+    }
+    MultiFileReader <|-- DuckLakeMultiFileReader
+    class MultiFileList {
+        &lt;&lt;DuckDB抽象&gt;&gt;
+        +GetFiles()
+    }
+    class DuckLakeMultiFileList {
+        -scan_type TABLE/DELETE/CHANGE
+        -filter_info 动态过滤
+        +GetFilesForTable() :324
+        +GetFilesForTableInlined()
+    }
+    MultiFileList <|-- DuckLakeMultiFileList
+    class BaseFileReader {
+        <<抽象>>
+    }
+    class ParquetFileReader { }
+    class DuckLakeInlinedDataReader {
+        把元数据库内联表/内存集合当文件读
+    }
+    BaseFileReader <|-- ParquetFileReader
+    BaseFileReader <|-- DuckLakeInlinedDataReader
+    DuckLakeMultiFileReader --> BaseFileReader : 创建
+    DuckLakeMultiFileList --> DuckLakeMultiFileReader : 提供文件
+</pre>
+  <div class="fig-caption">整个读路径只实现 DuckDB 的 MultiFile 抽象，Parquet 扫描、并行、投影下推全部复用内核</div>
+</div>
+
+<h2 id="s5"><span class="sec-no">§4.5</span>删除过滤的三种来源</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 4-6 · 扫描时的删除过滤管线（InitializeReader，multi_file_reader.cpp:281-327）</div>
+<pre class="mermaid">
+flowchart LR
+    subgraph sources ["删除信息的三个来源"]
+        S1["① delete parquet 文件<br>（positional deletes）<br>列: row_id"]
+        S2["② puffin 删除向量<br>（roaring bitmap，Iceberg V3）"]
+        S3["③ 元数据库内联删除表<br>（小表删除直接记行）"]
+    end
+    S1 --> M["DuckLakeDeleteMap<br>按 data_file_id 聚合"]
+    S2 --> M
+    S3 --> M
+    M --> F["DuckLakeDeleteFilter : Filter()<br>ducklake_delete_filter.hpp:26"]
+    F --> P["Parquet Reader 出 chunk →<br>FinalizeChunk 应用 SelectionVector<br>把已删行位剔除"]
+    P --> O["净数据输出"]
+</pre>
+  <div class="fig-caption">删除永远"叠加"在旧文件上，不重写数据——写放大为零，读放大由 compaction（CH 07）按阈值偿还</div>
+</div>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>来源</th><th>物理形态</th><th>适用场景</th><th>内存结构</th></tr></thead>
+  <tbody>
+    <tr><td>positional delete</td><td><code>ducklake-…-delete.parquet</code>（row_id 列）</td><td>默认，兼容 Iceberg V2 语义</td><td><code>vector&lt;idx_t&gt; deleted_rows</code></td></tr>
+    <tr><td>deletion vector</td><td><code>…-delete.puffin</code>（roaring bitmap blob）</td><td><code>ducklake_write_deletion_vectors=true</code></td><td>roaring bitmap → 解码为位图</td></tr>
+    <tr><td>inlined deletes</td><td>元数据库内联表行</td><td>数据被内联的小表</td><td>直接 SQL 过滤</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="s6"><span class="sec-no">§4.6</span>虚拟列与 rowid 布局</h2>
+<p>虚拟列在 <code class="ref">ducklake_table_entry.cpp:402-415</code> 注册，不占物理存储、扫描时按需合成：</p>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>虚拟列</th><th>类型</th><th>合成方式</th><th>特殊列号</th></tr></thead>
+  <tbody>
+    <tr><td><code>rowid</code></td><td>BIGINT</td><td><strong>data_file.row_id_start + file_row_number</strong></td><td><code>COLUMN_IDENTIFIER_ROW_ID</code></td></tr>
+    <tr><td><code>snapshot_id</code></td><td>BIGINT</td><td>行所在文件提交时的快照号</td><td><code>1e19</code>（专用哨兵，reader.hpp）</td></tr>
+    <tr><td><code>filename</code></td><td>VARCHAR</td><td>文件路径</td><td>内核标准列</td></tr>
+    <tr><td><code>file_row_number</code></td><td>BIGINT</td><td>文件内行号</td><td>内核标准列</td></tr>
+    <tr><td><code>file_index</code></td><td>UBIGINT</td><td>文件序号</td><td>内核标准列</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="diagram">
+  <div class="fig-title">图 4-7 · 全局 rowid 的编排：row_id_start 让删除/更新可精确"点杀"</div>
+  <svg viewBox="0 0 1100 360" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC, Microsoft YaHei, sans-serif">
+    <rect x="60" y="40" width="300" height="180" rx="12" fill="#0b1020" stroke="#4dd0e1"/>
+    <text x="210" y="68" text-anchor="middle" fill="#4dd0e1" font-size="13" font-weight="700">文件A · row_id_start = 1,000,000</text>
+    <text x="210" y="100" text-anchor="middle" fill="#8b9bc7" font-size="12" font-family="Menlo,monospace">物理行 0 → rowid 1,000,000</text>
+    <text x="210" y="126" text-anchor="middle" fill="#8b9bc7" font-size="12" font-family="Menlo,monospace">物理行 1 → rowid 1,000,001</text>
+    <text x="210" y="152" text-anchor="middle" fill="#8b9bc7" font-size="12" font-family="Menlo,monospace">物理行 2 → rowid 1,000,002</text>
+    <text x="210" y="186" text-anchor="middle" fill="#5f6f9e" font-size="11.5">row_count = 3 → 下一个起点 1,000,003</text>
+
+    <rect x="430" y="40" width="300" height="180" rx="12" fill="#0b1020" stroke="#4dd0e1"/>
+    <text x="580" y="68" text-anchor="middle" fill="#4dd0e1" font-size="13" font-weight="700">文件B · row_id_start = 1,000,003</text>
+    <text x="580" y="100" text-anchor="middle" fill="#8b9bc7" font-size="12" font-family="Menlo,monospace">物理行 0 → rowid 1,000,003</text>
+    <text x="580" y="126" text-anchor="middle" fill="#8b9bc7" font-size="12" font-family="Menlo,monospace">物理行 1 → rowid 1,000,004</text>
+    <text x="580" y="160" text-anchor="middle" fill="#5f6f9e" font-size="11.5">next_row_id_start 写入提交时的游标</text>
+    <text x="580" y="184" text-anchor="middle" fill="#5f6f9e" font-size="11.5">snapshot.next_file_id 同理推进</text>
+
+    <rect x="800" y="40" width="240" height="180" rx="12" fill="#2a1f0a" stroke="#ff8787"/>
+    <text x="920" y="68" text-anchor="middle" fill="#ff8787" font-size="13" font-weight="700">删除文件D（对文件A）</text>
+    <text x="920" y="100" text-anchor="middle" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">row_id</text>
+    <text x="920" y="126" text-anchor="middle" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">1,000,001</text>
+    <text x="920" y="160" text-anchor="middle" fill="#5f6f9e" font-size="11.5">UPDATE = 全行删除文件D</text>
+    <text x="920" y="184" text-anchor="middle" fill="#5f6f9e" font-size="11.5">+ 受影响行重写新文件</text>
+
+    <path d="M 360 130 L 425 130" fill="none" stroke="#8b9bc7" stroke-width="1.8" stroke-dasharray="5 4"/>
+    <text x="393" y="118" text-anchor="middle" fill="#5f6f9e" font-size="10.5">连续编排</text>
+    <path d="M 360 190 C 500 280, 700 280, 795 195" fill="none" stroke="#ff8787" stroke-width="2" />
+    <text x="575" y="290" text-anchor="middle" fill="#ff8787" font-size="11.5">DELETE 定位：rowid → 文件A + 物理行 1</text>
+
+    <rect x="60" y="255" width="980" height="70" rx="12" fill="#101731" stroke="#1f2a4d"/>
+    <text x="80" y="283" fill="#dbe4ff" font-size="12.5" font-weight="700">事务本地数据的 rowid 隔离：TRANSACTION_LOCAL_ROW_ID_START = 1e18（index.hpp）</text>
+    <text x="80" y="308" fill="#8b9bc7" font-size="11.5">未提交数据的 rowid 从 1e18 起编，与已提交空间永不重叠——rowid 的数值区间本身就是可见性的一部分</text>
+  </svg>
+  <div class="fig-caption">rowid 兼具"主键+地址"两重身份；DELETE 输出的正是这些 rowid（ducklake_delete.cpp 写 delete parquet）</div>
+</div>
+
+<h2 id="s7"><span class="sec-no">§4.7</span>动态过滤与统计</h2>
+<div class="grid g2">
+  <div class="card cyan">
+    <h4>Top-N 动态过滤（Dynamic Filter）</h4>
+    <p>ORDER BY … LIMIT N 执行中，DuckDB 把"当前第 N 名的排序键值"回灌给扫描。DuckLake 把它转成 <code>partial_max &lt; 阈值</code> 谓词对<b>文件列表动态重裁剪</b>——文件列表是惰性的（GetFiles 首次调用才拉取），天然支持二次裁剪。</p>
+  </div>
+  <div class="card">
+    <h4>Join 谓词下推</h4>
+    <p><code>DuckLakeUtil::ExtractDynamicFilter</code> 一类工具从过滤条件提取可下推表达式，经 <code>filter_info</code> 传入 <code>GetFilesForTable</code> 的 SQL——min/max 裁剪用的是"<b>过滤后的</b>"谓词，而不只是用户写下的 WHERE。</p>
+  </div>
+</div>
+
+<div class="pager">
+  <a href="03-snapshot-timetravel.html">
+    <div class="pg-label">← 上一章</div>
+    <div class="pg-title">03 · 快照与 Time Travel</div>
+  </a>
+  <a class="next" href="05-write-path.html">
+    <div class="pg-label">下一章 →</div>
+    <div class="pg-title">05 · 写入路径</div>
+  </a>
+</div>
+
+<div class="footer">DuckLake 源码深度解析 · CH 04 · 基于 duckdb/ducklake @ 27c14caf</div>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      primaryColor: '#1a2447',
+      primaryTextColor: '#dbe4ff',
+      primaryBorderColor: '#4dd0e1',
+      lineColor: '#8b9bc7',
+      secondaryColor: '#241f0a',
+      tertiaryColor: '#12294d',
+      fontFamily: 'PingFang SC, Microsoft YaHei, sans-serif',
+      fontSize: '14px'
+    },
+    flowchart: { curve: 'basis', htmlLabels: true },
+    sequence: { actorMargin: 40, width: 170 }
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>08 · SQL 函数与宏全景 — DuckLake 源码深度解析</title>
+<link rel="stylesheet" href="assets/ducklake.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <a class="brand" href="index.html"><span class="logo-dot"></span>DUCKLAKE·源码解析</a>
+  <a href="index.html">首页</a>
+  <a href="01-architecture.html">01 总体架构</a>
+  <a href="02-metadata-catalog.html">02 元数据目录</a>
+  <a href="03-snapshot-timetravel.html">03 快照与Time Travel</a>
+  <a href="04-read-path.html">04 读路径</a>
+  <a href="05-write-path.html">05 写路径</a>
+  <a href="06-transaction-concurrency.html">06 事务与并发</a>
+  <a href="07-inline-compaction.html">07 内联与Compaction</a>
+  <a href="08-functions-api.html" class="active">08 函数与宏</a>
+  <a href="09-backends-encryption.html">09 后端与加密</a>
+  <a href="10-debug-guide.html">10 调试指南</a>
+</nav>
+
+<div class="page">
+
+<div class="hero">
+  <h1>CH 08 · <span class="hl">SQL 函数</span>与宏全景</h1>
+  <p class="subtitle">21 个表函数 + 12 个内置宏 + 1 个标量函数 —— DuckLake 的全部用户接口面</p>
+</div>
+
+<div class="toc">
+  <div class="toc-title">本章目录</div>
+  <ol>
+    <li><a href="#s1">函数全景地图</a></li>
+    <li><a href="#s2">注册机制</a></li>
+    <li><a href="#s3">内置宏的懒加载</a></li>
+    <li><a href="#s4">元数据查询函数</a></li>
+    <li><a href="#s5">表维护函数</a></li>
+    <li><a href="#s6">配置与选项体系</a></li>
+    <li><a href="#s7">murmur3 与内部函数</a></li>
+  </ol>
+</div>
+
+<h2 id="s1"><span class="sec-no">§8.1</span>函数全景地图</h2>
+<p class="lead">全部注册于 <code class="ref">src/ducklake_extension.cpp:53-115</code>（<code>LoadInternal</code>），一条 <code>LOAD ducklake</code> 全部就位。</p>
+
+<div class="diagram">
+  <div class="fig-title">图 8-1 · 用户接口面全景（按职能分区）</div>
+  <svg viewBox="0 0 1140 560" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC, Microsoft YaHei, sans-serif">
+    <style>.fn { font: 11.5px Menlo, monospace; fill: #dbe4ff; } .fd { font: 10px sans-serif; fill: #5f6f9e; }</style>
+    <!-- 观测区 -->
+    <rect x="20" y="20" width="360" height="250" rx="14" fill="#12294d" stroke="#4dd0e1" stroke-width="1.3"/>
+    <text x="200" y="48" text-anchor="middle" fill="#4dd0e1" font-size="14" font-weight="700">🔍 元数据观测</text>
+    <text class="fn" x="40" y="78">ducklake_snapshots(catalog)</text>
+    <text class="fd" x="40" y="94">全部快照：id/时间/schema_version/游标</text>
+    <text class="fn" x="40" y="120">ducklake_table_info(catalog, schema, table)</text>
+    <text class="fd" x="40" y="136">表详情：列树/分区/排序/统计阈值</text>
+    <text class="fn" x="40" y="162">ducklake_list_files(catalog, table)</text>
+    <text class="fd" x="40" y="178">文件清单（支持 AT 版本/时间）</text>
+    <text class="fn" x="40" y="204">ducklake_current_snapshot / last_committed_snapshot</text>
+    <text class="fd" x="40" y="220">当前 / 最新已提交快照单行视图</text>
+    <text class="fn" x="40" y="246">ducklake_table_changes / insertions / deletions</text>
+    <text class="fd" x="40" y="262">CDC 三件套（CH 03 §3.6）</text>
+
+    <!-- 维护区 -->
+    <rect x="400" y="20" width="360" height="250" rx="14" fill="#12331f" stroke="#69db7c" stroke-width="1.3"/>
+    <text x="580" y="48" text-anchor="middle" fill="#69db7c" font-size="14" font-weight="700">🛠️ 表维护</text>
+    <text class="fn" x="420" y="78">ducklake_merge_adjacent_files(…)</text>
+    <text class="fd" x="420" y="94">合并相邻小文件（CH 07）</text>
+    <text class="fn" x="420" y="120">ducklake_rewrite_data_files(…)</text>
+    <text class="fd" x="420" y="136">按删除比例重写文件</text>
+    <text class="fn" x="420" y="162">ducklake_expire_snapshots(older_than)</text>
+    <text class="fd" x="420" y="178">过期快照（dry_run 可预览）</text>
+    <text class="fn" x="420" y="204">ducklake_cleanup_old_files / delete_orphaned_files</text>
+    <text class="fd" x="420" y="220">物理文件 GC / 孤儿清理</text>
+    <text class="fn" x="420" y="246">ducklake_flush_inlined_data(…)</text>
+    <text class="fd" x="420" y="262">内联数据刷成 Parquet（CH 07 §7.3）</text>
+
+    <!-- 摄取与配置 -->
+    <rect x="780" y="20" width="340" height="250" rx="14" fill="#241f0a" stroke="#ffd43b" stroke-width="1.3"/>
+    <text x="950" y="48" text-anchor="middle" fill="#ffd43b" font-size="14" font-weight="700">📥 摄取与配置</text>
+    <text class="fn" x="800" y="78">ducklake_add_data_files(…)</text>
+    <text class="fd" x="800" y="94">外部 Parquet 注册进账本（:1389）</text>
+    <text class="fd" x="800" y="110">扫描 footer 校验 schema/统计（免重写）</text>
+    <text class="fn" x="800" y="136">ducklake_set_option / ducklake_options</text>
+    <text class="fd" x="800" y="152">三级配置写/读（CH 02 §2.7）</text>
+    <text class="fn" x="800" y="178">ducklake_settings</text>
+    <text class="fd" x="800" y="194">全局 SET 项视图</text>
+    <text class="fn" x="800" y="220">ducklake_set_commit_message</text>
+    <text class="fd" x="800" y="236">为下一提交定制 commit message</text>
+    <text class="fn" x="800" y="262" fill="#b197fc">ducklake_commit ★</text>
+
+    <!-- 底部：系统内部 + 标量 -->
+    <rect x="20" y="300" width="1100" height="110" rx="14" fill="#2a1f4d" stroke="#b197fc" stroke-width="1.3"/>
+    <text x="570" y="330" text-anchor="middle" fill="#b197fc" font-size="14" font-weight="700">⚙️ 系统内部接口（日常不需要直接调）</text>
+    <text class="fn" x="80" y="362">ducklake_scan</text>
+    <text class="fd" x="230" y="362">扫描入口，为序列化/并行注册（:113）</text>
+    <text class="fn" x="420" y="362">ducklake_commit(schema, version, max_retry_count=&gt;…)</text>
+    <text class="fd" x="880" y="362">服务端提交入口（CH 06 §6.6）</text>
+    <text class="fn" x="80" y="392">murmur3_32(col)</text>
+    <text class="fd" x="230" y="392">标量函数，Iceberg 兼容 bucket 分区（:124-126）</text>
+    <text class="fn" x="420" y="392">Secret 类型与函数</text>
+    <text class="fd" x="600" y="392">ducklake secret（CH 09）</text>
+
+    <!-- 底部注解 -->
+    <text x="570" y="450" text-anchor="middle" fill="#8b9bc7" font-size="12.5">合计：21 个表函数 + 1 个标量函数 + 1 种 Secret 类型 + 12 个每-schema 自动可用的内置宏</text>
+    <text x="570" y="478" text-anchor="middle" fill="#5f6f9e" font-size="11.5">所有函数第一个参数都是 ATTACH 别名（catalog 名），返回关系（表函数）或修改元数据后返回状态行</text>
+  </svg>
+  <div class="fig-caption">接口设计原则：观测函数永远只读；维护函数显式传参、可 dry_run；危险操作（expire/cleanup）与查询解耦</div>
+</div>
+
+<h2 id="s2"><span class="sec-no">§8.2</span>注册机制</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 8-2 · 函数注册与解析路径</div>
+<pre class="mermaid">
+flowchart LR
+    A["LOAD ducklake"] --> B["LoadInternal<br>ducklake_extension.cpp:20"]
+    B --> C["config.AddExtensionOption ×7<br>全局设置 :29-51"]
+    B --> D["ExtensionFunctionLoader<br>注册 21 个表函数 :53-115"]
+    B --> E["注册 Secret 类型 :117"]
+    B --> F["ScalarFunction murmur3_32 :124"]
+    D --> G["SQL 解析 ducklake_xxx(…)<br>→ CatalogEntry 找函数"]
+    E2["每-schema 宏懒加载<br>（§8.3 另行补充）"] -.-> G
+    G --> H["BaseMetadataFunction<br>公共基类：catalog 参数解析<br>base_metadata_function.cpp"]
+    H --> I["各函数 Bind/Execute<br>经 MetadataManager 查询"]
+</pre>
+  <div class="fig-caption">函数实现全部在 src/functions/，共享"解析 catalog 名 → 拿 MetadataManager"的基类骨架</div>
+</div>
+
+<h2 id="s3"><span class="sec-no">§8.3</span>内置宏的懒加载</h2>
+<p>每个 schema 首次被查询时，<code class="ref">ducklake_schema_entry.cpp:395</code> 触发 <code>TryLoadBuiltInFunction</code>，把 12 个语法糖宏注入为该 schema 的 table macro（宏表定义 <code class="ref">ducklake_default_functions.cpp:10-24</code>）：</p>
+
+<div class="diagram">
+  <div class="fig-title">图 8-3 · 宏懒加载时序</div>
+<pre class="mermaid">
+sequenceDiagram
+    participant U as 用户
+    participant B as Binder
+    participant SE as DuckLakeSchemaEntry
+    participant DF as ducklake_default_functions.cpp
+
+    U->>B: SELECT * FROM my_snapshots()（想调 snapshots 宏）
+    B->>SE: LookupSchema 触发首次加载
+    SE->>SE: TryLoadBuiltInFunction (schema_entry.cpp:395)
+    SE->>DF: LoadBuiltInFunction (:27) 遍历宏表 :10-24
+    DF-->>SE: 12 个 DuckLakeTableMacroEntry<br>（snapshots/table_info/options/…）
+    SE-->>B: 注入 catalog set
+    B-->>U: my_snapshots() 等价于<br>ducklake_snapshots('my_attach')
+</pre>
+  <div class="fig-caption">宏的作用：让函数像"当前库自带"一样被调用，省去每次传 catalog 名；宏名与函数名一一对应</div>
+</div>
+
+<h2 id="s4"><span class="sec-no">§8.4</span>元数据查询函数 · 速查</h2>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>函数</th><th>签名要点</th><th>返回列（核心）</th><th>源码</th></tr></thead>
+  <tbody>
+    <tr><td><code>ducklake_snapshots(c)</code></td><td>c = ATTACH 别名</td><td>snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id</td><td><code class="ref">ducklake_snapshots.cpp:173</code></td></tr>
+    <tr><td><code>ducklake_current_snapshot(c)</code></td><td>事务内一致视图</td><td>单行快照</td><td><code class="ref">:28</code></td></tr>
+    <tr><td><code>ducklake_last_committed_snapshot(c)</code></td><td>无视当前事务</td><td>最新已提交快照</td><td><code class="ref">:30</code></td></tr>
+    <tr><td><code>ducklake_table_info(c, s, t)</code></td><td>支持分区/排序信息</td><td>column tree, type, partition_key, sort_key, stats 细节</td><td><code class="ref">ducklake_table_info.cpp:56</code></td></tr>
+    <tr><td><code>ducklake_list_files(c, s, t)</code></td><td><code>snapshot_version=&gt;</code> / <code>snapshot_time=&gt;</code></td><td>path, file_size_bytes, row_count, partition 值, 删除计数</td><td><code class="ref">ducklake_list_files.cpp:109</code></td></tr>
+    <tr><td><code>ducklake_table_changes(c, s, t, from, to)</code></td><td>版本区间（宏展开）</td><td>rowid + 全部业务列（insertions∪deletions）</td><td><code class="ref">ducklake_table_changes.cpp:8</code></td></tr>
+    <tr><td><code>ducklake_table_insertions / _deletions(c,s,t,from,to)</code></td><td>单向差集</td><td>同上</td><td><code class="ref">ducklake_table_insertions.cpp:92,102</code></td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="s5"><span class="sec-no">§8.5</span>表维护函数 · 速查</h2>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>函数</th><th>关键参数</th><th>源码</th></tr></thead>
+  <tbody>
+    <tr><td><code>ducklake_merge_adjacent_files(c, schema?, table?)</code></td><td><code>target_file_size</code>、<code>newer_than</code>（时间戳，只合并新提交）</td><td><code class="ref">ducklake_compaction_functions.cpp:949</code></td></tr>
+    <tr><td><code>ducklake_rewrite_data_files(c, schema?, table?)</code></td><td><code>delete_threshold</code>（默认 0.95）、<code>where_clause</code> 过滤候选</td><td><code class="ref">:976</code></td></tr>
+    <tr><td><code>ducklake_expire_snapshots(c, …)</code></td><td><code>older_than</code> / <code>versions</code> 列表 / <code>dry_run</code></td><td><code class="ref">ducklake_expire_snapshots.cpp:152</code></td></tr>
+    <tr><td><code>ducklake_cleanup_old_files(c)</code></td><td>物理删除已登记待删文件</td><td><code class="ref">ducklake_cleanup_files.cpp:166</code></td></tr>
+    <tr><td><code>ducklake_delete_orphaned_files(c)</code></td><td>对象存储扫描 vs 账本比对</td><td><code class="ref">:174</code></td></tr>
+    <tr><td><code>ducklake_flush_inlined_data(c, schema?, table?)</code></td><td>内联 → Parquet</td><td><code class="ref">ducklake_flush_inlined_data.cpp:787</code></td></tr>
+    <tr><td><code>ducklake_add_data_files(c, s, t, path)</code></td><td>外部 Parquet 免拷贝入湖（footer 校验+统计抽取）</td><td><code class="ref">ducklake_add_data_files.cpp:1389</code></td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout green">
+  <div class="co-title">✨ add_data_files 的工程价值</div>
+  已有大量 Parquet（如从旧系统迁移）时，<code>ducklake_add_data_files</code> 用独立 Parquet footer 扫描器（<code class="ref">common/parquet_file_scanner.cpp</code>）读取 schema 与统计后<b>直接登记入账本</b>——数据不复制、不重写，秒级入湖。
+</div>
+
+<h2 id="s6"><span class="sec-no">§8.6</span>配置与选项体系</h2>
+<div class="grid g2">
+  <div class="card cyan">
+    <h4>ducklake_set_option / options / settings</h4>
+    <p>三个函数覆盖三级配置的写与读（CH 02 §2.7）：<code>ducklake_set_option(c, 'k','v')</code> 全局；<code>ducklake_set_option(c,'schema','k','v')</code> schema 级；再带表名则 table 级。读取用 <code>ducklake_options(c[, schema[, table]])</code>，全局 SET 用 <code>ducklake_settings(c)</code>（<code class="ref">ducklake_set_option.cpp:235</code> / <code class="ref">ducklake_options.cpp:175</code> / <code class="ref">ducklake_settings.cpp:49</code>）。</p>
+  </div>
+  <div class="card">
+    <h4>ducklake_set_commit_message</h4>
+    <p>为事务的下一个提交定制 <code>ducklake_snapshot_changes.commit_message</code> 与 author（<code class="ref">ducklake_set_commit_message.cpp:56</code>）——审计友好：每次提交在快照表里可读"谁、为什么"。</p>
+  </div>
+</div>
+
+<h2 id="s7"><span class="sec-no">§8.7</span>murmur3 与内部函数</h2>
+<ul>
+  <li><strong><code>murmur3_32(col)</code></strong>（<code class="ref">ducklake_murmur3.cpp:102</code>）：与 Iceberg 规范逐字节一致的 murmur3 哈希，bucket(n, col) 分区的数学基础；NULL 处理近期修复为 <code>FlatVector::SetNull</code>（见 HEAD 提交 #1035）。</li>
+  <li><strong><code>ducklake_scan</code></strong>（<code class="ref">:113-115</code>）：为 scan 绑定信息反序列化注册的内部表函数——并行扫描 worker 需要 rebuild <code>DuckLakeFunctionInfo</code>。</li>
+  <li><strong><code>ducklake_commit</code></strong>（<code class="ref">ducklake_commit.cpp:70-76</code>）：服务端提交入口（CH 06 §6.6），返回一行三元组 <code>(committed_snapshot_id, committed_schema_version, had_flushes)</code>。</li>
+</ul>
+
+<div class="pager">
+  <a href="07-inline-compaction.html">
+    <div class="pg-label">← 上一章</div>
+    <div class="pg-title">07 · 数据内联与 Compaction</div>
+  </a>
+  <a class="next" href="09-backends-encryption.html">
+    <div class="pg-label">下一章 →</div>
+    <div class="pg-title">09 · 可插拔后端与安全</div>
+  </a>
+</div>
+
+<div class="footer">DuckLake 源码深度解析 · CH 08 · 基于 duckdb/ducklake @ 27c14caf</div>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      primaryColor: '#1a2447',
+      primaryTextColor: '#dbe4ff',
+      primaryBorderColor: '#4dd0e1',
+      lineColor: '#8b9bc7',
+      secondaryColor: '#241f0a',
+      tertiaryColor: '#12294d',
+      fontFamily: 'PingFang SC, Microsoft YaHei, sans-serif',
+      fontSize: '14px'
+    },
+    flowchart: { curve: 'basis', htmlLabels: true },
+    sequence: { actorMargin: 40, width: 170 }
+  });
+</script>
+</body>
+</html>

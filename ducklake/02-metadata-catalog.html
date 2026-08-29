@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>02 · 元数据目录设计 — DuckLake 源码深度解析</title>
+<link rel="stylesheet" href="assets/ducklake.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <a class="brand" href="index.html"><span class="logo-dot"></span>DUCKLAKE·源码解析</a>
+  <a href="index.html">首页</a>
+  <a href="01-architecture.html">01 总体架构</a>
+  <a href="02-metadata-catalog.html" class="active">02 元数据目录</a>
+  <a href="03-snapshot-timetravel.html">03 快照与Time Travel</a>
+  <a href="04-read-path.html">04 读路径</a>
+  <a href="05-write-path.html">05 写路径</a>
+  <a href="06-transaction-concurrency.html">06 事务与并发</a>
+  <a href="07-inline-compaction.html">07 内联与Compaction</a>
+  <a href="08-functions-api.html">08 函数与宏</a>
+  <a href="09-backends-encryption.html">09 后端与加密</a>
+  <a href="10-debug-guide.html">10 调试指南</a>
+</nav>
+
+<div class="page">
+
+<div class="hero">
+  <h1>CH 02 · <span class="hl">元数据目录</span>设计</h1>
+  <p class="subtitle">28 张表就是整个 Lakehouse 的大脑 —— DDL、关系、初始化与版本迁移</p>
+</div>
+
+<div class="toc">
+  <div class="toc-title">本章目录</div>
+  <ol>
+    <li><a href="#s1">28 张表全景图</a></li>
+    <li><a href="#s2">实体关系 ER 图</a></li>
+    <li><a href="#s3">核心表逐个剖析</a></li>
+    <li><a href="#s4">建库初始化流程</a></li>
+    <li><a href="#s5">版本迁移链 V0.1→V1.1</a></li>
+    <li><a href="#s6">多后端工厂与 V1_1 模板</a></li>
+    <li><a href="#s7">三级配置体系</a></li>
+  </ol>
+</div>
+
+<h2 id="s1"><span class="sec-no">§2.1</span>28 张表全景图</h2>
+<p class="lead">全部 DDL 以 C++ raw string 形式集中在 <code class="ref">src/storage/ducklake_metadata_manager.cpp:237-310</code>（<code>GetCreateTableStatements</code>），<code>{METADATA_CATALOG}</code> 占位符执行时替换。V1.1 追加的 <code>ducklake_view_column_tag</code> 由 <code class="ref">MigrateV10（:435）</code> 创建。</p>
+
+<div class="diagram">
+  <div class="fig-title">图 2-1 · 28 张元数据表 · 七大职能分组</div>
+  <svg viewBox="0 0 1120 640" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC, Microsoft YaHei, sans-serif">
+    <style>
+      .grp { rx:12; }
+      .t { font: 11.5px Menlo, monospace; fill: #dbe4ff; }
+      .tc { font: 10px Menlo, monospace; fill: #5f6f9e; }
+      .gt { font: 13.5px sans-serif; font-weight: 700; }
+    </style>
+    <!-- 组1 版本与提交 -->
+    <rect class="grp" x="20" y="20" width="350" height="180" fill="#241f0a" stroke="#ffd43b" stroke-width="1.4"/>
+    <text class="gt" x="36" y="46" fill="#ffd43b">① 版本与提交（3）</text>
+    <rect x="36" y="58" width="318" height="30" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="48" y="77">ducklake_metadata</text><text class="tc" x="200" y="77">key/value/scope 全局属性</text>
+    <rect x="36" y="94" width="318" height="30" rx="7" fill="#0b1020" stroke="#ffd43b"/>
+    <text class="t" x="48" y="113" fill="#ffd43b">ducklake_snapshot ★</text><text class="tc" x="220" y="113">版本锚点·每次提交+1</text>
+    <rect x="36" y="130" width="318" height="30" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="48" y="149">ducklake_snapshot_changes</text><text class="tc" x="250" y="149">changes_made blob</text>
+    <text class="tc" x="36" y="182">★ 乐观并发的心脏：主键自增 + 冲突比对依据</text>
+
+    <!-- 组2 目录结构 -->
+    <rect class="grp" x="385" y="20" width="350" height="300" fill="#12294d" stroke="#4dd0e1" stroke-width="1.4"/>
+    <text class="gt" x="401" y="46" fill="#4dd0e1">② 目录结构（9）</text>
+    <rect x="401" y="58" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="413" y="76">ducklake_schema</text><text class="tc" x="530" y="76">begin/end_snapshot 区间</text>
+    <rect x="401" y="90" width="318" height="28" rx="7" fill="#0b1020" stroke="#4dd0e1"/>
+    <text class="t" x="413" y="108" fill="#4dd0e1">ducklake_table ★</text><text class="tc" x="540" y="108">表注册·uuid·path</text>
+    <rect x="401" y="122" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="413" y="140">ducklake_view</text><text class="tc" x="530" y="140">视图 SQL</text>
+    <rect x="401" y="154" width="318" height="28" rx="7" fill="#0b1020" stroke="#4dd0e1"/>
+    <text class="t" x="413" y="172" fill="#4dd0e1">ducklake_column ★</text><text class="tc" x="540" y="172">嵌套列树·field_id</text>
+    <rect x="401" y="186" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="413" y="204">ducklake_tag / column_tag / view_column_tag</text>
+    <rect x="401" y="218" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="413" y="236">ducklake_macro / _impl / _parameters</text><text class="tc" x="600" y="236">SQL 宏</text>
+    <text class="tc" x="401" y="270">begin_snapshot ≤ 当前 &lt; end_snapshot</text>
+    <text class="tc" x="401" y="288">（或 end IS NULL）即该版本可见 —— 一行多版本</text>
+    <text class="tc" x="401" y="306">改名/删除不 UPDATE 旧行，而是闭合 end_snapshot</text>
+
+    <!-- 组3 文件账本 -->
+    <rect class="grp" x="750" y="20" width="350" height="220" fill="#12331f" stroke="#69db7c" stroke-width="1.4"/>
+    <text class="gt" x="766" y="46" fill="#69db7c">③ 数据文件账本（5）</text>
+    <rect x="766" y="58" width="318" height="28" rx="7" fill="#0b1020" stroke="#69db7c"/>
+    <text class="t" x="778" y="76" fill="#69db7c">ducklake_data_file ★</text><text class="tc" x="920" y="76">path·size·rowcount·统计</text>
+    <rect x="766" y="90" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="778" y="108">ducklake_delete_file</text><text class="tc" x="910" y="108">parquet|puffin</text>
+    <rect x="766" y="122" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="778" y="140">ducklake_file_column_stats</text><text class="tc" x="950" y="140">min/max/nulls</text>
+    <rect x="766" y="154" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="778" y="172">ducklake_file_variant_stats</text>
+    <rect x="766" y="186" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="778" y="204">ducklake_files_scheduled_for_deletion</text>
+    <text class="tc" x="766" y="232">文件真身在外部存储，这里只记"账"</text>
+
+    <!-- 组4 分区 -->
+    <rect class="grp" x="750" y="255" width="350" height="150" fill="#2a1f0a" stroke="#ffa94d" stroke-width="1.4"/>
+    <text class="gt" x="766" y="281" fill="#ffa94d">④ 分区（3）</text>
+    <rect x="766" y="293" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="778" y="311">ducklake_partition_info</text><text class="tc" x="930" y="311">表的分区方案</text>
+    <rect x="766" y="325" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="778" y="343">ducklake_partition_column</text><text class="tc" x="950" y="343">identity/bucket/时间</text>
+    <rect x="766" y="357" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="778" y="375">ducklake_file_partition_value</text><text class="tc" x="970" y="375">文件→分区值</text>
+
+    <!-- 组5 Schema演化 -->
+    <rect class="grp" x="20" y="215" width="350" height="190" fill="#2a1f4d" stroke="#b197fc" stroke-width="1.4"/>
+    <text class="gt" x="36" y="241" fill="#b197fc">⑤ Schema 演化（3）</text>
+    <rect x="36" y="253" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="48" y="271">ducklake_column_mapping</text><text class="tc" x="240" y="271">field_id 映射策略</text>
+    <rect x="36" y="285" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="48" y="303">ducklake_name_mapping</text><text class="tc" x="230" y="303">老文件列名→field_id</text>
+    <rect x="36" y="317" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="48" y="335">ducklake_schema_versions</text><text class="tc" x="230" y="335">表级 schema 版本( compaction边界)</text>
+
+    <!-- 组6 排序 -->
+    <rect class="grp" x="20" y="420" width="350" height="130" fill="#1a1230" stroke="#8b9bc7" stroke-width="1.2"/>
+    <text class="gt" x="36" y="446" fill="#8b9bc7">⑥ 排序元数据（2）</text>
+    <rect x="36" y="458" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="48" y="476">ducklake_sort_info</text><text class="tc" x="190" y="476">SORTED BY 方案</text>
+    <rect x="36" y="490" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="48" y="508">ducklake_sort_expression</text><text class="tc" x="220" y="508">排序表达式+方向</text>
+
+    <!-- 组7 统计与内联 -->
+    <rect class="grp" x="385" y="335" width="350" height="215" fill="#12331f" stroke="#69db7c" stroke-width="1.2"/>
+    <text class="gt" x="401" y="361" fill="#69db7c">⑦ 聚合统计与内联数据（3+）</text>
+    <rect x="401" y="373" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="413" y="391">ducklake_table_stats</text><text class="tc" x="560" y="391">表级行数/文件数</text>
+    <rect x="401" y="405" width="318" height="28" rx="7" fill="#0b1020" stroke="#2a3763"/>
+    <text class="t" x="413" y="423">ducklake_table_column_stats</text><text class="tc" x="580" y="423">表级 min/max</text>
+    <rect x="401" y="437" width="318" height="28" rx="7" fill="#0b1020" stroke="#4dd0e1"/>
+    <text class="t" x="413" y="455" fill="#4dd0e1">ducklake_inlined_data_tables ★</text><text class="tc" x="640" y="455">登记内联表</text>
+    <text class="tc" x="401" y="490">内联数据本身存于按需创建的</text>
+    <text class="tc" x="401" y="508">ducklake_inline_data_{table_id} 等物理表</text>
+    <text class="tc" x="401" y="526">（行数低于阈值的小表免 Parquet IO）</text>
+
+    <!-- 中央关系箭头标注 -->
+    <text x="575" y="600" text-anchor="middle" fill="#8b9bc7" font-size="13">★ = 理解 DuckLake 的最小核心集：snapshot · table · column · data_file · delete_file · inlined_data_tables</text>
+    <text x="575" y="624" text-anchor="middle" fill="#5f6f9e" font-size="12">所有表通过 (begin_snapshot, end_snapshot) 区间与快照关联 —— 这是"一行多版本"的时态表设计</text>
+  </svg>
+  <div class="fig-caption">建表语句逐一对应 metadata_manager.cpp:237-310 的 28 段 CREATE TABLE；group ③④⑥⑦ 的行都带 begin/end_snapshot 时态区间</div>
+</div>
+
+<h2 id="s2"><span class="sec-no">§2.2</span>实体关系 ER 图</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 2-2 · 核心 ER 图（主键/外键与快照时态关系）</div>
+<pre class="mermaid">
+erDiagram
+    ducklake_snapshot ||--o{ ducklake_snapshot_changes : "snapshot_id 1:1"
+    ducklake_schema ||--o{ ducklake_table : "schema_id"
+    ducklake_table ||--o{ ducklake_column : "table_id + parent_column 树"
+    ducklake_table ||--o{ ducklake_data_file : "table_id"
+    ducklake_table ||--o{ ducklake_delete_file : "table_id"
+    ducklake_data_file ||--o{ ducklake_file_column_stats : "data_file_id"
+    ducklake_data_file }o--o{ ducklake_file_partition_value : "data_file_id + partition_id"
+    ducklake_table ||--o{ ducklake_partition_info : "table_id"
+    ducklake_partition_info ||--o{ ducklake_partition_column : "partition_id"
+    ducklake_table ||--o{ ducklake_sort_info : "table_id"
+    ducklake_sort_info ||--o{ ducklake_sort_expression : "sort_id"
+    ducklake_table ||--o{ ducklake_column_mapping : "table_id"
+    ducklake_column_mapping ||--o{ ducklake_name_mapping : "mapping_id"
+    ducklake_table ||--o{ ducklake_table_stats : "table_id"
+    ducklake_table ||--o{ ducklake_inlined_data_tables : "table_id"
+    ducklake_schema ||--o{ ducklake_view : "schema_id"
+    ducklake_schema ||--o{ ducklake_macro : "schema_id"
+    ducklake_macro ||--o{ ducklake_macro_impl : "macro_id"
+    ducklake_macro_impl ||--o{ ducklake_macro_parameters : "macro_id"
+
+    ducklake_snapshot {
+        bigint snapshot_id PK
+        timestamp snapshot_time
+        bigint schema_version
+        bigint next_catalog_id
+        bigint next_file_id
+    }
+    ducklake_table {
+        bigint table_id PK
+        string table_uuid
+        bigint schema_id FK
+        string table_name
+        bigint begin_snapshot
+        bigint end_snapshot "NULL=当前有效"
+    }
+    ducklake_column {
+        bigint column_id PK
+        bigint table_id FK
+        bigint parent_column_id FK "嵌套列树"
+        string column_name
+        string column_type
+        int initial_snapshot
+    }
+    ducklake_data_file {
+        bigint data_file_id PK
+        bigint table_id FK
+        string path
+        bigint file_size_bytes
+        bigint row_count
+        bigint begin_snapshot
+        bigint end_snapshot
+        bigint row_id_start "rowid虚拟列基址"
+        bigint partition_id FK
+        string encryption_key
+        bigint mapping_id FK "列名映射"
+        timestamp partial_max "TopN裁剪"
+    }
+    ducklake_delete_file {
+        bigint delete_file_id PK
+        bigint data_file_id FK "删哪个文件"
+        string format "parquet|puffin"
+        bigint begin_snapshot
+        bigint end_snapshot
+    }
+</pre>
+  <div class="fig-caption">注意三个反直觉设计：① data_file 通过 data_file_id 反向关联 delete_file；② column 是 parent 自引用的嵌套树；③ row_id_start 让每个文件的行号可换算成全局 rowid</div>
+</div>
+
+<h2 id="s3"><span class="sec-no">§2.3</span>核心表逐个剖析</h2>
+
+<h3><span class="anchor">◆</span>ducklake_metadata —— 一切从 KV 开始</h3>
+<p>四列结构 <code>(key, value, scope, scope_id)</code>，<code>scope</code> 决定配置的作用域（全局 / schema / table）。存储：<code>version</code>（格式版本号，迁移链的判断依据）、<code>data_path</code>、<code>encrypted</code>，以及被 schema/table 级覆盖的所有可调参数。</p>
+
+<h3><span class="anchor">◆</span>ducklake_snapshot —— 每次提交一行</h3>
+<div class="grid g2">
+  <div class="card cyan">
+    <h4>四个递增游标</h4>
+    <ul>
+      <li><code>snapshot_id</code>：主键，提交号</li>
+      <li><code>schema_version</code>：仅 DDL 时递增</li>
+      <li><code>next_catalog_id</code>：下一个可用的 schema/table/column id</li>
+      <li><code>next_file_id</code>：下一个 data/delete file id</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>为什么存"游标"而不是全量状态？</h4>
+    <p>所有目录实体都带 <code>begin_snapshot/end_snapshot</code> 区间，所以"某个快照的世界" = <b>对每张表做一次区间过滤查询</b>。快照行本身极小（几十字节），提交成本就是一条 INSERT —— 这是毫秒级 DDL 的来源。</p>
+  </div>
+</div>
+
+<h3><span class="anchor">◆</span>ducklake_data_file —— 数据面账本</h3>
+<p>每写一个 Parquet 文件 commit 时插入一行（<code class="ref">ducklake_metadata_manager.cpp:259</code>）。除 path/size/row_count 外，四个高价值列：</p>
+<ul>
+  <li><code>row_id_start</code>：该文件首行的全局 rowid 基址，配合 <code>file_row_number</code> 支撑 DELETE 的定位与 rowid 虚拟列；</li>
+  <li><code>partition_id</code> + <code>ducklake_file_partition_value</code>：分区剪枝的依据；</li>
+  <li><code>mapping_id</code>：指向 <code>ducklake_name_mapping</code>，schema 改名后老文件如何读；</li>
+  <li><code>partial_max</code>：排序键前缀最大值，供 Top-N / 动态过滤器裁剪（读路径 <code class="ref">ducklake_metadata_manager.cpp:1354-1403</code> 一带会拼进 WHERE）。</li>
+</ul>
+
+<h3><span class="anchor">◆</span>时态区间——一行多版本</h3>
+<div class="callout cyan">
+  <div class="co-title">📐 万能可见性谓词</div>
+  读任何实体都套用同一模板（见 <code class="ref">ducklake_metadata_manager.cpp:1430</code> 附近的 GetFilesForTable）：<br>
+  <code>WHERE {SNAPSHOT_ID} &gt;= x.begin_snapshot AND ({SNAPSHOT_ID} &lt; x.end_snapshot OR x.end_snapshot IS NULL)</code><br>
+  删除 = 闭合 end_snapshot；新建 = 新行 begin_snapshot=提交号。<b>历史版本查询因此永远不需要"恢复"任何状态</b>。
+</div>
+
+<h2 id="s4"><span class="sec-no">§2.4</span>建库初始化流程</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 2-3 · ATTACH 时的初始化判定流程</div>
+<pre class="mermaid">
+flowchart TD
+    A["ATTACH 'ducklake:…'"] --> B["DuckLakeInitializer::Initialize<br>ducklake_initializer.cpp:78"]
+    B --> C{"META 参数指定了<br>外部元数据库?"}
+    C -- "是(pg:/sqlite:)" --> D["ATTACH 外部元数据库<br>(82-89, postgres schema 收窄 51-60)"]
+    C -- "否" --> E["默认元数据库<br>__ducklake_metadata_name<br>ducklake_storage.cpp:119"]
+    D --> F["MetadataExists?<br>metadata_manager.cpp:181"]
+    E --> F
+    F -- "空库 → 首次建库" --> G["InitializeNewDuckLake<br>initializer.cpp:161"]
+    G --> G1["ducklake_default_version<br>选择目标格式版本<br>(99-109)"]
+    G1 --> H["InitializeDuckLake<br>metadata_manager.cpp:195"]
+    H --> H1["① CREATE 28 张表<br>GetCreateTableStatements:237"]
+    H1 --> H2["② INSERT snapshot_id=0<br>初始快照 (209-216)"]
+    H2 --> H3["③ INSERT metadata:<br>version / data_path / encrypted"]
+    H3 --> H4["④ CREATE SCHEMA main<br>登记进 ducklake_schema"]
+    F -- "已有数据 → 加载" --> I["LoadExistingDuckLake<br>initializer.cpp:187"]
+    I --> J{"版本判断<br>ducklake_metadata.version"}
+    J --> K["迁移链 V0.1→…→V1.1<br>(209-248) 详见 §2.5"]
+    K --> L["ResolveTargetVersion<br>版本钉住 / 自动迁移 / 拒绝降级<br>(288-306)"]
+    L --> M["SetVersionedMetadataManager<br>按版本包 V1_1 模板<br>(308-330)"]
+    M --> N["校验 data_path 一致 / encrypted 标记<br>(251-273)"]
+    H4 --> O["new DuckLakeCatalog<br>固定 CatalogSnapshot"]
+    N --> O
+</pre>
+  <div class="fig-caption">初始化只有 4 条 DML；加载路径的重点全在版本协商与迁移</div>
+</div>
+
+<h2 id="s5"><span class="sec-no">§2.5</span>版本迁移链 V0.1 → V1.1</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 2-4 · 元数据格式版本演化链（MigrateV0x 系列）</div>
+<pre class="mermaid">
+flowchart LR
+    V01["V0.1<br>初始版本"] -->|"MigrateV01<br>:317"| V02["V0.2"]
+    V02 -->|"MigrateV02<br>:357"| V03["V0.3"]
+    V03 -->|"MigrateV03<br>:373"| V04["V0.4"]
+    V04 -->|"MigrateV04<br>:426"| V10["V1.0"]
+    V10 -->|"MigrateV10 ★新<br>:435"| V11["V1.1-dev1"]
+</pre>
+  <div class="fig-caption">每个 Migrate* 幂等可重入，经 ExecuteMigration helper（:337）统一执行；调度顺序见 initializer.cpp:209-248</div>
+</div>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>迁移</th><th>源码</th><th>主要内容</th></tr></thead>
+  <tbody>
+    <tr><td>MigrateV01</td><td><code class="ref">metadata_manager.cpp:317</code></td><td>最早 schema 补齐（表结构差异修正）</td></tr>
+    <tr><td>MigrateV02</td><td><code class="ref">:357</code></td><td>加列/约束（带 <code>allow_merge_branch=true</code> 变体重跑）</td></tr>
+    <tr><td>MigrateV03</td><td><code class="ref">:373</code></td><td>schema_versions 等表结构演进</td></tr>
+    <tr><td>MigrateV04</td><td><code class="ref">:426</code></td><td>V1.0 收尾调整</td></tr>
+    <tr><td><strong>MigrateV10</strong>（新）</td><td><code class="ref">:435</code></td><td><strong>V1.0→V1.1</strong>：新增 <code>ducklake_view_column_tag</code> 表；data/delete file 加 <code>row_group_count</code> 列（:437-438）；<code>MigrateInlinedColumnNames</code>（:449）给内联表列改名</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout">
+  <div class="co-title">🧩 版本协商三原则（ResolveTargetVersion，initializer.cpp:288-306）</div>
+  ① <b>钉住</b>：ATTACH 指定 DUCKLAKE_VERSION 时精确匹配，不满足则报错；② <b>自动迁移</b>：默认只允许小步升级（AUTOMATIC_MIGRATION 控制），跨大版本拒绝；③ <b>拒绝降级</b>：客户端版本低于库版本直接报错，绝不悄悄改数据。
+</div>
+
+<h2 id="s6"><span class="sec-no">§2.6</span>多后端工厂与 V1_1 模板包装</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 2-5 · 元数据管理器的工厂 + 版本模板双重结构</div>
+<pre class="mermaid">
+classDiagram
+    class DuckLakeMetadataManager {
+        <<基类=duckdb后端>>
+        +Register(url, factory) 静态注册表
+        +Create(url, options)$ 工厂入口
+        +SupportsAppender() true·批量写优化
+        +GetCreateTableStatements() 28表DDL
+        +GetFilesForTable() / WriteNewDataFiles*()
+    }
+    note for DuckLakeMetadataManager "实现位于 src/storage/ducklake_metadata_manager.cpp（5,826行）\n后端注册表 :46-49：postgres/postgres_scanner、\nsqlite/sqlite_scanner、quack/quack_scanner"
+
+    class PostgresMetadataManager {
+        DOUBLE PRECISION 类型映射
+        jsonb_agg 列表聚合
+        GetLatestSnapshotQuery 定制
+    }
+    class SQLiteMetadataManager {
+        FLOAT→VARCHAR 等类型降级
+        无 Appender·行级 EXECUTE
+    }
+    class QuackMetadataManager {
+        ★ quack_query_by_name 远程执行
+        ProbeServerCapabilities 探测服务端
+        FlushChangesServerSide 暂存提交
+        SupportsAppender() false
+    }
+    DuckLakeMetadataManager <|-- PostgresMetadataManager
+    DuckLakeMetadataManager <|-- SQLiteMetadataManager
+    DuckLakeMetadataManager <|-- QuackMetadataManager
+
+    class DuckLakeMetadataManagerV1_1~Base~ {
+        <<模板装饰器>>
+        +GetVersionString() V1_1
+        +覆写 data/delete file 建表
+        +追加 view_column_tag 表
+    }
+    DuckLakeMetadataManagerV1_1~Base~ ..|> DuckLakeMetadataManager : 语义兼容
+    DuckLakeMetadataManagerV1_1~PostgresMetadataManager~ ..> PostgresMetadataManager : 包装
+    DuckLakeMetadataManagerV1_1~DuckLakeMetadataManager~ ..> DuckLakeMetadataManager : 包装
+</pre>
+  <div class="fig-caption">格式版本（V1_1 模板）与存储后端（四个子类）正交组合：SetVersionedMetadataManager（initializer.cpp:308）负责把两者拼起来</div>
+</div>
+
+<h2 id="s7"><span class="sec-no">§2.7</span>三级配置体系</h2>
+<p>可调参数（inlining 阈值、target_file_size、分区覆盖、parquet 选项…）按 <code>ducklake_metadata.scope</code> 三级生效，低层覆盖高层：</p>
+
+<div class="diagram">
+  <div class="fig-title">图 2-6 · 配置作用域与查找顺序</div>
+  <svg viewBox="0 0 1080 330" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC, Microsoft YaHei, sans-serif">
+    <defs>
+      <marker id="a2-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#ffd43b"/>
+      </marker>
+    </defs>
+    <rect x="40" y="40" width="280" height="110" rx="14" fill="#241f0a" stroke="#ffd43b" stroke-width="1.4"/>
+    <text x="180" y="70" text-anchor="middle" fill="#ffd43b" font-size="15" font-weight="700">全局 scope=0</text>
+    <text x="180" y="96" text-anchor="middle" fill="#8b9bc7" font-size="12">SET ducklake_target_file_size=…</text>
+    <text x="180" y="118" text-anchor="middle" fill="#8b9bc7" font-size="12">ducklake_set_option(全局)</text>
+
+    <rect x="400" y="40" width="280" height="110" rx="14" fill="#12294d" stroke="#4dd0e1" stroke-width="1.4"/>
+    <text x="540" y="70" text-anchor="middle" fill="#4dd0e1" font-size="15" font-weight="700">Schema 级 scope=1</text>
+    <text x="540" y="96" text-anchor="middle" fill="#8b9bc7" font-size="12">ducklake_set_option(catalog, 'main', …)</text>
+    <text x="540" y="118" text-anchor="middle" fill="#8b9bc7" font-size="12">scope_id = schema_id</text>
+
+    <rect x="760" y="40" width="280" height="110" rx="14" fill="#12331f" stroke="#69db7c" stroke-width="1.4"/>
+    <text x="900" y="70" text-anchor="middle" fill="#69db7c" font-size="15" font-weight="700">Table 级 scope=2</text>
+    <text x="900" y="96" text-anchor="middle" fill="#8b9bc7" font-size="12">ducklake_set_option(catalog,'main','t',…)</text>
+    <text x="900" y="118" text-anchor="middle" fill="#8b9bc7" font-size="12">scope_id = table_id</text>
+
+    <path d="M 325 95 L 395 95" fill="none" stroke="#ffd43b" stroke-width="2" marker-end="url(#a2-arrow)"/>
+    <path d="M 685 95 L 755 95" fill="none" stroke="#ffd43b" stroke-width="2" marker-end="url(#a2-arrow)"/>
+    <text x="360" y="82" text-anchor="middle" fill="#5f6f9e" font-size="11">被覆盖</text>
+    <text x="720" y="82" text-anchor="middle" fill="#5f6f9e" font-size="11">被覆盖</text>
+
+    <rect x="40" y="200" width="1000" height="86" rx="12" fill="#0b1020" stroke="#2a3763"/>
+    <text x="60" y="228" fill="#dbe4ff" font-size="13" font-weight="700">运行时读取：DuckLakeCatalog::GetTargetFileSize()（catalog.cpp:1030）· GetInliningLimit()（:1044）</text>
+    <text x="60" y="252" fill="#8b9bc7" font-size="12">查询顺序 table → schema → global，命中即返回；缓存于 catalog 的 stats/options 结构，写入走 ducklake_set_option 表函数（CH 08）</text>
+    <text x="60" y="274" fill="#5f6f9e" font-size="11.5">典型用途：某张大表单独关掉 inlining、为日志表设更小的 target_file_size、为敏感 schema 开启加密</text>
+  </svg>
+  <div class="fig-caption">同一 KV 表 ducklake_metadata 用 (scope, scope_id) 区分作用域，无需三张配置表</div>
+</div>
+
+<div class="pager">
+  <a href="01-architecture.html">
+    <div class="pg-label">← 上一章</div>
+    <div class="pg-title">01 · 总体架构与 ATTACH 流程</div>
+  </a>
+  <a class="next" href="03-snapshot-timetravel.html">
+    <div class="pg-label">下一章 →</div>
+    <div class="pg-title">03 · 快照与 Time Travel</div>
+  </a>
+</div>
+
+<div class="footer">DuckLake 源码深度解析 · CH 02 · 基于 duckdb/ducklake @ 27c14caf</div>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      primaryColor: '#1a2447',
+      primaryTextColor: '#dbe4ff',
+      primaryBorderColor: '#4dd0e1',
+      lineColor: '#8b9bc7',
+      secondaryColor: '#241f0a',
+      tertiaryColor: '#12294d',
+      fontFamily: 'PingFang SC, Microsoft YaHei, sans-serif',
+      fontSize: '14px'
+    },
+    flowchart: { curve: 'basis', htmlLabels: true },
+    sequence: { actorMargin: 40, width: 170 }
+  });
+</script>
+</body>
+</html>

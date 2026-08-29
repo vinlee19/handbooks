@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>09 · 可插拔后端与安全 — DuckLake 源码深度解析</title>
+<link rel="stylesheet" href="assets/ducklake.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <a class="brand" href="index.html"><span class="logo-dot"></span>DUCKLAKE·源码解析</a>
+  <a href="index.html">首页</a>
+  <a href="01-architecture.html">01 总体架构</a>
+  <a href="02-metadata-catalog.html">02 元数据目录</a>
+  <a href="03-snapshot-timetravel.html">03 快照与Time Travel</a>
+  <a href="04-read-path.html">04 读路径</a>
+  <a href="05-write-path.html">05 写路径</a>
+  <a href="06-transaction-concurrency.html">06 事务与并发</a>
+  <a href="07-inline-compaction.html">07 内联与Compaction</a>
+  <a href="08-functions-api.html">08 函数与宏</a>
+  <a href="09-backends-encryption.html" class="active">09 后端与加密</a>
+  <a href="10-debug-guide.html">10 调试指南</a>
+</nav>
+
+<div class="page">
+
+<div class="hero">
+  <h1>CH 09 · <span class="hl">可插拔后端</span>与安全</h1>
+  <p class="subtitle">DuckDB / SQLite / Postgres / Quack 四种元数据后端、Secret 凭据体系与文件级加密</p>
+</div>
+
+<div class="toc">
+  <div class="toc-title">本章目录</div>
+  <ol>
+    <li><a href="#s1">四后端部署形态</a></li>
+    <li><a href="#s2">后端能力矩阵</a></li>
+    <li><a href="#s3">Quack：远程元数据服务器 ★</a></li>
+    <li><a href="#s4">Secret 凭据体系</a></li>
+    <li><a href="#s5">文件级加密数据流</a></li>
+    <li><a href="#s6">扩展自动加载</a></li>
+  </ol>
+</div>
+
+<h2 id="s1"><span class="sec-no">§9.1</span>四后端部署形态</h2>
+<p class="lead">元数据库 URL 的协议头决定后端（工厂注册表 <code class="ref">ducklake_metadata_manager.cpp:46-49</code>）：<code>postgres/postgres_scanner</code>、<code>sqlite/sqlite_scanner</code>、<code>quack/quack_scanner</code>，其余默认 duckdb。</p>
+
+<div class="diagram">
+  <div class="fig-title">图 9-1 · 四种元数据后端的物理部署形态对比</div>
+  <svg viewBox="0 0 1140 620" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC, Microsoft YaHei, sans-serif">
+    <defs>
+      <marker id="a9a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#69db7c"/>
+      </marker>
+    </defs>
+    <!-- Panel 1: duckdb -->
+    <rect x="25" y="25" width="530" height="270" rx="14" fill="#12294d" stroke="#4dd0e1" stroke-width="1.3"/>
+    <text x="290" y="53" text-anchor="middle" fill="#4dd0e1" font-size="14.5" font-weight="700">① duckdb: 本地文件（默认）</text>
+    <rect x="50" y="70" width="220" height="120" rx="10" fill="#0b1020" stroke="#2a3763"/>
+    <text x="160" y="96" text-anchor="middle" fill="#dbe4ff" font-size="12" font-weight="600">DuckDB 进程</text>
+    <text x="160" y="120" text-anchor="middle" fill="#8b9bc7" font-size="11">lake.ducklake 扩展</text>
+    <rect x="70" y="135" width="180" height="40" rx="8" fill="#241f0a" stroke="#ffd43b"/>
+    <text x="160" y="160" text-anchor="middle" fill="#ffd43b" font-size="11.5" font-family="Menlo,monospace">meta.ducklake 文件</text>
+    <rect x="310" y="70" width="220" height="120" rx="10" fill="#12331f" stroke="#2a3763"/>
+    <text x="420" y="96" text-anchor="middle" fill="#69db7c" font-size="12" font-weight="600">同一磁盘：data/</text>
+    <text x="420" y="122" text-anchor="middle" fill="#8b9bc7" font-size="11">parquet 文件</text>
+    <path d="M 270 130 L 305 130" fill="none" stroke="#8b9bc7" stroke-width="2"/>
+    <text x="290" y="230" text-anchor="middle" fill="#8b9bc7" font-size="11.5">零部署 · SupportsAppender()=true（批量写最优）</text>
+    <text x="290" y="252" text-anchor="middle" fill="#ff8787" font-size="11.5">限制：单进程独占，不适合多写入者并发</text>
+    <text x="290" y="278" text-anchor="middle" fill="#5f6f9e" font-size="11">适用：单机原型 / 嵌入式分析 / CI 测试</text>
+
+    <!-- Panel 2: postgres -->
+    <rect x="585" y="25" width="530" height="270" rx="14" fill="#12331f" stroke="#69db7c" stroke-width="1.3"/>
+    <text x="850" y="53" text-anchor="middle" fill="#69db7c" font-size="14.5" font-weight="700">② postgres: 生产推荐</text>
+    <rect x="610" y="70" width="200" height="120" rx="10" fill="#0b1020" stroke="#2a3763"/>
+    <text x="710" y="96" text-anchor="middle" fill="#dbe4ff" font-size="12" font-weight="600">DuckDB 集群 ×N</text>
+    <text x="710" y="120" text-anchor="middle" fill="#8b9bc7" font-size="11">多写入者 + 多读者</text>
+    <rect x="880" y="70" width="200" height="120" rx="10" fill="#0b1020" stroke="#69db7c"/>
+    <text x="980" y="96" text-anchor="middle" fill="#69db7c" font-size="12" font-weight="600">PostgreSQL 服务器</text>
+    <text x="980" y="120" text-anchor="middle" fill="#8b9bc7" font-size="11">meta_schema 内 28 张表</text>
+    <path d="M 810 130 L 875 130" fill="none" stroke="#69db7c" stroke-width="2.4" marker-end="url(#a9a)"/>
+    <text x="850" y="230" text-anchor="middle" fill="#8b9bc7" font-size="11.5">主键约束兜底乐观并发 · 高并发提交</text>
+    <text x="850" y="252" text-anchor="middle" fill="#8b9bc7" font-size="11.5">类型映射：DOUBLE PRECISION / jsonb_agg 聚合</text>
+    <text x="850" y="278" text-anchor="middle" fill="#5f6f9e" font-size="11">适用：团队数据湖 / 高频写入 / 生产环境</text>
+
+    <!-- Panel 3: sqlite -->
+    <rect x="25" y="325" width="530" height="270" rx="14" fill="#241f0a" stroke="#ffd43b" stroke-width="1.3"/>
+    <text x="290" y="353" text-anchor="middle" fill="#ffd43b" font-size="14.5" font-weight="700">③ sqlite: 轻量共享</text>
+    <rect x="50" y="370" width="200" height="120" rx="10" fill="#0b1020" stroke="#2a3763"/>
+    <text x="150" y="396" text-anchor="middle" fill="#dbe4ff" font-size="12" font-weight="600">DuckDB 进程 ×N</text>
+    <text x="150" y="420" text-anchor="middle" fill="#8b9bc7" font-size="11">经 sqlite_scanner 读写</text>
+    <rect x="310" y="370" width="200" height="120" rx="10" fill="#0b1020" stroke="#ffd43b"/>
+    <text x="410" y="396" text-anchor="middle" fill="#ffd43b" font-size="12" font-weight="600">meta.sqlite 单文件</text>
+    <text x="410" y="420" text-anchor="middle" fill="#8b9bc7" font-size="11">可放 NFS/网盘共享</text>
+    <path d="M 250 430 L 305 430" fill="none" stroke="#ffd43b" stroke-width="2.4"/>
+    <text x="290" y="530" text-anchor="middle" fill="#8b9bc7" font-size="11.5">类型降级：FLOAT/DOUBLE/VARIANT → VARCHAR 等</text>
+    <text x="290" y="552" text-anchor="middle" fill="#8b9bc7" font-size="11.5">无 Appender（逐行 EXECUTE）· BUSY_TIMEOUT 处理锁</text>
+    <text x="290" y="578" text-anchor="middle" fill="#5f6f9e" font-size="11">适用：小团队 / 边缘设备 / 演示环境</text>
+
+    <!-- Panel 4: quack -->
+    <rect x="585" y="325" width="530" height="270" rx="14" fill="#2a1f4d" stroke="#b197fc" stroke-width="1.5"/>
+    <text x="850" y="353" text-anchor="middle" fill="#b197fc" font-size="14.5" font-weight="700">④ quack: 远程元数据服务器 ★新</text>
+    <rect x="610" y="370" width="180" height="120" rx="10" fill="#0b1020" stroke="#2a3763"/>
+    <text x="700" y="396" text-anchor="middle" fill="#dbe4ff" font-size="12" font-weight="600">DuckDB 客户端</text>
+    <text x="700" y="420" text-anchor="middle" fill="#8b9bc7" font-size="11">staged 批一次性发出</text>
+    <rect x="820" y="370" width="270" height="120" rx="10" fill="#0b1020" stroke="#b197fc"/>
+    <text x="955" y="396" text-anchor="middle" fill="#b197fc" font-size="12" font-weight="600">quack 服务器（DuckDB 进程）</text>
+    <text x="955" y="420" text-anchor="middle" fill="#8b9bc7" font-size="11">quack_query_by_name 执行 SQL</text>
+    <text x="955" y="444" text-anchor="middle" fill="#b197fc" font-size="11">ducklake_commit 本地重试循环</text>
+    <text x="955" y="468" text-anchor="middle" fill="#8b9bc7" font-size="11">（服务端提交，CH 06 §6.6）</text>
+    <path d="M 790 430 L 815 430" fill="none" stroke="#b197fc" stroke-width="2.4"/>
+    <text x="850" y="530" text-anchor="middle" fill="#8b9bc7" font-size="11.5">控制面集中化：重试 O(1) 网络往返 · SupportsAppender=false</text>
+    <text x="850" y="552" text-anchor="middle" fill="#8b9bc7" font-size="11.5">能力探测：duckdb_functions() 查 ducklake_commit</text>
+    <text x="850" y="578" text-anchor="middle" fill="#5f6f9e" font-size="11">适用：SaaS 化 lakehouse / 多租户控制面</text>
+  </svg>
+  <div class="fig-caption">同一套 28 张表 DDL，四种物理承载；URL 协议头即切换，业务 SQL 完全不变</div>
+</div>
+
+<h2 id="s2"><span class="sec-no">§9.2</span>后端能力矩阵</h2>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>能力</th><th>duckdb（基类）</th><th>postgres</th><th>sqlite</th><th>quack</th></tr></thead>
+  <tbody>
+    <tr><td>Appender 批量写</td><td>✅（<code>SupportsAppender()=true</code>）</td><td>❌</td><td>❌</td><td>❌（<code class="ref">quack_metadata_manager.hpp:23-25</code>）</td></tr>
+    <tr><td>多写入者并发</td><td>❌ 单进程</td><td>✅✅</td><td>⚠️ 文件锁</td><td>✅✅（服务端串行化）</td></tr>
+    <tr><td>服务端提交</td><td>—</td><td>—</td><td>—</td><td>✅（staged commit）</td></tr>
+    <tr><td>类型映射特例</td><td>无（原生）</td><td>DOUBLE PRECISION、jsonb_agg</td><td>浮点/VARIANT→VARCHAR</td><td>继承 duckdb 语义</td></tr>
+    <tr><td>快照查询特化</td><td>标准</td><td>GetLatestSnapshotQuery 定制</td><td>标准</td><td>CanSkipSnapshotFetch :96</td></tr>
+    <tr><td>连接参数透传</td><td>元库即本地</td><td><code>meta_*</code> 选项</td><td>路径/BUSY_TIMEOUT</td><td>ATTACH 引用远程库</td></tr>
+    <tr><td>典型规模</td><td>单机</td><td>企业级</td><td>小型</td><td>多租户服务化</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="s3"><span class="sec-no">§9.3</span>Quack：远程元数据服务器 ★</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 9-2 · QuackMetadataManager 的调用面</div>
+<pre class="mermaid">
+flowchart TD
+    subgraph client ["客户端进程"]
+        A["所有 MetadataManager 虚调用<br>（GetFilesForTable / WriteNewDataFiles…）"]
+        A --> B["Query(): 包装 SQL<br>CALL system.main.quack_query_by_name(db, query)<br>quack_metadata_manager.cpp:16-33<br>（mutex query_lock 串行化）"]
+    end
+    B -->|"ATTACH 后的远程引用"| S
+    subgraph server ["quack 服务器进程"]
+        S["quack 扩展按名字路由到<br>ATTACH 的元数据库"]
+        S --> T["返回 QueryResult 行集"]
+        U["ProbeServerCapabilities :74-86<br>duckdb_functions() 探测 ducklake_commit<br>→ SetRetrialsServerSide(true)"]
+        V["FlushChangesServerSide :104-139<br>DuckLakeStagedCommit::Build 批<br>→ ducklake_commit 服务端执行"]
+    end
+    B --> U
+    B --> V
+</pre>
+  <div class="fig-caption">对客户端而言 quack 只是"另一个 MetadataManager"；普通查询逐条走 RPC，提交走批量化 staged 路径</div>
+</div>
+
+<h2 id="s4"><span class="sec-no">§9.4</span>Secret 凭据体系</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 9-3 · ATTACH 时的凭据解析（ducklake_storage.cpp:78-107）</div>
+<pre class="mermaid">
+flowchart TD
+    A["CREATE SECRET my_s3 (<br>　TYPE S3, KEY_ID, SECRET, …)"] --> D
+    B["CREATE SECRET ducklake_cred (<br>　TYPE DUCKLAKE, META_…, DATA_…)"] --> D["ATTACH 'ducklake:…' (SECRET my_s3)"]
+    D --> E{"ATTACH 带名字型 SECRET?"}
+    E -- 是 --> F["按名查找 secret"]
+    E -- "否：内联提供" --> G["ATTACH 选项里直接带<br>KEY_ID/SECRET 字段 (:101-107)"]
+    F --> H["展开 secret 字段并入 options"]
+    G --> H
+    H --> I["ducklake secret 类型注册于<br>extension.cpp:117-122<br>（专为 ducklake 设计的参数包）"]
+    H --> J["S3/PG 凭据分流：<br>数据面凭据 → httpfs/parquet 写<br>元数据库凭据 → meta_* 连接参数"]
+    J --> K["★ 凭据透传（v1.0+）：写入 Parquet 的<br>COPY 可继承来源 secret，避免硬编码"]
+</pre>
+  <div class="fig-caption">ducklake Secret 把"元数据库连接参数 + 数据路径凭据"打包成一种可托管的凭据类型，与 ATTACH 选项双向兼容</div>
+</div>
+
+<h2 id="s5"><span class="sec-no">§9.5</span>文件级加密数据流</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 9-4 · ENCRYPTED 模式下的写与读</div>
+  <svg viewBox="0 0 1140 470" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC, Microsoft YaHei, sans-serif">
+    <defs>
+      <marker id="a9b" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#ffa94d"/>
+      </marker>
+      <marker id="a9c" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#4dd0e1"/>
+      </marker>
+    </defs>
+    <!-- 写路径 -->
+    <text x="60" y="45" fill="#ffa94d" font-size="15" font-weight="700">写路径（INSERT/UPDATE…）</text>
+    <rect x="40" y="65" width="180" height="60" rx="10" fill="#241f0a" stroke="#ffd43b"/>
+    <text x="130" y="90" text-anchor="middle" fill="#dbe4ff" font-size="12" font-weight="600">DuckLakeInsert</text>
+    <text x="130" y="112" text-anchor="middle" fill="#8b9bc7" font-size="11">ENCRYPTED=true</text>
+    <rect x="270" y="65" width="220" height="60" rx="10" fill="#0b1020" stroke="#2a3763"/>
+    <text x="380" y="90" text-anchor="middle" fill="#dbe4ff" font-size="12" font-weight="600">GenerateEncryptionKey()</text>
+    <text x="380" y="112" text-anchor="middle" fill="#8b9bc7" font-size="11">每文件随机密钥（catalog.hpp:154）</text>
+    <rect x="540" y="65" width="220" height="60" rx="10" fill="#12331f" stroke="#69db7c"/>
+    <text x="650" y="90" text-anchor="middle" fill="#dbe4ff" font-size="12" font-weight="600">COPY … (ENCRYPTED key)</text>
+    <text x="650" y="112" text-anchor="middle" fill="#8b9bc7" font-size="11">Parquet 加密写出</text>
+    <rect x="810" y="65" width="290" height="60" rx="10" fill="#12294d" stroke="#4dd0e1"/>
+    <text x="955" y="90" text-anchor="middle" fill="#dbe4ff" font-size="12" font-weight="600">密钥 base64 存进账本</text>
+    <text x="955" y="112" text-anchor="middle" fill="#8b9bc7" font-size="11">ducklake_data_file.encryption_key 列</text>
+    <path d="M 220 95 L 265 95" fill="none" stroke="#ffa94d" stroke-width="2" marker-end="url(#a9b)"/>
+    <path d="M 490 95 L 535 95" fill="none" stroke="#ffa94d" stroke-width="2" marker-end="url(#a9b)"/>
+    <path d="M 760 95 L 805 95" fill="none" stroke="#ffa94d" stroke-width="2" marker-end="url(#a9b)"/>
+    <!-- 读路径 -->
+    <text x="60" y="195" fill="#4dd0e1" font-size="15" font-weight="700">读路径（SELECT）</text>
+    <rect x="40" y="215" width="240" height="60" rx="10" fill="#12294d" stroke="#4dd0e1"/>
+    <text x="160" y="240" text-anchor="middle" fill="#dbe4ff" font-size="12" font-weight="600">GetFilesForTable 返回文件行</text>
+    <text x="160" y="262" text-anchor="middle" fill="#8b9bc7" font-size="11">含 encryption_key（base64）</text>
+    <rect x="330" y="215" width="250" height="60" rx="10" fill="#0b1020" stroke="#2a3763"/>
+    <text x="455" y="240" text-anchor="middle" fill="#dbe4ff" font-size="12" font-weight="600">ReadEncryptionKey 解码</text>
+    <text x="455" y="262" text-anchor="middle" fill="#8b9bc7" font-size="11">ducklake_row_helpers.hpp:35-40 ★新</text>
+    <rect x="630" y="215" width="230" height="60" rx="10" fill="#0b1020" stroke="#2a3763"/>
+    <text x="745" y="240" text-anchor="middle" fill="#dbe4ff" font-size="12" font-weight="600">OpenFileInfo 附加密参数</text>
+    <text x="745" y="262" text-anchor="middle" fill="#8b9bc7" font-size="11">传给 Parquet reader</text>
+    <rect x="910" y="215" width="190" height="60" rx="10" fill="#12331f" stroke="#69db7c"/>
+    <text x="1005" y="240" text-anchor="middle" fill="#dbe4ff" font-size="12" font-weight="600">透明解密扫描</text>
+    <text x="1005" y="262" text-anchor="middle" fill="#8b9bc7" font-size="11">SQL 无感知</text>
+    <path d="M 280 245 L 325 245" fill="none" stroke="#4dd0e1" stroke-width="2" marker-end="url(#a9c)"/>
+    <path d="M 580 245 L 625 245" fill="none" stroke="#4dd0e1" stroke-width="2" marker-end="url(#a9c)"/>
+    <path d="M 860 245 L 905 245" fill="none" stroke="#4dd0e1" stroke-width="2" marker-end="url(#a9c)"/>
+
+    <!-- 设计要点 -->
+    <rect x="40" y="320" width="1060" height="120" rx="12" fill="#101731" stroke="#1f2a4d"/>
+    <text x="60" y="350" fill="#dbe4ff" font-size="13" font-weight="700">设计要点</text>
+    <text x="60" y="378" fill="#8b9bc7" font-size="12">① 密钥与文件同库存放 —— 防的是"对象存储侧的直接拖库"（拿到 Parquet 读不出内容），不是防元数据库管理员；</text>
+    <text x="60" y="402" fill="#8b9bc7" font-size="12">② delete 文件同样加密；③ puffer/DV blob 与 parquet 加密互不干扰；④ 密钥轮换 = rewrite_data_files（CH 07）——重写即换钥匙。</text>
+    <text x="60" y="428" fill="#5f6f9e" font-size="11.5">威胁模型：元数据库由 DBM/PG 的传输加密+访问控制保护；对象存储上的数据文件用每文件密钥二次防线</text>
+  </svg>
+  <div class="fig-caption">加密是文件级的透明属性：账本记录密钥，读写两端自动协商，SQL 层完全无感</div>
+</div>
+
+<h2 id="s6"><span class="sec-no">§9.6</span>扩展自动加载</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 9-5 · data_path 所需扩展的自动加载（ducklake_autoload_helper.cpp）</div>
+<pre class="mermaid">
+flowchart LR
+    A["ATTACH (DATA_PATH 's3://…')"] --> B{"data_path 协议头?"}
+    B -- "s3:// / s3a://" --> C["INSTALL/LOAD httpfs + aws"]
+    B -- "azure://" --> D["INSTALL/LOAD azure"]
+    B -- "gs://" --> E["INSTALL/LOAD httpfs (gc)"]
+    B -- "本地路径" --> F["无需扩展"]
+    C --> G["扫描/写入前扩展就绪<br>（否则第一笔 IO 直接报错）"]
+    D --> G
+    E --> G
+</pre>
+  <div class="fig-caption">元数据库侧同理：postgres:/sqlite: URL 触发对应 scanner 扩展按需安装（extension_config.cmake 的 ENABLE_*_SCANNER 控制 CI 是否打包）</div>
+</div>
+
+<div class="pager">
+  <a href="08-functions-api.html">
+    <div class="pg-label">← 上一章</div>
+    <div class="pg-title">08 · SQL 函数与宏全景</div>
+  </a>
+  <a class="next" href="10-debug-guide.html">
+    <div class="pg-label">下一章 →</div>
+    <div class="pg-title">10 · 调试实战指南</div>
+  </a>
+</div>
+
+<div class="footer">DuckLake 源码深度解析 · CH 09 · 基于 duckdb/ducklake @ 27c14caf</div>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      primaryColor: '#1a2447',
+      primaryTextColor: '#dbe4ff',
+      primaryBorderColor: '#4dd0e1',
+      lineColor: '#8b9bc7',
+      secondaryColor: '#241f0a',
+      tertiaryColor: '#12294d',
+      fontFamily: 'PingFang SC, Microsoft YaHei, sans-serif',
+      fontSize: '14px'
+    },
+    flowchart: { curve: 'basis', htmlLabels: true },
+    sequence: { actorMargin: 40, width: 170 }
+  });
+</script>
+</body>
+</html>

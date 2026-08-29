@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>06 · 事务与乐观并发 — DuckLake 源码深度解析</title>
+<link rel="stylesheet" href="assets/ducklake.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <a class="brand" href="index.html"><span class="logo-dot"></span>DUCKLAKE·源码解析</a>
+  <a href="index.html">首页</a>
+  <a href="01-architecture.html">01 总体架构</a>
+  <a href="02-metadata-catalog.html">02 元数据目录</a>
+  <a href="03-snapshot-timetravel.html">03 快照与Time Travel</a>
+  <a href="04-read-path.html">04 读路径</a>
+  <a href="05-write-path.html">05 写路径</a>
+  <a href="06-transaction-concurrency.html" class="active">06 事务与并发</a>
+  <a href="07-inline-compaction.html">07 内联与Compaction</a>
+  <a href="08-functions-api.html">08 函数与宏</a>
+  <a href="09-backends-encryption.html">09 后端与加密</a>
+  <a href="10-debug-guide.html">10 调试指南</a>
+</nav>
+
+<div class="page">
+
+<div class="hero">
+  <h1>CH 06 · <span class="hl">事务</span>与乐观并发</h1>
+  <p class="subtitle">一次大规模重构后的提交架构 —— Transaction / State / CommitContext 三层、冲突矩阵、指数退避与服务端提交</p>
+</div>
+
+<div class="toc">
+  <div class="toc-title">本章目录</div>
+  <ol>
+    <li><a href="#s1">重构后的三层架构</a></li>
+    <li><a href="#s2">事务生命周期</a></li>
+    <li><a href="#s3">提交分发：三条路径</a></li>
+    <li><a href="#s4">乐观提交循环</a></li>
+    <li><a href="#s5">冲突检测矩阵</a></li>
+    <li><a href="#s6">Staged Commit 与服务端提交 ★</a></li>
+    <li><a href="#s7">changes_made 协议</a></li>
+  </ol>
+</div>
+
+<h2 id="s1"><span class="sec-no">§6.1</span>重构后的三层架构</h2>
+<p class="lead">近期提交把原本 3,247 行的 <code>ducklake_transaction.cpp</code> 拆成了职责分明的三层：接口层、状态层、算法-环境解耦层。这是读懂当前 HEAD 提交路径的前提。</p>
+
+<div class="diagram">
+  <div class="fig-title">图 6-1 · DuckLakeTransaction / DuckLakeTransactionState / DuckLakeCommitContext</div>
+  <svg viewBox="0 0 1140 640" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC, Microsoft YaHei, sans-serif">
+    <defs>
+      <marker id="a6-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#4dd0e1"/>
+      </marker>
+      <marker id="a6-arrow-p" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#b197fc"/>
+      </marker>
+    </defs>
+
+    <!-- 第一层：接口层 -->
+    <rect x="30" y="40" width="500" height="380" rx="16" fill="#12294d" stroke="#4dd0e1" stroke-width="1.6"/>
+    <text x="280" y="72" text-anchor="middle" fill="#4dd0e1" font-size="16" font-weight="700">① DuckLakeTransaction（接口层）</text>
+    <text x="280" y="94" text-anchor="middle" fill="#8b9bc7" font-size="11.5">2,217 行 · transaction.cpp · 实现 DuckDB Transaction 抽象</text>
+    <rect x="50" y="112" width="460" height="52" rx="9" fill="#0b1020" stroke="#2a3763"/>
+    <text x="64" y="134" fill="#dbe4ff" font-size="12">目录条目操作：CreateEntry :1790 / DropEntry :1900</text>
+    <text x="64" y="154" fill="#dbe4ff" font-size="12">AlterEntry :1987 · 事务本地 CatalogSet</text>
+    <rect x="50" y="172" width="460" height="52" rx="9" fill="#0b1020" stroke="#2a3763"/>
+    <text x="64" y="194" fill="#dbe4ff" font-size="12">快照管理：GetSnapshot :1625-1660（AT 子句缓存）</text>
+    <text x="64" y="214" fill="#dbe4ff" font-size="12">元数据库专用连接 GetConnection :798</text>
+    <rect x="50" y="232" width="460" height="52" rx="9" fill="#0b1020" stroke="#2a3763"/>
+    <text x="64" y="254" fill="#dbe4ff" font-size="12">生命周期：Commit :769 / Rollback :785</text>
+    <text x="64" y="274" fill="#dbe4ff" font-size="12">（Rollback 调 state->CleanupFiles() 删已写文件）</text>
+    <rect x="50" y="292" width="460" height="52" rx="9" fill="#0b1020" stroke="#ffd43b"/>
+    <text x="64" y="314" fill="#ffd43b" font-size="12">提交编排：FlushChanges :1383（分发点 §6.3）</text>
+    <text x="64" y="334" fill="#ffd43b" font-size="12">RunCommitLoop :1430（组装上下文）· ApplyServerSideCommit :1407</text>
+    <rect x="50" y="352" width="460" height="52" rx="9" fill="#0b1020" stroke="#2a3763"/>
+    <text x="64" y="374" fill="#dbe4ff" font-size="12">状态委托：约 30 个 getter 全部一行转发 state->…</text>
+    <text x="64" y="394" fill="#dbe4ff" font-size="12">（:1666-1783）· schema_pins 防缓存逐出 :725-741</text>
+
+    <!-- 第二层：状态层 -->
+    <rect x="610" y="40" width="500" height="380" rx="16" fill="#241f0a" stroke="#ffd43b" stroke-width="1.6"/>
+    <text x="860" y="72" text-anchor="middle" fill="#ffd43b" font-size="16" font-weight="700">② DuckLakeTransactionState（状态层）</text>
+    <text x="860" y="94" text-anchor="middle" fill="#8b9bc7" font-size="11.5">2,012 行 · transaction_state.cpp（★新文件）· 组合而非继承</text>
+    <rect x="630" y="112" width="460" height="118" rx="9" fill="#0b1020" stroke="#2a3763"/>
+    <text x="644" y="136" fill="#dbe4ff" font-size="12" font-weight="600">全部可变本地状态（hpp:198-223）：</text>
+    <text x="644" y="158" fill="#8b9bc7" font-size="11.5">new_tables / dropped_tables / renamed_tables / new_schemas</text>
+    <text x="644" y="178" fill="#8b9bc7" font-size="11.5">dropped_files / tables_deleted_from / new_macros / name_maps</text>
+    <text x="644" y="198" fill="#ffd43b" font-size="11.5">LocalTableChanges local_changes（每表文件/内联/删除变更+锁）</text>
+    <text x="644" y="218" fill="#8b9bc7" font-size="11.5">TRANSACTION_LOCAL_ID_START = 2^63（事务本地 id 空间，index.hpp:18）</text>
+    <rect x="630" y="238" width="460" height="52" rx="9" fill="#0b1020" stroke="#2a3763"/>
+    <text x="644" y="260" fill="#dbe4ff" font-size="12">提交 SQL 生成：CommitChanges :1575（整批 SQL 拼装）</text>
+    <text x="644" y="280" fill="#dbe4ff" font-size="12">WriteSnapshotChanges :306 · GetNewDataFiles :1075</text>
+    <rect x="630" y="298" width="460" height="52" rx="9" fill="#0b1020" stroke="#69db7c"/>
+    <text x="644" y="320" fill="#69db7c" font-size="12">冲突检测：CheckForConflicts :142-286（逐类比对）</text>
+    <text x="644" y="340" fill="#69db7c" font-size="12">快照级重载 :1902 · GetFilesDeletedOrDroppedAfterSnapshot :1815</text>
+    <rect x="630" y="358" width="460" height="48" rx="9" fill="#0b1020" stroke="#ffd43b"/>
+    <text x="644" y="380" fill="#ffd43b" font-size="12">★ Commit :1918-2010 —— 乐观重试循环本体（§6.4）</text>
+    <text x="644" y="398" fill="#8b9bc7" font-size="10.5">同一套代码被客户端与服务端共用</text>
+
+    <!-- 第三层：CommitContext -->
+    <rect x="220" y="470" width="700" height="130" rx="16" fill="#2a1f4d" stroke="#b197fc" stroke-width="1.6"/>
+    <text x="570" y="500" text-anchor="middle" fill="#b197fc" font-size="15.5" font-weight="700">③ DuckLakeCommitContext —— std::function 回调袋（commit_state 相关 hpp:26-114）</text>
+    <text x="570" y="528" text-anchor="middle" fill="#dbe4ff" font-size="12">conflict_query_executor · get_snapshot · execute_commit_batch · try_rollback · prepare_retry</text>
+    <text x="570" y="552" text-anchor="middle" fill="#dbe4ff" font-size="12">try_append_data_files · write_inlined_data · get_table_stats · set_catalog_version · commit_connection</text>
+    <text x="570" y="580" text-anchor="middle" fill="#8b9bc7" font-size="11.5">把"提交算法"与"执行环境"解耦：客户端 RunCommitLoop（transaction.cpp:1433-1555）与服务端 BuildContext（server_side_commit.cpp:726）各自填充同一组闭包</text>
+
+    <!-- 箭头 -->
+    <path d="M 530 230 L 605 230" fill="none" stroke="#4dd0e1" stroke-width="2.4" marker-end="url(#a6-arrow)"/>
+    <text x="567" y="216" text-anchor="middle" fill="#4dd0e1" font-size="11.5">state 成员</text>
+    <path d="M 860 420 L 860 465" fill="none" stroke="#b197fc" stroke-width="2.4" marker-end="url(#a6-arrow-p)"/>
+    <path d="M 280 420 L 280 465" fill="none" stroke="#b197fc" stroke-width="2.4" marker-end="url(#a6-arrow-p)"/>
+    <text x="305" y="447" fill="#b197fc" font-size="11">填充闭包</text>
+    <text x="885" y="447" fill="#b197fc" font-size="11">消费闭包</text>
+  </svg>
+  <div class="fig-caption">DuckLakeTransaction 是 friend class（transaction.hpp:177）；"算法在上层不变、环境可替换"正是服务端提交得以低成本实现的原因</div>
+</div>
+
+<h2 id="s2"><span class="sec-no">§6.2</span>事务生命周期</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 6-2 · 事务状态机</div>
+<pre class="mermaid">
+stateDiagram-v2
+    [*] --> Active : StartTransaction<br/>（Start :766 已是空实现，<br/>懒初始化在首次访问）
+    Active --> Active : 读写混合<br/>· 读：GetSchemaForSnapshot(事务快照)<br/>· 写：写Parquet+内存LocalChanges<br/>（对他人不可见）
+    Active --> Flushing : COMMIT<br/>ChangesMade()?
+    Active --> RolledBack : ROLLBACK<br/>元库连接回滚<br/>state->CleanupFiles()
+    Flushing --> ServerSide : quack后端且<br/>数据型提交（可跳快照拉取）
+    Flushing --> ClientLoop : 其他后端<br/>或服务端不支持
+    ServerSide --> Committed : staged批+ducklake_commit<br/>返回三元组
+    ServerSide --> ClientLoop : 服务端回退<br/>(非数据型提交 :108-111)
+    ClientLoop --> Committed : 抢到新快照主键
+    ClientLoop --> ClientLoop : 冲突 → 退避 → 重试<br/>（≤ max_retry_count）
+    ClientLoop --> Failed : 重试耗尽 / 不可重试错误<br/>CleanupFiles 后抛异常
+    Committed --> [*] : ApplyServerSideCommit /<br/>失效统计与schema缓存
+    RolledBack --> [*]
+    Failed --> [*]
+</pre>
+  <div class="fig-caption">"Active 期的写"完全在客户端内存 + 外部文件里，元数据库零写入——冲突检测全部推迟到 Flushing 一刻</div>
+</div>
+
+<h2 id="s3"><span class="sec-no">§6.3</span>提交分发：三条路径</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 6-3 · FlushChanges 的路由（transaction.cpp:1383-1405）</div>
+<pre class="mermaid">
+flowchart TD
+    A["COMMIT → FlushChanges()"] --> B{"CanSkipSnapshotFetch()<br>纯数据提交（无DDL）?"}
+    B -- "是 且 后端支持" --> C["路径A：FlushChangesServerSide<br>（哨兵快照，无需拉最新）"]
+    B -- 否 --> D{"ExecuteRetrialsServerSide()<br>quack 且服务端有<br>ducklake_commit 函数?"}
+    D -- 是 --> E["路径A：服务端提交<br>（真实事务快照）"]
+    D -- "否 / quack内部回退" --> F["路径B：客户端 RunCommitLoop<br>（默认所有后端）"]
+    C --> G["构建暂存批 DuckLakeStagedCommit::Build<br>→ temp tables + SELECT ducklake_commit(...)"]
+    E --> G
+    G --> H["服务端执行 · 返回<br>{snapshot_id, schema_version, had_flushes}"]
+    H --> I["ApplyServerSideCommit :1407<br>失效缓存 · 设 catalog_version · 收尾"]
+    F --> J["组装 DuckLakeCommitContext 全部闭包<br>→ state->Commit(...) 乐观重试 §6.4"]
+</pre>
+  <div class="fig-caption">三条路径共享同一套状态与冲突检测；差别只在"循环跑在谁的进程里"</div>
+</div>
+
+<h2 id="s4"><span class="sec-no">§6.4</span>乐观提交循环</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 6-4 · DuckLakeTransactionState::Commit（transaction_state.cpp:1918-2010）</div>
+  <svg viewBox="0 0 1120 620" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC, Microsoft YaHei, sans-serif">
+    <defs>
+      <marker id="a6b-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#ffd43b"/>
+      </marker>
+      <marker id="a6b-red" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#ff8787"/>
+      </marker>
+      <marker id="a6b-green" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#69db7c"/>
+      </marker>
+    </defs>
+    <rect x="330" y="30" width="460" height="66" rx="12" fill="#0b1020" stroke="#4dd0e1"/>
+    <text x="560" y="58" text-anchor="middle" fill="#dbe4ff" font-size="13" font-weight="600">进入 for (i = 0; i ≤ max_retry_count; i++)</text>
+    <text x="560" y="82" text-anchor="middle" fill="#8b9bc7" font-size="11.5">默认 max_retry_count=10 / wait=100ms / backoff=1.5（extension.cpp:29-35）</text>
+
+    <path d="M 560 96 L 560 130" fill="none" stroke="#ffd43b" stroke-width="2.2" marker-end="url(#a6b-arrow)"/>
+
+    <rect x="330" y="132" width="460" height="80" rx="12" fill="#12294d" stroke="#4dd0e1"/>
+    <text x="560" y="162" text-anchor="middle" fill="#dbe4ff" font-size="13" font-weight="600">i == 0？</text>
+    <text x="560" y="188" text-anchor="middle" fill="#8b9bc7" font-size="11.5">是 → context.get_snapshot() 取当前最新快照（:1937）</text>
+    <text x="560" y="206" text-anchor="middle" fill="#8b9bc7" font-size="11.5">否 → 先 CheckForConflicts(本变更 vs 此后所有并发提交) :1930</text>
+
+    <path d="M 560 212 L 560 248" fill="none" stroke="#ffd43b" stroke-width="2.2" marker-end="url(#a6b-arrow)"/>
+
+    <rect x="330" y="250" width="460" height="74" rx="12" fill="#0b1020" stroke="#2a3763"/>
+    <text x="560" y="278" text-anchor="middle" fill="#dbe4ff" font-size="12.5">推进游标：snapshot_id++（:1939）；DDL 则 schema_version++</text>
+    <text x="560" y="304" text-anchor="middle" fill="#8b9bc7" font-size="11.5">id 重映射：事务本地 id(≥2^63) → 正式 id（commit_state 重映射表）</text>
+
+    <path d="M 560 324 L 560 358" fill="none" stroke="#ffd43b" stroke-width="2.2" marker-end="url(#a6b-arrow)"/>
+
+    <rect x="270" y="360" width="580" height="80" rx="12" fill="#241f0a" stroke="#ffd43b" stroke-width="1.4"/>
+    <text x="560" y="390" text-anchor="middle" fill="#ffd43b" font-size="13.5" font-weight="700">一次性执行整批 SQL（:1947-1950）</text>
+    <text x="560" y="416" text-anchor="middle" fill="#dbe4ff" font-size="12">INSERT ducklake_snapshot（新快照行·自增主键是竞争点）</text>
+    <text x="560" y="436" text-anchor="middle" fill="#dbe4ff" font-size="12">+ CommitChanges（目录/文件/统计全部 DML）+ WriteSnapshotChanges</text>
+
+    <!-- 分叉 -->
+    <path d="M 560 440 L 560 470" fill="none" stroke="#69db7c" stroke-width="2.2" marker-end="url(#a6b-green)"/>
+    <path d="M 480 442 C 300 480, 250 500, 235 528" fill="none" stroke="#ff8787" stroke-width="2.2" marker-end="url(#a6b-red)"/>
+
+    <rect x="620" y="472" width="380" height="120" rx="12" fill="#12331f" stroke="#69db7c"/>
+    <text x="810" y="502" text-anchor="middle" fill="#69db7c" font-size="13.5" font-weight="700">✓ 成功（:1954-1967）</text>
+    <text x="810" y="528" text-anchor="middle" fill="#dbe4ff" font-size="11.5">flush 元库连接缓存 → 连接 COMMIT</text>
+    <text x="810" y="550" text-anchor="middle" fill="#dbe4ff" font-size="11.5">失效表统计缓存 / schema 缓存（通知其他事务）</text>
+    <text x="810" y="574" text-anchor="middle" fill="#dbe4ff" font-size="11.5">set_committed_snapshot_id → break</text>
+
+    <rect x="60" y="460" width="380" height="150" rx="12" fill="#2a1f0a" stroke="#ff8787"/>
+    <text x="250" y="488" text-anchor="middle" fill="#ff8787" font-size="13.5" font-weight="700">✗ 异常（:1971-2006）</text>
+    <text x="250" y="512" text-anchor="middle" fill="#dbe4ff" font-size="11.5">context.try_rollback() 回滚元库连接</text>
+    <text x="250" y="536" text-anchor="middle" fill="#dbe4ff" font-size="11.5">RetryOnError(:1351) 匹配可重试关键字：</text>
+    <text x="250" y="556" text-anchor="middle" fill="#8b9bc7" font-size="11">"primary key" / "unique" / "conflict" / "concurrent"</text>
+    <text x="250" y="582" text-anchor="middle" fill="#dbe4ff" font-size="11.5">退避 sleep = wait × rand(0.5~1.0) × backoff^i（:1994）</text>
+    <text x="250" y="604" text-anchor="middle" fill="#dbe4ff" font-size="11.5">context.prepare_retry() 后进入下一轮 i</text>
+
+    <path d="M 60 535 C 30 535, 30 70, 325 63" fill="none" stroke="#ff8787" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#a6b-red)"/>
+    <text x="42" y="300" fill="#ff8787" font-size="11" transform="rotate(-90 42 300)">重试循环</text>
+  </svg>
+  <div class="fig-caption">随机化退避避免"惊群"重试；重试时唯一重做的事就是"换个更大快照号再插一次快照行"</div>
+</div>
+
+<h2 id="s5"><span class="sec-no">§6.5</span>冲突检测矩阵</h2>
+<p>细粒度比对在 <code class="ref">ducklake_transaction_state.cpp:142-286</code>：把<b>本事务 changes</b> 与<b>快照以来其他事务的 changes_made</b> 逐类对照，命中即抛 <code>TransactionException</code>：</p>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>本事务操作 ↓ 遇并发提交 →</th><th>对方 INSERT（同表）</th><th>对方 DELETE（同表）</th><th>对方 DDL（同对象）</th><th>对方 Compact / Flush</th></tr></thead>
+  <tbody>
+    <tr><td><strong>INSERT</strong></td><td class="ok">✅ 允许（纯追加，重试后换新快照基）</td><td>⚠️ 检查删除的文件集是否与我写的文件重叠</td><td>表被改/删则冲突</td><td>视文件集重叠判定</td></tr>
+    <tr><td><strong>DELETE</strong></td><td>⚠️ 对方新文件不在我删除范围 → 允许</td><td>⚠️ 双方都删同一文件 → 允许（rowid 集合并）；文件被重写 → 冲突</td><td>冲突</td><td><strong>❌ 与 compaction 互斥</strong></td></tr>
+    <tr><td><strong>DDL（create/drop/alter schema·table·view·macro）</strong></td><td>—</td><td>—</td><td><strong>❌ 同名即冲突</strong>（ConflictCheck 模板 :77-138）</td><td>—</td></tr>
+    <tr><td><strong>Compaction / Flush 内联</strong></td><td>视文件集</td><td>对方删除与我重写的文件重叠 → 冲突</td><td>—</td><td><strong>❌ 互斥</strong></td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout red">
+  <div class="co-title">⚔️ 关键洞察：约束即锁</div>
+  快照表主键（snapshot_id 自增）是唯一的全局串行化点。两个事务同时提交 → 数据库层主键冲突立刻暴露，无需应用层锁。此后才轮到 <code>changes_made</code> 语义比对精细裁决。<b>数据库约束承担了分布式锁的角色</b>——这就是"SQL 目录"架构红利的最佳注脚。
+</div>
+
+<h2 id="s6"><span class="sec-no">§6.6</span>Staged Commit 与服务端提交 ★</h2>
+<p class="lead">本 HEAD 最新的大特性：对 <strong>quack 远程元数据服务器</strong>，把整个提交打包成临时表批一次性发过去，<strong>乐观重试循环在服务端本地执行</strong>，客户端不再反复跨网络重传。</p>
+
+<div class="diagram">
+  <div class="fig-title">图 6-5 · Staged Commit 端到端时序（quack 后端）</div>
+<pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant CT as 客户端 DuckDB
+    participant SC as DuckLakeStagedCommit
+    participant QM as QuackMetadataManager
+    participant SR as quack 服务器<br>(DuckDB进程)
+    participant SS as DuckLakeServerSideCommit
+    participant ST as DuckLakeTransactionState
+
+    CT->>CT: 事务期：变更累积在<br>TransactionState.local_changes
+    CT->>QM: FlushChangesServerSide<br>(quack_metadata_manager.cpp:104)
+    QM->>QM: 前置判定：数据型提交?<br>IsDataOnlyCommit (:88-102)
+    Note over QM: 有 DDL/新内联表 → 回退客户端循环
+    QM->>SC: Build() :500-530
+    SC->>SC: 依序发射 17 类暂存表批：<br>commit_header / data_file(+关联删除) /<br>inlined_data / 删除 / compaction / name_map…
+    SC->>SC: 追加 SELECT ducklake_commit(<br>schema, version, max_retry_count=>…)<br>(:524-528)
+    QM->>SR: CALL quack_query_by_name(整个批)<br>一次网络往返
+    SR->>SS: ducklake_commit 执行 (:52-68)<br>DuckLakeServerSideCommit::Run :136
+    SS->>SS: 逐张读回暂存表→内存状态<br>（ScanStagedTable :860 无SQL直扫temp）
+    SS->>ST: state->Commit(snapshot, changes,<br>retry, BuildContext本地闭包 :726)
+    ST->>ST: §6.4 同一套乐观循环<br>在服务端本地重试
+    SR-->>CT: 一行结果：<br>committed_snapshot_id /<br>committed_schema_version / had_flushes
+    CT->>CT: ApplyServerSideCommit :1407<br>失效缓存；had_flushes→清理旧内联表<br>ClearCache() :138
+</pre>
+  <div class="fig-caption">暂存表全是 CREATE TEMPORARY TABLE（会话级，不落持久元数据）；服务端逐次提交前 TRUNCATE 复用</div>
+</div>
+
+<div class="grid g3">
+  <div class="card gold">
+    <h4>17 类暂存表</h4>
+    <p><code>DuckLakeStagedTableType</code>（hpp:36-54）：COMMIT_HEADER、DATA_FILE、DATA_FILE_COLUMN_STATS、DELETE_FILE、INLINED_DATA/ROW/COLUMN_STATS/DELETE/FILE_DELETE、DROPPED_FILE、FLUSHED_INLINED、COMPACTION(+SOURCE)、NAME_MAP(+ENTRY)、TABLES_DELETED_FROM。</p>
+  </div>
+  <div class="card cyan">
+    <h4>为什么快</h4>
+    <p>普通提交每轮重试都要"重新读最新快照 + 重发整批 SQL"（跨网络）；服务端提交把循环内化，<b>网络成本 O(1)</b>。高并发写入者 + 远程元数据库时收益最大。</p>
+  </div>
+  <div class="card green">
+    <h4>能力探测</h4>
+    <p><code>ProbeServerCapabilities</code>（quack_metadata_manager.cpp:74-86）查 <code>duckdb_functions()</code> 里是否有 <code>ducklake_commit</code>——老服务器自动退回客户端路径，<b>前后向兼容零配置</b>。</p>
+  </div>
+</div>
+
+<h2 id="s7"><span class="sec-no">§6.7</span>changes_made 协议</h2>
+<p>每个提交把"我动了什么"序列化进 <code>ducklake_snapshot_changes.changes_made</code> blob（<code>ducklake_transaction_changes.cpp</code> 的 <code>TransactionChangeInformation</code>/<code>SnapshotChangeInformation</code>）。后续事务提交时，用 <code>ParseChangesMade</code> 反序列化所有前序提交，逐一过 §6.5 矩阵。</p>
+
+<div class="callout">
+  <div class="co-title">📦 changes_made 里有什么</div>
+  涉及的 schema/table/view/macro 集合（drop/create/rename 各自列出）、被删文件集合、被整表清空的表、compaction/flush 记录、新内联表等。<b>它是一份"提交指纹"</b>——足够细以支撑冲突判断，又远小于完整变更内容。
+</div>
+
+<div class="pager">
+  <a href="05-write-path.html">
+    <div class="pg-label">← 上一章</div>
+    <div class="pg-title">05 · 写入路径</div>
+  </a>
+  <a class="next" href="07-inline-compaction.html">
+    <div class="pg-label">下一章 →</div>
+    <div class="pg-title">07 · 数据内联与 Compaction</div>
+  </a>
+</div>
+
+<div class="footer">DuckLake 源码深度解析 · CH 06 · 基于 duckdb/ducklake @ 27c14caf</div>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      primaryColor: '#1a2447',
+      primaryTextColor: '#dbe4ff',
+      primaryBorderColor: '#4dd0e1',
+      lineColor: '#8b9bc7',
+      secondaryColor: '#241f0a',
+      tertiaryColor: '#12294d',
+      fontFamily: 'PingFang SC, Microsoft YaHei, sans-serif',
+      fontSize: '14px'
+    },
+    flowchart: { curve: 'basis', htmlLabels: true },
+    sequence: { actorMargin: 40, width: 170 }
+  });
+</script>
+</body>
+</html>

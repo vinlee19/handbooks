@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DuckLake 源码深度解析 · 导航首页</title>
+<link rel="stylesheet" href="assets/ducklake.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <a class="brand" href="index.html"><span class="logo-dot"></span>DUCKLAKE·源码解析</a>
+  <a href="index.html" class="active">首页</a>
+  <a href="01-architecture.html">01 总体架构</a>
+  <a href="02-metadata-catalog.html">02 元数据目录</a>
+  <a href="03-snapshot-timetravel.html">03 快照与Time Travel</a>
+  <a href="04-read-path.html">04 读路径</a>
+  <a href="05-write-path.html">05 写路径</a>
+  <a href="06-transaction-concurrency.html">06 事务与并发</a>
+  <a href="07-inline-compaction.html">07 内联与Compaction</a>
+  <a href="08-functions-api.html">08 函数与宏</a>
+  <a href="09-backends-encryption.html">09 后端与加密</a>
+  <a href="10-debug-guide.html">10 调试指南</a>
+</nav>
+
+<div class="page">
+
+<div class="hero">
+  <h1>DuckLake <span class="hl">源码深度解析</span></h1>
+  <p class="subtitle">从 0 到 1 读懂 DuckDB 官方 Lakehouse 格式的每一行核心代码 —— 原理 · 架构 · 底层实现</p>
+  <div class="meta">
+    <span class="badge gold">DuckDB Storage Extension</span>
+    <span class="badge cyan">SQL Catalog + Parquet</span>
+    <span class="badge green">ACID / Time Travel</span>
+    <span class="badge purple">基于 commit <code style="background:none;border:none;color:inherit">27c14caf</code></span>
+    <span class="badge orange">debug-study 分支</span>
+  </div>
+</div>
+
+<div class="grid g4">
+  <div class="stat-card"><div class="num">36,528</div><div class="lbl">行 C++ 源码（129 个文件）</div></div>
+  <div class="stat-card"><div class="num">28</div><div class="lbl">张元数据 Catalog 表</div></div>
+  <div class="stat-card"><div class="num">21</div><div class="lbl">个 SQL 表函数 + 宏</div></div>
+  <div class="stat-card"><div class="num">4</div><div class="lbl">种元数据后端（DuckDB/SQLite/PG/Quack）</div></div>
+  <div class="stat-card"><div class="num">540</div><div class="lbl">个 SQLLogic 测试文件</div></div>
+  <div class="stat-card"><div class="num">512MB</div><div class="lbl">默认目标 Parquet 文件大小</div></div>
+</div>
+
+<h2><span class="sec-no">§0.1</span>一句话理解 DuckLake</h2>
+<p class="lead">DuckLake 是 DuckDB 官方推出的开源 Lakehouse 格式，它的设计哲学只有一句话：</p>
+
+<div class="callout">
+  <div class="co-title">🎯 核心设计</div>
+  <strong>把 Lakehouse 的"元数据"从一堆 JSON/manifest 文件里搬回数据库</strong>——元数据存进一个支持 ACID 的 SQL 目录数据库（DuckDB / SQLite / Postgres / Quack 远程服务），数据存为云上朴素的 Parquet 文件。用一张 <code>ducklake_snapshot</code> 表替代 Iceberg 的 manifest 链，用事务替代文件重命名协议，从而获得<b>没有分布式协调开销的完整 ACID、原生 Time Travel、秒级 DDL</b>。
+</div>
+
+<p>对 DuckDB 而言，DuckLake 是一个 <strong>ATTACH 型存储扩展</strong>（Storage Extension）：一条 <code>ATTACH 'ducklake:meta.ducklake' (DATA_PATH 's3://bucket/lake')</code>，DuckDB 里就多出一个完整的 Lakehouse 数据库，增删改查、事务、快照回溯全部开箱即用。</p>
+
+<h2><span class="sec-no">§0.2</span>全景物理架构总览</h2>
+
+<div class="diagram">
+  <div class="fig-title">图 0-1 · DuckLake 物理架构总览（部署视图）</div>
+  <svg viewBox="0 0 1140 620" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC, Microsoft YaHei, sans-serif">
+    <defs>
+      <linearGradient id="idx-gold" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#3a3110"/><stop offset="1" stop-color="#241f0a"/>
+      </linearGradient>
+      <linearGradient id="idx-blue" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#12294d"/><stop offset="1" stop-color="#0c1b33"/>
+      </linearGradient>
+      <linearGradient id="idx-green" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#12331f"/><stop offset="1" stop-color="#0b2015"/>
+      </linearGradient>
+      <linearGradient id="idx-purple" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#2a1f4d"/><stop offset="1" stop-color="#1a1230"/>
+      </linearGradient>
+      <marker id="idx-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#8b9bc7"/>
+      </marker>
+      <marker id="idx-arrow-gold" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#ffd43b"/>
+      </marker>
+      <marker id="idx-arrow-cyan" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#4dd0e1"/>
+      </marker>
+    </defs>
+
+    <!-- ===== 左：DuckDB 引擎 + 扩展 ===== -->
+    <rect x="30" y="70" width="330" height="480" rx="16" fill="url(#idx-gold)" stroke="#ffd43b" stroke-width="1.5"/>
+    <text x="195" y="102" text-anchor="middle" fill="#ffd43b" font-size="17" font-weight="700">DuckDB 进程</text>
+    <text x="195" y="122" text-anchor="middle" fill="#8b9bc7" font-size="12">ducklake.duckdb_extension</text>
+
+    <rect x="55" y="145" width="280" height="52" rx="10" fill="#0b1020" stroke="#2a3763"/>
+    <text x="195" y="167" text-anchor="middle" fill="#dbe4ff" font-size="13" font-weight="600">SQL 层</text>
+    <text x="195" y="185" text-anchor="middle" fill="#8b9bc7" font-size="11">Parser / Optimizer / 执行器</text>
+
+    <rect x="55" y="212" width="280" height="52" rx="10" fill="#0b1020" stroke="#2a3763"/>
+    <text x="195" y="234" text-anchor="middle" fill="#dbe4ff" font-size="13" font-weight="600">Catalog 抽象层</text>
+    <text x="195" y="252" text-anchor="middle" fill="#8b9bc7" font-size="11">Catalog / Transaction / TransactionManager</text>
+
+    <rect x="55" y="284" width="280" height="150" rx="10" fill="#0b1020" stroke="#ffd43b" stroke-width="1.2"/>
+    <text x="195" y="308" text-anchor="middle" fill="#ffd43b" font-size="13.5" font-weight="700">DuckLake 扩展（src/）</text>
+    <text x="70" y="332" fill="#4dd0e1" font-size="12">├ storage/</text>
+    <text x="165" y="332" fill="#8b9bc7" font-size="11">catalog·事务·扫描·压缩</text>
+    <text x="70" y="354" fill="#4dd0e1" font-size="12">├ metadata_manager/</text>
+    <text x="215" y="354" fill="#8b9bc7" font-size="11">28表DDL·SQL方言</text>
+    <text x="70" y="376" fill="#4dd0e1" font-size="12">├ functions/</text>
+    <text x="150" y="376" fill="#8b9bc7" font-size="11">21个表函数</text>
+    <text x="70" y="398" fill="#4dd0e1" font-size="12">└ common/</text>
+    <text x="140" y="398" fill="#8b9bc7" font-size="11">快照·文件·类型·工具</text>
+    <text x="70" y="422" fill="#5f6f9e" font-size="10.5">ducklake_extension.cpp 注册 StorageExtension("ducklake")</text>
+
+    <rect x="55" y="450" width="280" height="80" rx="10" fill="#0b1020" stroke="#2a3763"/>
+    <text x="195" y="472" text-anchor="middle" fill="#dbe4ff" font-size="12.5" font-weight="600">ATTACH 入口</text>
+    <text x="68" y="494" fill="#8b9bc7" font-size="10.5" font-family="Menlo,monospace">ATTACH 'ducklake:meta.db'</text>
+    <text x="68" y="512" fill="#8b9bc7" font-size="10.5" font-family="Menlo,monospace">　 (DATA_PATH 's3://lake/');</text>
+
+    <!-- ===== 中：元数据 Catalog 数据库 ===== -->
+    <rect x="430" y="70" width="310" height="480" rx="16" fill="url(#idx-blue)" stroke="#4dd0e1" stroke-width="1.5"/>
+    <text x="585" y="102" text-anchor="middle" fill="#4dd0e1" font-size="17" font-weight="700">元数据 Catalog 数据库</text>
+    <text x="585" y="122" text-anchor="middle" fill="#8b9bc7" font-size="12">支持 ACID 的 SQL 数据库（可换后端）</text>
+
+    <rect x="452" y="140" width="266" height="86" rx="10" fill="#0b1020" stroke="#2a3763"/>
+    <text x="585" y="162" text-anchor="middle" fill="#dbe4ff" font-size="12.5" font-weight="600">后端选择（ducklake: URL 协议头）</text>
+    <text x="468" y="186" fill="#69db7c" font-size="11.5" font-family="Menlo,monospace">duckdb:</text><text x="530" y="186" fill="#8b9bc7" font-size="11">本地文件（默认）</text>
+    <text x="468" y="206" fill="#69db7c" font-size="11.5" font-family="Menlo,monospace">sqlite:</text><text x="530" y="206" fill="#8b9bc7" font-size="11">postgres:</text>
+    <text x="600" y="206" fill="#69db7c" font-size="11.5" font-family="Menlo,monospace">quack:</text><text x="660" y="206" fill="#8b9bc7" font-size="11">远程服务</text>
+
+    <rect x="452" y="240" width="266" height="250" rx="10" fill="#0b1020" stroke="#4dd0e1" stroke-width="0.8"/>
+    <text x="585" y="264" text-anchor="middle" fill="#4dd0e1" font-size="13" font-weight="700">28 张元数据表（核心）</text>
+    <text x="470" y="290" fill="#ffd43b" font-size="12" font-family="Menlo,monospace">ducklake_snapshot</text>
+    <text x="620" y="290" fill="#5f6f9e" font-size="10.5">版本锚点</text>
+    <text x="470" y="312" fill="#ffd43b" font-size="12" font-family="Menlo,monospace">ducklake_snapshot_changes</text>
+    <text x="470" y="334" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">ducklake_schema / table / column</text>
+    <text x="470" y="356" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">ducklake_data_file</text>
+    <text x="620" y="356" fill="#5f6f9e" font-size="10.5">数据文件账本</text>
+    <text x="470" y="378" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">ducklake_delete_file</text>
+    <text x="620" y="378" fill="#5f6f9e" font-size="10.5">删除账本</text>
+    <text x="470" y="400" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">ducklake_partition_*  (3张)</text>
+    <text x="470" y="422" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">ducklake_file_column_stats</text>
+    <text x="470" y="444" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">ducklake_column_mapping…</text>
+    <text x="470" y="466" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">ducklake_macro* / sort* / tag…</text>
+    <text x="585" y="499" text-anchor="middle" fill="#5f6f9e" font-size="10.5">inlined data 表（小表行内存储，按需创建）</text>
+
+    <!-- ===== 右：对象存储 ===== -->
+    <rect x="810" y="70" width="300" height="480" rx="16" fill="url(#idx-green)" stroke="#69db7c" stroke-width="1.5"/>
+    <text x="960" y="102" text-anchor="middle" fill="#69db7c" font-size="17" font-weight="700">对象存储 / 文件系统</text>
+    <text x="960" y="122" text-anchor="middle" fill="#8b9bc7" font-size="12">S3 · Azure · GCS · MinIO · 本地 FS</text>
+
+    <rect x="832" y="145" width="256" height="380" rx="10" fill="#0b1020" stroke="#2a3763"/>
+    <text x="846" y="170" fill="#69db7c" font-size="12" font-family="Menlo,monospace">s3://bucket/lake/</text>
+    <text x="858" y="196" fill="#dbe4ff" font-size="11.5" font-family="Menlo,monospace">├ schema=main/</text>
+    <text x="872" y="218" fill="#dbe4ff" font-size="11.5" font-family="Menlo,monospace">├ table=14/</text>
+    <text x="886" y="240" fill="#ffd43b" font-size="11.5" font-family="Menlo,monospace">│ ├ ducklake-01983f….parquet</text>
+    <text x="886" y="262" fill="#ffd43b" font-size="11.5" font-family="Menlo,monospace">│ ├ ducklake-01984a….parquet</text>
+    <text x="886" y="284" fill="#ff8787" font-size="11.5" font-family="Menlo,monospace">│ ├ ducklake-…-delete.parquet</text>
+    <text x="886" y="306" fill="#b197fc" font-size="11.5" font-family="Menlo,monospace">│ └ ducklake-…-delete.puffin</text>
+    <text x="858" y="336" fill="#dbe4ff" font-size="11.5" font-family="Menlo,monospace">├ table=15/ …</text>
+    <text x="846" y="368" fill="#5f6f9e" font-size="11">数据 = 纯 Parquet 文件</text>
+    <text x="846" y="388" fill="#5f6f9e" font-size="11">· 无 manifest / 无 JSON 元数据</text>
+    <text x="846" y="408" fill="#5f6f9e" font-size="11">· 任意引擎可读（Spark/Trino…）</text>
+    <text x="846" y="428" fill="#5f6f9e" font-size="11">· UUIDv7 文件名（时间有序）</text>
+    <text x="846" y="456" fill="#8b9bc7" font-size="11">删除：positional-delete parquet</text>
+    <text x="846" y="476" fill="#8b9bc7" font-size="11">或 Iceberg V3 puffin 删除向量</text>
+    <text x="846" y="504" fill="#4dd0e1" font-size="11" font-family="Menlo,monospace">经 httpfs / aws 扩展读写</text>
+
+    <!-- ===== 箭头 ===== -->
+    <!-- 扩展 → 元数据库 -->
+    <path d="M 335 340 C 380 340, 390 340, 428 340" fill="none" stroke="#4dd0e1" stroke-width="2.2" marker-end="url(#idx-arrow-cyan)"/>
+    <text x="382" y="328" text-anchor="middle" fill="#4dd0e1" font-size="11.5" font-weight="600">SQL 元数据读写</text>
+    <!-- 扩展 → 对象存储 -->
+    <path d="M 335 480 C 600 620, 700 560, 830 470" fill="none" stroke="#69db7c" stroke-width="2.2" marker-end="url(#idx-arrow)"/>
+    <text x="585" y="595" text-anchor="middle" fill="#69db7c" font-size="11.5" font-weight="600">Parquet 数据读写（COPY / scan）</text>
+    <!-- 元数据库 → 对象存储（账本记录文件路径） -->
+    <path d="M 740 300 C 770 290, 780 280, 808 272" fill="none" stroke="#8b9bc7" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#idx-arrow)"/>
+    <text x="775" y="258" text-anchor="middle" fill="#8b9bc7" font-size="10.5">登记文件路径+统计</text>
+
+    <!-- 底部说明 -->
+    <rect x="30" y="570" width="1080" height="38" rx="10" fill="#101731" stroke="#1f2a4d"/>
+    <text x="570" y="594" text-anchor="middle" fill="#8b9bc7" font-size="12.5">
+      关键洞察：数据面（Parquet）无状态可任意伸缩；控制面（元数据库）用 ACID 事务替代 Iceberg 式"文件提交协议"——提交 = 一个数据库事务
+    </text>
+  </svg>
+  <div class="fig-caption">DuckLake 把 Lakehouse 拆成两半：左边的扩展进程负责计算，中间的 Catalog 管控制面，右边对象存储只放"哑"数据文件</div>
+</div>
+
+<h2><span class="sec-no">§0.3</span>源码模块地图</h2>
+
+<div class="filetree"><span class="ft-dir">src/</span>                                          <span class="ft-cmt">← 36,528 行 C++（HEAD 27c14caf）</span>
+├── <span class="ft-hl">ducklake_extension.cpp</span>              <span class="ft-cmt">扩展入口：注册 StorageExtension、7 个全局设置、21 个表函数</span>
+├── <span class="ft-dir">storage/</span>  <span class="ft-cmt">(23,888 行 · 核心主体 65%)</span>
+│   ├── ducklake_catalog.cpp        <span class="ft-cmt">DuckLakeCatalog：按快照缓存 schema/stats</span>
+│   ├── ducklake_transaction.cpp    <span class="ft-cmt">事务编排层（重构后 2,217 行）</span>
+│   ├── ducklake_transaction_state.cpp <span class="ft-cmt">★事务可变状态 + 乐观提交循环（新，2,012 行）</span>
+│   ├── ducklake_staged_commit.cpp  <span class="ft-cmt">★暂存提交：提交序列化为 temp table 批（新）</span>
+│   ├── ducklake_server_side_commit.cpp <span class="ft-cmt">★服务端提交执行器（新，897 行）</span>
+│   ├── ducklake_metadata_manager.cpp <span class="ft-cmt">28 张元数据表 DDL + 全部 SQL 生成（5,826 行）</span>
+│   ├── ducklake_insert.cpp / ducklake_delete.cpp / ducklake_update.cpp / ducklake_merge_into.cpp
+│   ├── ducklake_multi_file_list.cpp / ducklake_multi_file_reader.cpp  <span class="ft-cmt">读路径</span>
+│   ├── ducklake_inline_data.cpp / ducklake_inlined_data_reader.cpp    <span class="ft-cmt">数据内联</span>
+│   ├── ducklake_puffin.cpp         <span class="ft-cmt">★Iceberg V3 puffin 删除向量（新）</span>
+│   └── ducklake_initializer.cpp    <span class="ft-cmt">ATTACH 初始化 + V0.1→V1.1 迁移调度</span>
+├── <span class="ft-dir">functions/</span>  <span class="ft-cmt">(4,866 行 · 21 个 SQL 表函数)</span>
+│   ├── ducklake_snapshots / table_info / table_changes / list_files / expire_snapshots
+│   ├── ducklake_commit.cpp         <span class="ft-cmt">★服务端提交入口表函数（新）</span>
+│   └── ducklake_compaction_functions.cpp <span class="ft-cmt">merge_adjacent_files / rewrite_data_files</span>
+├── <span class="ft-dir">metadata_manager/</span>  <span class="ft-cmt">(445 行 · 后端方言)</span>
+│   ├── sqlite_metadata_manager.cpp  ·  postgres_metadata_manager.cpp
+│   └── <span class="ft-hl">quack_metadata_manager.cpp</span>   <span class="ft-cmt">★远程元数据服务器后端（新）</span>
+├── <span class="ft-dir">common/</span>  <span class="ft-cmt">(1,055 行 · 数据结构)</span>
+│   └── ducklake_snapshot / ducklake_data_file / ducklake_name_map / ducklake_types
+└── <span class="ft-dir">include/</span>  <span class="ft-cmt">(6,123 行 · 与上述目录镜像的 .hpp)</span></div>
+
+<h2><span class="sec-no">§0.4</span>四条阅读路线</h2>
+
+<div class="grid g2">
+  <div class="card gold">
+    <h4>🚀 路线 A · 快速上手（30 分钟）</h4>
+    <p>想快速建立全局观：本页 → <a href="01-architecture.html">01 总体架构</a> → <a href="03-snapshot-timetravel.html">03 快照</a> → <a href="10-debug-guide.html">10 调试指南</a>（动手编译跑起来）</p>
+  </div>
+  <div class="card cyan">
+    <h4>📖 路线 B · 按数据流走（推荐）</h4>
+    <p>跟着一条 SQL 的生命周期：<a href="01-architecture.html">01 架构</a> → <a href="02-metadata-catalog.html">02 元数据</a> → <a href="04-read-path.html">04 读路径</a> → <a href="05-write-path.html">05 写路径</a> → <a href="06-transaction-concurrency.html">06 事务提交</a></p>
+  </div>
+  <div class="card green">
+    <h4>🔧 路线 C · 存储工程师视角</h4>
+    <p>关心文件布局与性能：<a href="05-write-path.html">05 写路径</a> → <a href="07-inline-compaction.html">07 内联与 Compaction</a> → <a href="09-backends-encryption.html">09 后端与加密</a> → <a href="02-metadata-catalog.html">02 元数据表</a></p>
+  </div>
+  <div class="card red">
+    <h4>🐛 路线 D · 源码调试者</h4>
+    <p>准备改代码：<a href="10-debug-guide.html">10 调试指南</a> → <a href="06-transaction-concurrency.html">06 事务</a>（冲突/重试是难点）→ <a href="04-read-path.html">04 读路径</a> → <a href="08-functions-api.html">08 函数注册</a></p>
+  </div>
+</div>
+
+<h2><span class="sec-no">§0.5</span>章节目录</h2>
+
+<div class="nav-cards">
+  <a class="nav-card" href="01-architecture.html">
+    <div class="nc-no">CH 01</div><div class="nc-title">总体架构与 ATTACH 流程</div>
+    <div class="nc-desc">物理部署架构、分层架构、扩展加载与 ATTACH 时序、核心类图谱、与 Iceberg/Delta 对比</div>
+  </a>
+  <a class="nav-card" href="02-metadata-catalog.html">
+    <div class="nc-no">CH 02</div><div class="nc-title">元数据目录设计</div>
+    <div class="nc-desc">28 张表全景 ER 图、建库初始化、V0.1→V1.1 迁移链、多后端工厂与方言</div>
+  </a>
+  <a class="nav-card" href="03-snapshot-timetravel.html">
+    <div class="nc-no">CH 03</div><div class="nc-title">快照与 Time Travel</div>
+    <div class="nc-desc">快照四元组、begin/end 区间版本化、AT 子句解析、Schema Evolution、CDC 变更流</div>
+  </a>
+  <a class="nav-card" href="04-read-path.html">
+    <div class="nc-no">CH 04</div><div class="nc-title">读取路径</div>
+    <div class="nc-desc">SELECT 端到端时序、文件裁剪、MultiFileReader、field_id 列映射、删除过滤、虚拟列</div>
+  </a>
+  <a class="nav-card" href="05-write-path.html">
+    <div class="nc-no">CH 05</div><div class="nc-title">写入路径</div>
+    <div class="nc-desc">INSERT 物理管道、Parquet 写出与 512MB 轮转、分区 transform、UPDATE/DELETE、统计收集</div>
+  </a>
+  <a class="nav-card" href="06-transaction-concurrency.html">
+    <div class="nc-no">CH 06</div><div class="nc-title">事务与乐观并发</div>
+    <div class="nc-desc">Transaction/State/CommitContext 三层重构、提交分发、冲突矩阵、指数退避、服务端提交</div>
+  </a>
+  <a class="nav-card" href="07-inline-compaction.html">
+    <div class="nc-no">CH 07</div><div class="nc-title">数据内联与 Compaction</div>
+    <div class="nc-desc">小表行内存储、inlining 决策、flush 刷盘、merge_adjacent_files 与 rewrite_data_files</div>
+  </a>
+  <a class="nav-card" href="08-functions-api.html">
+    <div class="nc-no">CH 08</div><div class="nc-title">SQL 函数与宏全景</div>
+    <div class="nc-desc">21 个表函数分类详解、内置宏懒加载、murmur3 分区函数、option/setting 体系</div>
+  </a>
+  <a class="nav-card" href="09-backends-encryption.html">
+    <div class="nc-no">CH 09</div><div class="nc-title">可插拔后端与安全</div>
+    <div class="nc-desc">DuckDB/SQLite/Postgres/Quack 四后端架构对比、Secret 体系、文件级加密、扩展自动加载</div>
+  </a>
+  <a class="nav-card" href="10-debug-guide.html">
+    <div class="nc-no">CH 10</div><div class="nc-title">调试实战指南</div>
+    <div class="nc-desc">编译构建、SQLLogic 测试、关键断点地图、三条典型调试路径、分支策略</div>
+  </a>
+</div>
+
+<div class="pager">
+  <a></a>
+  <a class="next" href="01-architecture.html">
+    <div class="pg-label">下一章 →</div>
+    <div class="pg-title">01 · 总体架构与 ATTACH 流程</div>
+  </a>
+</div>
+
+<div class="footer">DuckLake 源码深度解析 · 基于 duckdb/ducklake @ 27c14caf · debug-study 学习分支 · 图表：Mermaid + 手绘 SVG</div>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      primaryColor: '#1a2447',
+      primaryTextColor: '#dbe4ff',
+      primaryBorderColor: '#4dd0e1',
+      lineColor: '#8b9bc7',
+      secondaryColor: '#241f0a',
+      tertiaryColor: '#12294d',
+      fontFamily: 'PingFang SC, Microsoft YaHei, sans-serif',
+      fontSize: '14px'
+    },
+    flowchart: { curve: 'basis', htmlLabels: true },
+    sequence: { actorMargin: 40, width: 160 }
+  });
+</script>
+</body>
+</html>

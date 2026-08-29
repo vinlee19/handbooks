@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>10 · 调试实战指南 — DuckLake 源码深度解析</title>
+<link rel="stylesheet" href="assets/ducklake.css">
+</head>
+<body>
+
+<nav class="topnav">
+  <a class="brand" href="index.html"><span class="logo-dot"></span>DUCKLAKE·源码解析</a>
+  <a href="index.html">首页</a>
+  <a href="01-architecture.html">01 总体架构</a>
+  <a href="02-metadata-catalog.html">02 元数据目录</a>
+  <a href="03-snapshot-timetravel.html">03 快照与Time Travel</a>
+  <a href="04-read-path.html">04 读路径</a>
+  <a href="05-write-path.html">05 写路径</a>
+  <a href="06-transaction-concurrency.html">06 事务与并发</a>
+  <a href="07-inline-compaction.html">07 内联与Compaction</a>
+  <a href="08-functions-api.html">08 函数与宏</a>
+  <a href="09-backends-encryption.html">09 后端与加密</a>
+  <a href="10-debug-guide.html" class="active">10 调试指南</a>
+</nav>
+
+<div class="page">
+
+<div class="hero">
+  <h1>CH 10 · <span class="hl">调试实战</span>指南</h1>
+  <p class="subtitle">把 debug-study 分支用起来 —— 构建、测试、断点地图与三条调试路径</p>
+</div>
+
+<div class="toc">
+  <div class="toc-title">本章目录</div>
+  <ol>
+    <li><a href="#s1">分支策略与本站所在</a></li>
+    <li><a href="#s2">构建三步曲与产物</a></li>
+    <li><a href="#s3">SQLLogic 测试与配置矩阵</a></li>
+    <li><a href="#s4">断点地图</a></li>
+    <li><a href="#s5">调试路径 A：一条 SELECT</a></li>
+    <li><a href="#s6">调试路径 B：写冲突与重试</a></li>
+    <li><a href="#s7">调试路径 C：内联与 flush</a></li>
+    <li><a href="#s8">源码速查卡片</a></li>
+  </ol>
+</div>
+
+<h2 id="s1"><span class="sec-no">§10.1</span>分支策略与本站所在</h2>
+<div class="grid g3">
+  <div class="card cyan">
+    <h4>main</h4>
+    <p>跟随 <code>duckdb/ducklake</code> 上游 main，只做同步（fetch + fast-forward），不直接开发。</p>
+  </div>
+  <div class="card gold">
+    <h4>debug-study ★ 当前</h4>
+    <p>学习调试分支：本套 HTML 文档站位于 <code>docs/analysis/html/</code>，配套的 9 篇 Markdown 深度笔记在 <code>docs/analysis/</code>。所有实验性改动都在这里进行。</p>
+  </div>
+  <div class="card">
+    <h4>upstream 稳定线</h4>
+    <p>上游另有 <code>v1.5-variegata</code> 等稳定分支（跟随 DuckDB 稳定版）；生产问题定位时可对照阅读。</p>
+  </div>
+</div>
+
+<h2 id="s2"><span class="sec-no">§10.2</span>构建三步曲与产物</h2>
+
+<pre><code># 1. 子模块（duckdb 内核 + CI 工具链）
+git submodule init && git submodule update
+
+# 2. 拉取扩展依赖模板
+make pull
+
+# 3. 编译（默认 debug；release 加 GEN=ninja release）
+make
+# 可选：ENABLE_SQLITE_SCANNER=1 / ENABLE_POSTGRES_SCANNER=1 打包对应后端</code></pre>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>产物</th><th>路径</th><th>用途</th></tr></thead>
+  <tbody>
+    <tr><td>DuckDB shell（内嵌 ducklake）</td><td><code>build/debug/duckdb</code></td><td>日常调试主战场</td></tr>
+    <tr><td>SQLLogic 测试 runner</td><td><code>build/debug/test/unittest</code></td><td>跑 540 个 .test 文件</td></tr>
+    <tr><td>可分发扩展</td><td><code>build/debug/extension/ducklake/ducklake.duckdb_extension</code></td><td>LOAD 进任意 DuckDB</td></tr>
+  </tbody>
+</table>
+</div>
+
+<pre><code># 起一个实验库
+./build/debug/duckdb
+ATTACH 'ducklake:meta.db' (DATA_PATH 'data/lake');
+CREATE SCHEMA demo; USE demo;
+CREATE TABLE t (id BIGINT, v VARCHAR);
+INSERT INTO t VALUES (1,'hello'),(2,'ducklake');
+SELECT * FROM ducklake_snapshots('meta_db');
+SELECT * FROM t AT (VERSION => 1);</code></pre>
+
+<div class="callout">
+  <div class="co-title">🧰 vcpkg 依赖</div>
+  <code>roaring</code>（删除向量位图）经 <code>vcpkg.json</code> 声明，CMake <code>find_package(roaring)</code> 引入——首次构建会自动拉取。
+</div>
+
+<h2 id="s3"><span class="sec-no">§10.3</span>SQLLogic 测试与配置矩阵</h2>
+<p>测试主体是 <code>test/sql/</code> 下 540 个 sqllogic 文件，同一套 SQL 会在不同配置下参数化重放：</p>
+
+<div class="tbl-wrap">
+<table>
+  <thead><tr><th>配置（test/configs/）</th><th>变体内容</th></tr></thead>
+  <tbody>
+    <tr><td><code>attach_ducklake.json</code></td><td>把 DuckDB 核心测试库换成 DuckLake（最大覆盖面）</td></tr>
+    <tr><td><code>postgres.json</code> / <code>sqlite.json</code></td><td>元数据库换成 PG / SQLite（需 docker-compose 起服务，scripts/）</td></tr>
+    <tr><td><code>deletion_vectors.json</code></td><td>开 puffin 删除向量模式</td></tr>
+    <tr><td><code>no_inline.json</code></td><td>关闭数据内联</td></tr>
+    <tr><td><code>minio.json</code></td><td>数据路径走 MinIO S3</td></tr>
+    <tr><td><code>ducklake_version.json</code></td><td>钉住旧格式版本（迁移路径）</td></tr>
+  </tbody>
+</table>
+</div>
+
+<pre><code># 全量测试（默认配置）
+make test
+
+# 单文件
+./build/debug/test/unittest "test/sql/time_travel/timetravel.test"
+
+# 指定配置矩阵（如 PG 后端）
+./build/debug/test/unittest --test-config test/configs/postgres.json "[sql]"
+
+# 按目录过滤
+./build/debug/test/unittest "[compaction]"</code></pre>
+
+<h2 id="s4"><span class="sec-no">§10.4</span>断点地图</h2>
+<p>把前九章的关键行号浓缩成一张"下断点"地图（HEAD <code>27c14caf</code>）：</p>
+
+<div class="diagram">
+  <div class="fig-title">图 10-1 · 关键断点地图（按数据流排列）</div>
+  <svg viewBox="0 0 1140 600" xmlns="http://www.w3.org/2000/svg" font-family="PingFang SC, Microsoft YaHei, sans-serif">
+    <defs>
+      <marker id="a10-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6 Z" fill="#8b9bc7"/>
+      </marker>
+    </defs>
+    <!-- 泳道：attach -->
+    <rect x="25" y="25" width="1090" height="110" rx="12" fill="#101731" stroke="#1f2a4d"/>
+    <text x="45" y="52" fill="#4dd0e1" font-size="13" font-weight="700">ATTACH 泳道</text>
+    <text x="45" y="80" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">ducklake_extension.cpp:20 LoadInternal</text>
+    <text x="470" y="80" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">→ ducklake_storage.cpp:73 DuckLakeAttach</text>
+    <text x="45" y="108" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">→ ducklake_initializer.cpp:78 Initialize → :187 LoadExistingDuckLake（迁移 :209-248）</text>
+    <text x="470" y="108" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">→ ducklake_catalog.cpp:929 CatalogSnapshot</text>
+
+    <!-- 泳道：read -->
+    <rect x="25" y="150" width="1090" height="130" rx="12" fill="#101731" stroke="#1f2a4d"/>
+    <text x="45" y="177" fill="#69db7c" font-size="13" font-weight="700">READ 泳道</text>
+    <text x="45" y="205" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">ducklake_table_entry.cpp:363 GetScanFunction（AT子句）</text>
+    <text x="600" y="205" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">→ transaction.cpp:1639 GetSnapshot</text>
+    <text x="45" y="232" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">→ multi_file_list.cpp:324 GetFilesForTable → metadata_manager.cpp:1866 GetFilesForTable（裁剪SQL）</text>
+    <text x="45" y="259" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">→ multi_file_reader.cpp:458 MapColumns（field_id 映射）→ :281 删除过滤装配</text>
+
+    <!-- 泳道：write -->
+    <rect x="25" y="295" width="1090" height="130" rx="12" fill="#101731" stroke="#1f2a4d"/>
+    <text x="45" y="322" fill="#ffd43b" font-size="13" font-weight="700">WRITE 泳道</text>
+    <text x="45" y="350" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">ducklake_insert.cpp:802 Catalog::PlanInsert → :731 PlanInsert → :486 GetCopyOptions → :119 AddWrittenFiles</text>
+    <text x="45" y="377" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">ducklake_inline_data.cpp:80 Execute / :122 FinalExecute（内联决策）</text>
+    <text x="45" y="404" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">ducklake_delete.cpp:36 写删除文件模板 / :168 WritePuffinDeleteFile（DV）</text>
+
+    <!-- 泳道：commit -->
+    <rect x="25" y="440" width="1090" height="140" rx="12" fill="#101731" stroke="#1f2a4d"/>
+    <text x="45" y="467" fill="#b197fc" font-size="13" font-weight="700">COMMIT 泳道</text>
+    <text x="45" y="495" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">ducklake_transaction.cpp:769 Commit → :1383 FlushChanges（分发）</text>
+    <text x="600" y="495" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">→ :1430 RunCommitLoop（客户端）</text>
+    <text x="45" y="522" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">→ ducklake_transaction_state.cpp:1918 Commit（乐观循环）· :142 CheckForConflicts · :1351 RetryOnError</text>
+    <text x="45" y="549" fill="#dbe4ff" font-size="12" font-family="Menlo,monospace">→ ducklake_staged_commit.cpp:500 Build（quack）→ ducklake_server_side_commit.cpp:136 Run（服务端）</text>
+
+    <!-- 泳道间箭头 -->
+    <path d="M 570 135 L 570 146" fill="none" stroke="#8b9bc7" stroke-width="1.6" marker-end="url(#a10-arrow)"/>
+    <path d="M 570 280 L 570 291" fill="none" stroke="#8b9bc7" stroke-width="1.6" marker-end="url(#a10-arrow)"/>
+    <path d="M 570 425 L 570 436" fill="none" stroke="#8b9bc7" stroke-width="1.6" marker-end="url(#a10-arrow)"/>
+  </svg>
+  <div class="fig-caption">建议顺序：从 ATTACH 泳道单步一遍建立全貌，再按调试场景聚焦单条泳道</div>
+</div>
+
+<h2 id="s5"><span class="sec-no">§10.5</span>调试路径 A：一条 SELECT 为什么读了这个文件</h2>
+<pre><code># lldb（macOS）或 gdb 同理
+lldb ./build/debug/duckdb
+(lldb) br set -f ducklake_metadata_manager.cpp -l 1866   # GetFilesForTable：看生成的 SQL 与候选文件
+(lldb) br set -f ducklake_multi_file_reader.cpp -l 458   # MapColumns：看 field_id 如何对上物理列
+(lldb) run
+</code></pre>
+<pre><code>-- 配合 SQL 观测
+SELECT * FROM ducklake_list_files('lake') ;           -- 账本里的文件
+SELECT * FROM ducklake_snapshots('lake');             -- 当前快照
+EXPLAIN SELECT * FROM t WHERE id = 42;               -- 看扫描算子与过滤下推</code></pre>
+<p><strong>关注点</strong>：1866 行处把 <code>filter_info</code> 翻译成 WHERE 片段，是验证"谓词是否真的下推到文件裁剪"的唯一现场；MapColumns 处检查 <code>column_map</code> 可发现 schema evolution 映射错误。</p>
+
+<h2 id="s6"><span class="sec-no">§10.6</span>调试路径 B：写冲突与重试</h2>
+<pre><code># 两个终端各起一个 shell，ATTACH 同一个元数据库
+# 会话1 与 会话2 各自 BEGIN; INSERT …;
+# 让会话2 后 COMMIT，观察重试：
+
+(lldb) br set -f ducklake_transaction_state.cpp -l 1918  # Commit 进入
+(lldb) br set -f ducklake_transaction_state.cpp -l 142   # CheckForConflicts 命中点
+(lldb) br set -f ducklake_transaction.cpp -l 1351        # RetryOnError 判定</code></pre>
+<p><strong>关注点</strong>：冲突分类是否如 CH 06 §6.5 矩阵预期；退避公式 <code>wait × rand(0.5~1.0) × backoff^i</code>（transaction_state.cpp:1994）；重试耗尽时 <code>CleanupFiles()</code> 是否把已写 Parquet 清干净。</p>
+<pre><code>-- 观测工具
+SELECT * FROM ducklake_snapshots('lake') ORDER BY snapshot_id DESC LIMIT 5;
+SELECT snapshot_id, commit_message FROM ducklake_snapshots('lake');</code></pre>
+
+<h2 id="s7"><span class="sec-no">§10.7</span>调试路径 C：内联、flush 与 compaction</h2>
+<pre><code>(lldb) br set -f ducklake_inline_data.cpp -l 80            # Execute：截留判定
+(lldb) br set -f ducklake_inline_data.cpp -l 122           # FinalExecute：超限转型
+(lldb) br set -f ducklake_flush_inlined_data.cpp -l 281    # GenerateFlushCommand
+(lldb) br set -f ducklake_compaction_functions.cpp -l 284  # GenerateCompactions</code></pre>
+<pre><code>-- 内联实验脚本
+SET ducklake_default_data_inlining_row_limit = 5;
+CREATE TABLE small_t (a INT);
+INSERT INTO small_t VALUES (1),(2),(3);          -- 内联（0 个 parquet）
+SELECT * FROM ducklake_list_files('lake');       -- 确认无文件
+CALL ducklake_flush_inlined_data('lake');        -- 手动刷盘
+SELECT * FROM ducklake_list_files('lake');       -- 出现 ducklake-*.parquet</code></pre>
+
+<h2 id="s8"><span class="sec-no">§10.8</span>源码速查卡片</h2>
+<div class="grid g2">
+  <div class="card cyan">
+    <h4>读路径五件套</h4>
+    <ul>
+      <li><code class="ref">ducklake_table_entry.cpp:363</code> GetScanFunction</li>
+      <li><code class="ref">ducklake_transaction.cpp:1639</code> GetSnapshot(AT)</li>
+      <li><code class="ref">ducklake_multi_file_list.cpp:324</code> GetFilesForTable</li>
+      <li><code class="ref">ducklake_metadata_manager.cpp:1866</code> 账本查询+裁剪</li>
+      <li><code class="ref">ducklake_multi_file_reader.cpp:458</code> MapColumns</li>
+    </ul>
+  </div>
+  <div class="card gold">
+    <h4>写与提交五件套</h4>
+    <ul>
+      <li><code class="ref">ducklake_insert.cpp:486</code> GetCopyOptions / :577 文件名</li>
+      <li><code class="ref">ducklake_inline_data.cpp:80,122</code> 内联算子</li>
+      <li><code class="ref">ducklake_transaction.cpp:1383</code> FlushChanges 分发</li>
+      <li><code class="ref">ducklake_transaction_state.cpp:1918</code> 乐观循环</li>
+      <li><code class="ref">ducklake_server_side_commit.cpp:136</code> 服务端提交</li>
+    </ul>
+  </div>
+</div>
+
+<div class="callout green">
+  <div class="co-title">📚 配套材料</div>
+  <code>docs/analysis/</code> 下另有 9 篇中文 Markdown 深度笔记（01 定位与设计 … 08 可插拔后端），与本站互为补充；引用行号均为本分支 HEAD 校准版。
+</div>
+
+<div class="pager">
+  <a href="09-backends-encryption.html">
+    <div class="pg-label">← 上一章</div>
+    <div class="pg-title">09 · 可插拔后端与安全</div>
+  </a>
+  <a href="index.html">
+    <div class="pg-label">返回 →</div>
+    <div class="pg-title">首页 · 导航</div>
+  </a>
+</div>
+
+<div class="footer">DuckLake 源码深度解析 · CH 10 · debug-study 分支 · 基于 duckdb/ducklake @ 27c14caf</div>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    themeVariables: {
+      primaryColor: '#1a2447',
+      primaryTextColor: '#dbe4ff',
+      primaryBorderColor: '#4dd0e1',
+      lineColor: '#8b9bc7',
+      secondaryColor: '#241f0a',
+      tertiaryColor: '#12294d',
+      fontFamily: 'PingFang SC, Microsoft YaHei, sans-serif',
+      fontSize: '14px'
+    },
+    flowchart: { curve: 'basis', htmlLabels: true },
+    sequence: { actorMargin: 40, width: 170 }
+  });
+</script>
+</body>
+</html>
