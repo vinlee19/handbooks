@@ -137,7 +137,22 @@
       "to": "mooncake",
       "label": "新鲜度对比",
       "variant": "dashed",
-      "labelDy": -18
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [
+        [
+          145,
+          60
+        ],
+        [
+          723,
+          60
+        ]
+      ],
+      "labelAt": [
+        420,
+        60
+      ]
     },
     {
       "from": "native",
