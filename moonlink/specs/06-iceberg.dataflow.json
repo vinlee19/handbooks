@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Iceberg 集成：sync_snapshot 七步提交",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      500
+    ],
+    "views": [
+      {
+        "id": "layout",
+        "label": "物理布局",
+        "focus": [
+          "table",
+          "meta"
+        ],
+        "note": "metadata / data / deletion / index 四目录。"
+      },
+      {
+        "id": "sync",
+        "label": "同步流程",
+        "focus": [
+          "syncer",
+          "commit"
+        ],
+        "note": "唯一写者 IcebergTableSyncer 串行同步。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "湖上布局"
+    },
+    {
+      "label": "唯一写者"
+    },
+    {
+      "label": "七步同步"
+    },
+    {
+      "label": "事务提交"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "table",
+      "type": "database",
+      "label": "warehouse/{table}",
+      "sublabel": "四目录布局",
+      "stage": 0,
+      "row": 1,
+      "width": 130
+    },
+    {
+      "id": "meta",
+      "type": "database",
+      "label": "v{N}.metadata.json",
+      "sublabel": "puffin：deletion / index",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "syncer",
+      "type": "backend",
+      "label": "IcebergTableSyncer",
+      "sublabel": "约 800 行 · 唯一写者",
+      "stage": 2,
+      "row": 1,
+      "width": 130
+    },
+    {
+      "id": "commit",
+      "type": "security",
+      "label": "Transaction 提交",
+      "sublabel": "七步提交",
+      "stage": 3,
+      "row": 1,
+      "width": 130
+    }
+  ],
+  "flows": [
+    {
+      "from": "table",
+      "to": "meta",
+      "label": "快照链"
+    },
+    {
+      "from": "meta",
+      "to": "syncer",
+      "label": "读取当前状态"
+    },
+    {
+      "from": "syncer",
+      "to": "commit",
+      "label": "七步提交流程",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "湖上布局",
+      "items": [
+        "metadata/：v1…v{N}.metadata.json",
+        "deletion/ 与 index/ 用 puffin 格式",
+        "data/ 存 Parquet 数据文件"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "七步同步",
+      "items": [
+        "sync_data_files → sync_deletion_vector",
+        "→ sync_file_indices → Transaction 提交",
+        "Catalog 是一个 trait，三种实现"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "表维护",
+      "items": [
+        "data compaction 合并碎片",
+        "快照过期回收存储",
+        "与 moonlink 内存态解耦"
+      ]
+    }
+  ]
+}

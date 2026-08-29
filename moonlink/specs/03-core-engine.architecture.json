@@ -1,0 +1,216 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "存储引擎：一张表的三个世界",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      600
+    ],
+    "views": [
+      {
+        "id": "mem",
+        "label": "世界一 · MemSlice",
+        "focus": [
+          "mem",
+          "memidx"
+        ],
+        "note": "唯一写入口：行流攒批 4096 行成批。"
+      },
+      {
+        "id": "snapshot",
+        "label": "世界二 · 快照内存",
+        "focus": [
+          "snapshot"
+        ],
+        "note": "Copy-On-Read：读快照时应用删除生成只读视图。"
+      },
+      {
+        "id": "iceberg",
+        "label": "世界三 · Iceberg",
+        "focus": [
+          "iceberg"
+        ],
+        "note": "低频 sync 落湖。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "mem",
+      "type": "backend",
+      "label": "MemSlice（可变）",
+      "sublabel": "column_store · 行流攒批 4096",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "tag": "唯一写入口"
+    },
+    {
+      "id": "memidx",
+      "type": "database",
+      "label": "MemIndex",
+      "sublabel": "主键哈希 → 内存位置",
+      "pos": [
+        340,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "snapshot",
+      "type": "database",
+      "label": "SnapshotTableState",
+      "sublabel": "BTreeMap<batch_id, InMemoryBatch>",
+      "pos": [
+        640,
+        110
+      ],
+      "size": [
+        210,
+        64
+      ]
+    },
+    {
+      "id": "iceberg",
+      "type": "cloud",
+      "label": "Iceberg / Parquet",
+      "sublabel": "sync 后的持久层",
+      "pos": [
+        940,
+        110
+      ],
+      "size": [
+        176,
+        64
+      ]
+    },
+    {
+      "id": "dellog",
+      "type": "database",
+      "label": "三级删除日志",
+      "sublabel": "生命周期管理",
+      "pos": [
+        340,
+        340
+      ],
+      "size": [
+        190,
+        62
+      ]
+    },
+    {
+      "id": "wal",
+      "type": "database",
+      "label": "WAL",
+      "sublabel": "500ms 持久化-截断循环",
+      "pos": [
+        40,
+        340
+      ],
+      "size": [
+        180,
+        62
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "世界一 · 可变层",
+      "wraps": [
+        "mem",
+        "memidx"
+      ],
+      "pad": 14
+    },
+    {
+      "kind": "region",
+      "label": "世界二 · 快照内存层",
+      "wraps": [
+        "snapshot",
+        "dellog",
+        "wal"
+      ],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    {
+      "from": "mem",
+      "to": "memidx",
+      "label": "append/delete/commit",
+      "labelDy": 24,
+      "labelAt": [
+        290,
+        190
+      ]
+    },
+    {
+      "from": "memidx",
+      "to": "snapshot",
+      "label": "flush 成批",
+      "variant": "emphasis"
+    },
+    {
+      "from": "snapshot",
+      "to": "iceberg",
+      "label": "sync_snapshot",
+      "variant": "emphasis"
+    },
+    {
+      "from": "mem",
+      "to": "wal",
+      "label": "写 WAL",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    },
+    {
+      "from": "snapshot",
+      "to": "dellog",
+      "label": "删除应用",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "世界一",
+      "items": [
+        "column_store：行流攒批每 4096 行成 RecordBatch",
+        "未满批尾行在 SharedRowBufferSnapshot",
+        "mem_index 主键哈希定位（CH04 三形态）"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "世界二",
+      "items": [
+        "SnapshotTableState 快照内存",
+        "Copy-On-Read：读快照应用删除生成只读视图",
+        "两级快照：mooncake snapshot"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "关键类型",
+      "items": [
+        "mem_slice.rs · data_batches.rs",
+        "三级删除日志生命周期",
+        "WAL 与崩溃恢复（CH05）"
+      ]
+    }
+  ]
+}

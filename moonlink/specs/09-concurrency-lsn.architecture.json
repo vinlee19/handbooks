@@ -1,0 +1,182 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "并发模型：单写者状态机与通道拓扑",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      600
+    ],
+    "views": [
+      {
+        "id": "actor",
+        "label": "Actor 模型",
+        "focus": [
+          "actor",
+          "mem"
+        ],
+        "note": "TableHandler 是唯一有权修改表状态的任务。"
+      },
+      {
+        "id": "channels",
+        "label": "通道拓扑",
+        "focus": [
+          "repl",
+          "rest",
+          "readmgr"
+        ],
+        "note": "mpsc 与 watch 各司其职。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "actor",
+      "type": "backend",
+      "label": "TableHandler actor",
+      "sublabel": "事件循环 task · 唯一写者",
+      "pos": [
+        340,
+        110
+      ],
+      "size": [
+        210,
+        64
+      ],
+      "tag": "单写者"
+    },
+    {
+      "id": "mem",
+      "type": "database",
+      "label": "表内存态",
+      "sublabel": "MemSlice · Snapshot · WalManager",
+      "pos": [
+        660,
+        110
+      ],
+      "size": [
+        200,
+        64
+      ]
+    },
+    {
+      "id": "repl",
+      "type": "backend",
+      "label": "复制任务",
+      "sublabel": "每 URI 一个 · CdcStream→Sink",
+      "pos": [
+        40,
+        340
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "rest",
+      "type": "external",
+      "label": "REST handler",
+      "sublabel": "axum · EventRequest 队列",
+      "pos": [
+        660,
+        340
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "readmgr",
+      "type": "external",
+      "label": "ReadStateManager",
+      "sublabel": "调用方 · watch 订阅",
+      "pos": [
+        960,
+        340
+      ],
+      "size": [
+        186,
+        64
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "actor",
+      "to": "mem",
+      "label": "串行 apply"
+    },
+    {
+      "from": "repl",
+      "to": "actor",
+      "label": "mpsc 事件",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "from": "rest",
+      "to": "actor",
+      "label": "recv_many(128)",
+      "variant": "emphasis",
+      "labelAt": [
+        610,
+        295
+      ]
+    },
+    {
+      "from": "actor",
+      "to": "readmgr",
+      "label": "watch 通知",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [
+        [
+          445,
+          60
+        ],
+        [
+          1053,
+          60
+        ]
+      ],
+      "labelAt": [
+        700,
+        60
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "单写者原则",
+      "items": [
+        "TableHandler 是唯一有权修改表状态的任务",
+        "modeled as：单写者状态机 + FIFO 事件队列",
+        "特殊态：InitialCopy / AlterTable 阻塞 + 缓冲"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "通道拓扑",
+      "items": [
+        "mpsc 承载事件流",
+        "watch 广播状态变化给读方",
+        "recv_many(128) 批量处理降低开销"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "可迁移模式",
+      "items": [
+        "actor-per-table 模式可迁移复用",
+        "测试体系支撑大胆设计",
+        "LSN 时间线推导可见性"
+      ]
+    }
+  ]
+}

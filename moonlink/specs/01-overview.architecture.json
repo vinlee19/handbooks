@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Moonlink 总体架构：为高频写入而生的湖仓表引擎",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 560],
+    "views": [
+      { "id": "old", "label": "传统管线之痛", "focus": ["cdc", "iceberg", "query"], "note": "每微批直接写 Iceberg：小文件 + 元数据爆炸。" },
+      { "id": "moonlink", "label": "Moonlink 介入", "focus": ["cdc", "moonlink", "iceberg"], "note": "高频写进内存引擎，低频同步 Iceberg。" }
+    ]
+  },
+  "components": [
+    { "id": "cdc", "type": "external", "label": "业务库 / CDC", "sublabel": "PostgreSQL · Spark/Flink 作业", "pos": [40, 110], "size": [196, 64] },
+    { "id": "moonlink", "type": "backend", "label": "Moonlink 引擎", "sublabel": "高频写入 · 内存态 + WAL", "pos": [400, 110], "size": [200, 64], "tag": "核心" },
+    { "id": "iceberg", "type": "database", "label": "Iceberg 表", "sublabel": "低频 sync_snapshot 落湖", "pos": [760, 110], "size": [190, 64] },
+    { "id": "query", "type": "external", "label": "查询引擎", "sublabel": "Spark / DuckDB / Trino 经 Catalog", "pos": [400, 330], "size": [200, 64] },
+    { "id": "compact", "type": "backend", "label": "Compaction 作业", "sublabel": "传统方案需常驻运维", "pos": [760, 330], "size": [190, 62] }
+  ],
+  "connections": [
+    { "from": "cdc", "to": "moonlink", "label": "高频写入", "variant": "emphasis" },
+    { "from": "moonlink", "to": "iceberg", "label": "低频 sync", "variant": "emphasis" },
+    { "from": "cdc", "to": "iceberg", "label": "传统：每微批直写", "variant": "dashed", "fromSide": "top", "toSide": "top", "via": [[138, 60], [855, 60]] },
+    { "from": "iceberg", "to": "query", "label": "读时关联 delete", "variant": "dashed" },
+    { "from": "moonlink", "to": "query", "label": "实时可查", "fromSide": "bottom", "toSide": "top", "labelDy": 55 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Iceberg 的短板", "items": ["高频小写入：小 Parquet × N + equality-delete × N", "manifest 每次重写 → 元数据爆炸", "读时关联 delete，越读越慢"] },
+    { "dot": "violet", "title": "Moonlink 的答案", "items": ["内存引擎承接高频写入与更新", "低频批量 sync 到 Iceberg", "省去常驻 Compaction 运维"] },
+    { "dot": "emerald", "title": "核心设计原则", "items": ["单写者状态机 + FIFO 事件队列", "WAL 保证持久性，Iceberg 保证开放性", "Rust 技术栈：tokio + DataFusion + object_store"] }
+  ]
+}

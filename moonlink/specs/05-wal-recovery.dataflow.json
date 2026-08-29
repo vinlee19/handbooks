@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "WAL 与崩溃恢复：500ms 循环与 ACK 闭环",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      490
+    ],
+    "views": [
+      {
+        "id": "persist",
+        "label": "持久化循环",
+        "focus": [
+          "mem",
+          "wal",
+          "loop"
+        ],
+        "note": "500ms 持久化-截断循环，性能通道在 MemSlice。"
+      },
+      {
+        "id": "recover",
+        "label": "崩溃恢复",
+        "focus": [
+          "wal",
+          "replay",
+          "ack"
+        ],
+        "note": "重放 WalEvent 后与 PG 对账 ACK。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "内存态"
+    },
+    {
+      "label": "WAL"
+    },
+    {
+      "label": "重放"
+    },
+    {
+      "label": "对账"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "mem",
+      "type": "backend",
+      "label": "MemSlice 变更",
+      "sublabel": "WalEvent 可持久化子集",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "wal",
+      "type": "database",
+      "label": "_wal/{table_id}/",
+      "sublabel": "Commit|Abort|Open 状态",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "loop",
+      "type": "backend",
+      "label": "500ms 循环",
+      "sublabel": "持久化 + 截断",
+      "stage": 1,
+      "row": 2
+    },
+    {
+      "id": "replay",
+      "type": "backend",
+      "label": "崩溃重放",
+      "sublabel": "全链路时序恢复",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "ack",
+      "type": "external",
+      "label": "PG 对账 ACK",
+      "sublabel": "LSN 闭环确认",
+      "stage": 3,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "from": "mem",
+      "to": "wal",
+      "label": "append 事件"
+    },
+    {
+      "from": "wal",
+      "to": "loop",
+      "label": "fsync + 截断",
+      "variant": "dashed"
+    },
+    {
+      "from": "wal",
+      "to": "replay",
+      "label": "重放 WalEvent",
+      "variant": "emphasis"
+    },
+    {
+      "from": "replay",
+      "to": "ack",
+      "label": "恢复完成"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "文件组织",
+      "items": [
+        "{base_path}/_wal/{table_id}/ 每表独立",
+        "PersistentWalMetadata：active_transactions",
+        "persistence_snapshot_lsn 记录持久化水位"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "六种 LSN",
+      "items": [
+        "LSN 语义速查是恢复正确性的关键",
+        "main_transaction_tracker 追踪主事务",
+        "Commit{start_file, completion_lsn}"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "性能定位",
+      "items": [
+        "性能瓶颈不在 WAL",
+        "真正的性能通道是 MemSlice→Parquet",
+        "StreamAbort/StreamFlush 事件可持久化"
+      ]
+    }
+  ]
+}

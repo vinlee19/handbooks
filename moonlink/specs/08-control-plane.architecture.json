@@ -1,0 +1,191 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "控制面：MoonlinkBackend 唯一编排者",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "endpoints",
+        "label": "端点全景",
+        "focus": [
+          "rest",
+          "rpc",
+          "otel"
+        ],
+        "note": "REST 13 端点、RPC 10 方法、OTEL 指标。"
+      },
+      {
+        "id": "meta",
+        "label": "元数据仓",
+        "focus": [
+          "backend",
+          "sqlite"
+        ],
+        "note": "唯一一张表：read_state。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "rest",
+      "type": "external",
+      "label": "REST axum :3030",
+      "sublabel": "rest_api.rs 13 个端点",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "rpc",
+      "type": "external",
+      "label": "RPC :3031 / unix sock",
+      "sublabel": "rpc_server.rs 10 个方法",
+      "pos": [
+        400,
+        110
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "otel",
+      "type": "external",
+      "label": "OTEL :3435",
+      "sublabel": "/v1/metrics OTLP protobuf",
+      "pos": [
+        760,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "backend",
+      "type": "backend",
+      "label": "MoonlinkBackend",
+      "sublabel": "唯一的编排者",
+      "pos": [
+        400,
+        340
+      ],
+      "size": [
+        196,
+        64
+      ],
+      "tag": "核心"
+    },
+    {
+      "id": "repl",
+      "type": "backend",
+      "label": "ReplicationManager",
+      "sublabel": "uri→复制连接 · 表路由",
+      "pos": [
+        40,
+        340
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "sqlite",
+      "type": "database",
+      "label": "SQLite / PostgreSQL",
+      "sublabel": "read_state 元数据仓",
+      "pos": [
+        760,
+        340
+      ],
+      "size": [
+        196,
+        64
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "rest",
+      "to": "backend",
+      "label": "EventRequest 队列"
+    },
+    {
+      "from": "rpc",
+      "to": "backend",
+      "label": "方法调用",
+      "labelDy": 22
+    },
+    {
+      "from": "otel",
+      "to": "backend",
+      "variant": "dashed"
+    },
+    {
+      "from": "backend",
+      "to": "repl",
+      "label": "复制管理",
+      "labelAt": [
+        315,
+        415
+      ]
+    },
+    {
+      "from": "backend",
+      "to": "sqlite",
+      "label": "读写 read_state",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelDy": 22,
+      "route": "straight",
+      "labelAt": [
+        620,
+        418
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "三个端口",
+      "items": [
+        "REST axum :3030（13 端点）",
+        "RPC :3031 / unix sock（10 方法）",
+        "OTEL :3435 /v1/metrics OTLP"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "编排者",
+      "items": [
+        "MoonlinkBackend 是唯一编排入口",
+        "ReplicationManager 管理 uri→复制连接",
+        "表路由与事件管理器出口"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "存算分离",
+      "items": [
+        "元数据仓默认 SQLite（sqlx）",
+        "可切 PostgreSQL（tokio-postgres）",
+        "http 路径重映射闭包指向数据服务器"
+      ]
+    }
+  ]
+}

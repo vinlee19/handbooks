@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "查询路径：union read 三来源融合",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      528
+    ],
+    "views": [
+      {
+        "id": "sources",
+        "label": "三个来源",
+        "focus": [
+          "disk",
+          "mem",
+          "dels"
+        ],
+        "note": "磁盘文件 + 内存批 + 删除，一道集合运算。"
+      },
+      {
+        "id": "lsn",
+        "label": "可读判定",
+        "focus": [
+          "lsn",
+          "fuse"
+        ],
+        "note": "LSN 视角保证读一致性。"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "label": "来源"
+    },
+    {
+      "label": "判定"
+    },
+    {
+      "label": "融合"
+    },
+    {
+      "label": "执行"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "disk",
+      "type": "database",
+      "label": "磁盘 data files",
+      "sublabel": "Parquet + DV puffin",
+      "stage": 0,
+      "row": 0
+    },
+    {
+      "id": "mem",
+      "type": "database",
+      "label": "内存批",
+      "sublabel": "现场物化 /tmp parquet",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "dels",
+      "type": "database",
+      "label": "position_deletes",
+      "sublabel": "committed 未持久化部分",
+      "stage": 0,
+      "row": 2
+    },
+    {
+      "id": "lsn",
+      "type": "security",
+      "label": "LSN 可读判定",
+      "sublabel": "读一致性水位",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "fuse",
+      "type": "backend",
+      "label": "union read",
+      "sublabel": "一道集合运算",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "df",
+      "type": "backend",
+      "label": "DataFusion 执行",
+      "sublabel": "下推到 parquet 扫描",
+      "stage": 3,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "from": "disk",
+      "to": "lsn",
+      "label": "缓存命中直读",
+      "labelDy": -20
+    },
+    {
+      "from": "mem",
+      "to": "lsn",
+      "label": "未 flush",
+      "route": "straight",
+      "labelDy": 22,
+      "labelAt": [
+        400,
+        320
+      ]
+    },
+    {
+      "from": "dels",
+      "to": "lsn",
+      "label": "删除合并",
+      "variant": "dashed"
+    },
+    {
+      "from": "lsn",
+      "to": "fuse",
+      "label": "可读集合",
+      "variant": "emphasis"
+    },
+    {
+      "from": "fuse",
+      "to": "df",
+      "label": "同构读",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "来源 A · 磁盘",
+      "items": [
+        "已 flush 的 Parquet 缓存命中直读本地",
+        "每个文件挂 DV：puffin blob 已持久化",
+        "remote 路径经 read_state_filepath_remap"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "来源 B · 内存",
+      "items": [
+        "commit 后未 flush 的内存批",
+        "现场物化 inmemory_{table}_{id}_{version}.parquet",
+        "代价物化一次；收益所有引擎同构读"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "ReadState",
+      "items": [
+        "跨语言二进制布局（pg_mooncake 共享）",
+        "LSN 视角推导可见性",
+        "DataFusion 下推到 parquet 扫描"
+      ]
+    }
+  ]
+}

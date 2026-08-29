@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "双层索引与 Deletion Vector",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 560],
+    "views": [
+      { "id": "memindex", "label": "MemIndex 三形态", "focus": ["single", "composite", "fullrow"], "note": "按主键形态选择索引结构。" },
+      { "id": "dv", "label": "删除向量", "focus": ["dv", "merge"], "note": "内存位图 + index merge 合并。" }
+    ]
+  },
+  "components": [
+    { "id": "single", "type": "database", "label": "SinglePrimitive", "sublabel": "hashbrown HashTable · 单列整型", "pos": [40, 110], "size": [200, 64] },
+    { "id": "composite", "type": "database", "label": "KeyWithIdentity", "sublabel": "复合主键 · 存整行 identity", "pos": [400, 110], "size": [200, 64] },
+    { "id": "fullrow", "type": "database", "label": "FullRow MultiMap", "sublabel": "多值主键 → locations", "pos": [760, 110], "size": [200, 64] },
+    { "id": "dv", "type": "database", "label": "Deletion Vector", "sublabel": "内存位图 · O(1) 标删", "pos": [400, 340], "size": [200, 64] },
+    { "id": "merge", "type": "backend", "label": "index merge", "sublabel": "flush 时索引合并", "pos": [760, 340], "size": [200, 62] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "第一层 · MemIndex（随 MemSlice 生死）", "wraps": ["single", "composite", "fullrow"], "pad": 14 }
+  ],
+  "connections": [
+    { "from": "single", "to": "dv", "label": "DELETE 定位", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "composite", "to": "dv", "label": "精确比对防碰撞", "fromSide": "bottom", "toSide": "top", "labelDy": 55 },
+    { "from": "dv", "to": "merge", "label": "合并进快照" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "索引真实定义", "items": ["storage/index.rs 是索引的唯一真相", "hash → (hash, location) 定位", "MemIndex 随 MemSlice 生死"] },
+    { "dot": "violet", "title": "三形态", "items": ["SinglePrimitive：单列整型最常见", "KeyWithIdentity：复合主键防碰撞误删", "FullRow：MultiMap 多值主键"] },
+    { "dot": "emerald", "title": "Deletion Vector", "items": ["内存位图标记删除行", "读快照时应用（Copy-On-Read）", "flush 时随 index merge 持久化"] }
+  ]
+}

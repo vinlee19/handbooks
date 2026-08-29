@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "数据摄入：两条入口，一个事件总线",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "entries",
+        "label": "两条入口",
+        "focus": [
+          "pg",
+          "rest",
+          "bus"
+        ],
+        "note": "CDC 走逻辑复制，REST 走 HTTP/Kafka。"
+      },
+      {
+        "id": "handler",
+        "label": "每表单线程",
+        "focus": [
+          "bus",
+          "handler"
+        ],
+        "note": "TableHandler 每表单线程事件循环。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "pg",
+      "type": "database",
+      "label": "PostgreSQL",
+      "sublabel": "WAL → 逻辑复制流 slot/pub",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "rest",
+      "type": "external",
+      "label": "REST / Kafka",
+      "sublabel": ":3030 ingest · /kafka Avro",
+      "pos": [
+        400,
+        110
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "upload",
+      "type": "external",
+      "label": "/upload 直装",
+      "sublabel": "parquet LoadFiles",
+      "pos": [
+        760,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "bus",
+      "type": "messagebus",
+      "label": "事件总线",
+      "sublabel": "mpsc · MoonlinkRow 三种事件",
+      "pos": [
+        400,
+        330
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "handler",
+      "type": "backend",
+      "label": "TableHandler",
+      "sublabel": "每表单线程事件循环",
+      "pos": [
+        760,
+        330
+      ],
+      "size": [
+        186,
+        64
+      ],
+      "tag": "actor"
+    }
+  ],
+  "connections": [
+    {
+      "from": "pg",
+      "to": "bus",
+      "label": "CDC 流（含 STREAM_* 大事务）"
+    },
+    {
+      "from": "rest",
+      "to": "bus",
+      "label": "sync / async / ingestpb",
+      "labelDy": 22
+    },
+    {
+      "from": "upload",
+      "to": "bus",
+      "label": "批量装载",
+      "variant": "dashed"
+    },
+    {
+      "from": "bus",
+      "to": "handler",
+      "label": "recv_many(128) 批处理",
+      "variant": "emphasis",
+      "labelAt": [
+        580,
+        408
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "入口 A · CDC",
+      "items": [
+        "PostgreSQL 逻辑复制：slot moonlink_slot",
+        "publication moonlink_pub",
+        "含流式大事务 STREAM_* 协议"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "入口 B · REST",
+      "items": [
+        "/ingest/{t} JSON、/ingestpb Protobuf",
+        "/kafka/{t}/ingest Avro",
+        "/upload/{t} 直装 parquet"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "一致性",
+      "items": [
+        "Initial Copy 一致性快照",
+        "MoonlinkRow 与三种事件模型",
+        "每表单线程串行 apply 后台结果"
+      ]
+    }
+  ]
+}
