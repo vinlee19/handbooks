@@ -1,0 +1,215 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Hudi 总体架构：Timeline、文件布局与索引",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "write",
+        "label": "写入链",
+        "focus": [
+          "writer",
+          "timeline",
+          "layout"
+        ],
+        "note": "写入产生 instant，布局随之演进。"
+      },
+      {
+        "id": "read",
+        "label": "读取链",
+        "focus": [
+          "layout",
+          "query"
+        ],
+        "note": "查询经视图层选最新切片。"
+      },
+      {
+        "id": "services",
+        "label": "表服务与并发",
+        "focus": [
+          "services",
+          "cc"
+        ],
+        "note": "compaction/clustering 与 OCC 提交协议。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "writer",
+      "type": "backend",
+      "label": "Write Client",
+      "sublabel": "upsert / insert / delete",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "timeline",
+      "type": "database",
+      "label": "Timeline 时间线",
+      "sublabel": "commit · deltacommit · compaction",
+      "pos": [
+        340,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ],
+      "tag": "核心"
+    },
+    {
+      "id": "layout",
+      "type": "database",
+      "label": "文件布局",
+      "sublabel": "FileGroup → FileSlice",
+      "pos": [
+        640,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "query",
+      "type": "external",
+      "label": "查询引擎",
+      "sublabel": "Snapshot / RO / Incremental",
+      "pos": [
+        920,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "index",
+      "type": "backend",
+      "label": "Index 索引",
+      "sublabel": "key → fileGroup",
+      "pos": [
+        340,
+        340
+      ],
+      "size": [
+        190,
+        62
+      ],
+      "tag": "核心"
+    },
+    {
+      "id": "services",
+      "type": "backend",
+      "label": "表服务",
+      "sublabel": "Compaction / Clustering / Clean",
+      "pos": [
+        640,
+        340
+      ],
+      "size": [
+        190,
+        62
+      ]
+    },
+    {
+      "id": "cc",
+      "type": "security",
+      "label": "并发控制",
+      "sublabel": "OCC + LockProvider",
+      "pos": [
+        920,
+        340
+      ],
+      "size": [
+        186,
+        62
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "writer",
+      "to": "timeline",
+      "label": "产生 instant",
+      "variant": "emphasis"
+    },
+    {
+      "from": "writer",
+      "to": "index",
+      "label": "tagLocation",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    },
+    {
+      "from": "timeline",
+      "to": "layout",
+      "label": "推进版本"
+    },
+    {
+      "from": "layout",
+      "to": "query",
+      "label": "暴露切片视图"
+    },
+    {
+      "from": "timeline",
+      "to": "services",
+      "label": "驱动表服务",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    },
+    {
+      "from": "services",
+      "to": "cc",
+      "label": "提交校验",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "三大机制",
+      "items": [
+        "Timeline 记录一切变更",
+        "FileGroup 绑定记录身份",
+        "Index 定位更新目标"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "两种表类型",
+      "items": [
+        "COW：重写 base，.commit",
+        "MOR：追加 log，.deltacommit",
+        "compaction 只属于 MOR"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "模块地图",
+      "items": [
+        "common：timeline/布局/视图",
+        "client：写入与表服务",
+        "datasource：Spark/Flink 接入"
+      ]
+    }
+  ]
+}

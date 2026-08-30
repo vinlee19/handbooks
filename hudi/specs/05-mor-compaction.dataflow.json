@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "MOR 写入与 Compaction：异步合并服务",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      510
+    ]
+  },
+  "stages": [
+    {
+      "label": "追加"
+    },
+    {
+      "label": "调度"
+    },
+    {
+      "label": "合并"
+    },
+    {
+      "label": "轮转"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "delta",
+      "type": "backend",
+      "label": "deltacommit",
+      "sublabel": "只写 log · 秒级返回",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "sched",
+      "type": "backend",
+      "label": "ScheduleCompaction",
+      "sublabel": "plan → requested",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "compactor",
+      "type": "backend",
+      "label": "BaseCompactor",
+      "sublabel": "base + logs → merge",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "slice",
+      "type": "database",
+      "label": "FileSlice 轮转",
+      "sublabel": "新 base 替换旧切片",
+      "stage": 3,
+      "row": 0
+    },
+    {
+      "id": "clean",
+      "type": "backend",
+      "label": "Clean 服务",
+      "sublabel": "回收旧 log/base",
+      "stage": 3,
+      "row": 2
+    }
+  ],
+  "flows": [
+    {
+      "from": "delta",
+      "to": "sched",
+      "label": "达到阈值触发",
+      "variant": "dashed"
+    },
+    {
+      "from": "sched",
+      "to": "compactor",
+      "label": "消费 plan",
+      "variant": "emphasis"
+    },
+    {
+      "from": "compactor",
+      "to": "slice",
+      "label": "payload.merge 合并",
+      "variant": "emphasis"
+    },
+    {
+      "from": "slice",
+      "to": "clean",
+      "label": "旧文件回收",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "两阶段",
+      "items": [
+        "调度：CompactionStrategy 选 slice",
+        "执行：可独立部署可重试",
+        "plan 落盘崩溃可恢复"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "代价交换",
+      "items": [
+        "写延迟低：只追加",
+        "读延迟高：merge on read",
+        "compaction 后读路径变纯"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "调参",
+      "items": [
+        "inline 触发 + max.delta.commits",
+        "并行度由 plan shuffle 决定",
+        "clean 与 Time Travel 窗口联动"
+      ]
+    }
+  ]
+}

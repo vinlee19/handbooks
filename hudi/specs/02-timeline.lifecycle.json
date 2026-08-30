@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "Timeline instant 状态机：requested → inflight → completed",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1020,
+      566
+    ]
+  },
+  "transitions": [
+    {
+      "from": "scheduled",
+      "to": "inflight"
+    },
+    {
+      "from": "inflight",
+      "to": "completed",
+      "label": "原子重命名",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "三状态",
+      "items": [
+        "requested：计划先行",
+        "inflight：执行可回滚",
+        "completed：重命名即原子"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "HoodieInstant",
+      "items": [
+        "action + state + timestamp",
+        "commit/deltacommit/compaction…",
+        "timestamp 字典序即时间序"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "恢复语义",
+      "items": [
+        "inflight 残留可判崩溃",
+        "rollback 写回滚 instant",
+        "老 instant 由 archival 归档",
+        "inflight 残留由 rollback instant 处理"
+      ]
+    }
+  ],
+  "lanes": [
+    {
+      "id": "main",
+      "label": "提交主链"
+    }
+  ],
+  "states": [
+    {
+      "id": "scheduled",
+      "type": "start",
+      "label": "requested",
+      "sublabel": "调度计划落盘",
+      "lane": "main",
+      "col": 0
+    },
+    {
+      "id": "inflight",
+      "type": "active",
+      "label": "inflight",
+      "sublabel": "执行中",
+      "lane": "main",
+      "col": 2
+    },
+    {
+      "id": "completed",
+      "type": "success",
+      "label": "completed",
+      "sublabel": "对外可见",
+      "lane": "main",
+      "col": 4
+    }
+  ]
+}

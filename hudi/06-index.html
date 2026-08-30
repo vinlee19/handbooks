@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>索引体系：record key 如何找到自己的文件组</title>
+<style>
+:root{
+  --bg:#0a0e16; --panel:#0f1524; --panel2:#131b2e; --line:#22304a; --line2:#2c3d5c;
+  --tx:#dbe6f5; --tx2:#93a5c0; --tx3:#6b7d99; --ac:#00e5cc;
+  --code-bg:#0b1220;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none} a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:16px;height:54px}
+.logo{font-weight:700;font-size:16px;color:var(--tx);white-space:nowrap;flex-shrink:0}
+.logo .m{color:var(--ac)}
+.topnav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap;overflow-x:auto}
+.topnav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.topnav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.topnav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+.hero{padding:44px 0 30px;border-bottom:1px solid var(--line);
+  background:radial-gradient(1100px 300px at 18% 0%,color-mix(in srgb,var(--ac) 10%,transparent),transparent)}
+.kicker{color:var(--ac);font-size:13px;font-weight:600;letter-spacing:2px}
+h1{font-size:32px;line-height:1.3;margin:10px 0 8px}
+.sub{color:var(--tx2);font-size:15px;max-width:880px}
+h2{font-size:22px;margin:46px 0 14px;display:flex;align-items:center;gap:10px}
+h2 .n{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border-radius:8px;
+ background:color-mix(in srgb,var(--ac) 13%,transparent);color:var(--ac);font-size:14px;font-weight:700}
+h3{font-size:17px;margin:28px 0 10px;color:var(--tx)}
+p{margin:10px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:22px 0}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.stat .v{font-size:21px;font-weight:700;color:var(--ac)}
+.stat .l{font-size:12.5px;color:var(--tx2);margin-top:2px}
+.fig{margin:22px 0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px}
+.fig svg{display:block;width:100%;height:auto}
+.figcap{display:flex;gap:8px;align-items:baseline;padding:10px 4px 6px;color:var(--tx2);font-size:13px;border-top:1px dashed var(--line);margin-top:12px}
+.figcap b{color:var(--ac);font-size:12.5px;white-space:nowrap}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px;margin:22px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--dc,#38bdf8);border-radius:12px;padding:14px 16px}
+.card h4{margin:0 0 8px;font-size:14.5px;color:var(--tx)}
+.card ul{margin:0;padding-left:18px;font-size:13px;color:var(--tx2)}
+.card li{margin:4px 0}
+.co{border:1px solid var(--line);border-left:3px solid var(--ac);background:var(--panel);border-radius:10px;padding:12px 16px;margin:16px 0;font-size:14px;color:var(--tx2)}
+.co b{color:var(--tx)}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font:12px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,monospace;color:#c9d9ee}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+ul,ol{color:#c7d3e6;padding-left:22px} li{margin:5px 0}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 40px}
+svg text{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.svgm{font-family:ui-monospace,Menlo,Consolas,monospace!important}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo"><span class="m">🪶</span> Hudi 源码深度学习手册</span><nav class="topnav"><a href="01-overview.html">01 全景</a><a href="02-timeline.html">02 Timeline</a><a href="03-file-layout.html">03 文件布局</a><a href="04-cow-write.html">04 COW 写</a><a href="05-mor-compaction.html">05 MOR</a><a href="06-index.html" class=on>06 索引</a><a href="07-read-path.html">07 读路径</a><a href="08-concurrency.html">08 并发</a></nav></div></header>
+<section class="hero"><div class="wrap">
+  <div class="kicker">APACHE HUDI SOURCE STUDY · CH 06</div>
+  <h1>索引体系：record key 如何找到自己的文件组</h1>
+  <p class="sub">索引是 Hudi 更新效率的命门：<code>HoodieIndex.tagLocation()</code> 把每条待写记录映射到它所属的 fileGroup。实现可插拔——从对象存储友好的 Bloom 到外部 KV 的 HBase，再到自管的 Record Index。</p>
+  <div class="stats"><div class="stat"><div class="v">6+</div><div class="l">索引实现</div></div><div class="stat"><div class="v">2 接口</div><div class="l">tagLocation / updateLocation</div></div><div class="stat"><div class="v">MDT</div><div class="l">可托管 bloom 与 record index</div></div><div class="stat"><div class="v">global?</div><div class="l">跨分区唯一性开关</div></div></div>
+</div></section>
+<main class="wrap">
+<h2><span class="n">01</span>接口与职责</h2><div class="fig"><svg viewBox="0 0 1040 500" role="img" aria-label="hudi-index"><defs><marker id="ar0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5f7ba6"/></marker><marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#38bdf8"/></marker><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/></marker></defs><rect x="0" y="0" width="1040" height="500" fill="#0c1322" rx="10"/><text x="30" y="38" fill="#8fa5c8" font-size="13" font-weight="bold" text-anchor="start">INDEX FAMILY · tagLocation: key → fileId</text><rect x="40" y="90" width="280" height="100" rx="9" fill="#0f2438" stroke="#00e5cc"/><text x="180.0" y="134.0" fill="#00e5cc" font-size="13" font-weight="bold" text-anchor="middle">Bloom Index</text><text x="180.0" y="154.0" fill="#8fa5c8" font-size="11" text-anchor="middle">SparkHoodieBloomIndex</text><text x="60" y="148" fill="#8fa5c8" font-size="11" text-anchor="start">base file bloom header + 全文件比对兜底</text><text x="60" y="168" fill="#8fa5c8" font-size="11" text-anchor="start">对象存储友好：可借 MDT 加速</text><rect x="380" y="90" width="280" height="100" rx="9" fill="#121a30" stroke="#31435f"/><text x="520.0" y="134.0" fill="#dbe6f5" font-size="13" font-weight="bold" text-anchor="middle">Simple Index</text><text x="520.0" y="154.0" fill="#8fa5c8" font-size="11" text-anchor="middle">全表 join 比对</text><text x="400" y="148" fill="#8fa5c8" font-size="11" text-anchor="start">小表 / 无索引依赖的朴素方案</text><rect x="720" y="90" width="280" height="100" rx="9" fill="#1a1430" stroke="#a78bfa"/><text x="860.0" y="134.0" fill="#a78bfa" font-size="13" font-weight="bold" text-anchor="middle">Bucket Index</text><text x="860.0" y="154.0" fill="#8fa5c8" font-size="11" text-anchor="middle">hash(record key) → bucket</text><text x="740" y="148" fill="#8fa5c8" font-size="11" text-anchor="start">Consistent Hash 支持扩缩 bucket</text><rect x="40" y="240" width="280" height="100" rx="9" fill="#2a2010" stroke="#fbbf24"/><text x="180.0" y="284.0" fill="#fbbf24" font-size="13" font-weight="bold" text-anchor="middle">HBase Index</text><text x="180.0" y="304.0" fill="#8fa5c8" font-size="11" text-anchor="middle">外部 KV：key → fileId</text><text x="60" y="298" fill="#8fa5c8" font-size="11" text-anchor="start">低延迟点查 · 引入外部依赖</text><rect x="380" y="240" width="280" height="100" rx="9" fill="#0f2a1c" stroke="#34d399"/><text x="520.0" y="284.0" fill="#34d399" font-size="13" font-weight="bold" text-anchor="middle">Record Index (MDT)</text><text x="520.0" y="304.0" fill="#8fa5c8" font-size="11" text-anchor="middle">Hudi 自管的 KV 索引表</text><text x="400" y="298" fill="#8fa5c8" font-size="11" text-anchor="start">元数据表内 · 支持二级定位</text><rect x="720" y="240" width="280" height="100" rx="9" fill="#121a30" stroke="#31435f"/><text x="860.0" y="284.0" fill="#dbe6f5" font-size="13" font-weight="bold" text-anchor="middle">InMemory / Java</text><text x="860.0" y="304.0" fill="#8fa5c8" font-size="11" text-anchor="middle">测试与轻量场景</text><text x="740" y="298" fill="#8fa5c8" font-size="11" text-anchor="start">lookupIndex / tagLocation 接口</text><rect x="40" y="380" width="960" height="80" rx="10" fill="#0c1322" stroke="#31435f"/><text x="60" y="408" fill="#93a5c0" font-size="12" text-anchor="start">接口：HoodieIndex.tagLocation(records) → 带 location 的 records；updateLocation 回写新增 key</text><text x="60" y="434" fill="#6b7d99" font-size="12" text-anchor="start">canIndexLogFiles 决定 MOR 是否索引 log 记录；isGlobal 决定跨分区唯一性</text></svg><div class="figcap"><b>图</b><span>图 6-1 · 索引家族：把 record key 映射到 fileGroup 的不同实现</span></div></div><p><code>HoodieIndex</code> 抽象类只要求两个能力：<code>tagLocation</code>（给记录打上 fileId 位置）与 <code>updateLocation</code>（提交后把新 key 写回索引）。是否索引 log 记录（<code>canIndexLogFiles</code>）、是否全局唯一（<code>isGlobal</code>）决定了各实现的行为分叉。</p><h2><span class="n">02</span>Bloom Index：对象存储的原住民</h2><p><code>SparkHoodieBloomIndex</code> 先用 interval 树按 key 范围裁剪候选文件，再并行读每个文件的 <strong>bloom filter</strong>（写 base 时由 <code>HoodieCreateHandle</code> 写进 footer，MDT 模式下改从元数据表读取），命中者再做精确比对。代价模型由 <code>HoodieGlobalSimpleKeyGenerator</code> 等键生成器配合。</p><h2><span class="n">03</span>Bucket 与 Record Index</h2><p><code>HoodieBucketIndex</code> 直接按 key 哈希到固定 bucket（一个 bucket = 一个 fileGroup），彻底跳过查找：写入路径 O(1)，代价是 bucket 数固定（<code>ConsistentBucketIndex</code> 用一致性哈希支持扩容）。<strong>Record Index</strong> 是新方向：把 key→location 存进元数据表，随表自愈、无需外部系统。</p>
+</main>
+<footer class="foot"><div class="wrap">源码深度学习手册 · 基于逐模块源码分析 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

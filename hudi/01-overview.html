@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hudi 总体架构：为湖上增量处理而生</title>
+<style>
+:root{
+  --bg:#0a0e16; --panel:#0f1524; --panel2:#131b2e; --line:#22304a; --line2:#2c3d5c;
+  --tx:#dbe6f5; --tx2:#93a5c0; --tx3:#6b7d99; --ac:#00e5cc;
+  --code-bg:#0b1220;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none} a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:16px;height:54px}
+.logo{font-weight:700;font-size:16px;color:var(--tx);white-space:nowrap;flex-shrink:0}
+.logo .m{color:var(--ac)}
+.topnav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap;overflow-x:auto}
+.topnav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.topnav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.topnav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+.hero{padding:44px 0 30px;border-bottom:1px solid var(--line);
+  background:radial-gradient(1100px 300px at 18% 0%,color-mix(in srgb,var(--ac) 10%,transparent),transparent)}
+.kicker{color:var(--ac);font-size:13px;font-weight:600;letter-spacing:2px}
+h1{font-size:32px;line-height:1.3;margin:10px 0 8px}
+.sub{color:var(--tx2);font-size:15px;max-width:880px}
+h2{font-size:22px;margin:46px 0 14px;display:flex;align-items:center;gap:10px}
+h2 .n{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border-radius:8px;
+ background:color-mix(in srgb,var(--ac) 13%,transparent);color:var(--ac);font-size:14px;font-weight:700}
+h3{font-size:17px;margin:28px 0 10px;color:var(--tx)}
+p{margin:10px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:22px 0}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.stat .v{font-size:21px;font-weight:700;color:var(--ac)}
+.stat .l{font-size:12.5px;color:var(--tx2);margin-top:2px}
+.fig{margin:22px 0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px}
+.fig svg{display:block;width:100%;height:auto}
+.figcap{display:flex;gap:8px;align-items:baseline;padding:10px 4px 6px;color:var(--tx2);font-size:13px;border-top:1px dashed var(--line);margin-top:12px}
+.figcap b{color:var(--ac);font-size:12.5px;white-space:nowrap}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px;margin:22px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--dc,#38bdf8);border-radius:12px;padding:14px 16px}
+.card h4{margin:0 0 8px;font-size:14.5px;color:var(--tx)}
+.card ul{margin:0;padding-left:18px;font-size:13px;color:var(--tx2)}
+.card li{margin:4px 0}
+.co{border:1px solid var(--line);border-left:3px solid var(--ac);background:var(--panel);border-radius:10px;padding:12px 16px;margin:16px 0;font-size:14px;color:var(--tx2)}
+.co b{color:var(--tx)}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font:12px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,monospace;color:#c9d9ee}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+ul,ol{color:#c7d3e6;padding-left:22px} li{margin:5px 0}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 40px}
+svg text{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.svgm{font-family:ui-monospace,Menlo,Consolas,monospace!important}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo"><span class="m">🪶</span> Hudi 源码深度学习手册</span><nav class="topnav"><a href="01-overview.html" class=on>01 全景</a><a href="02-timeline.html">02 Timeline</a><a href="03-file-layout.html">03 文件布局</a><a href="04-cow-write.html">04 COW 写</a><a href="05-mor-compaction.html">05 MOR</a><a href="06-index.html">06 索引</a><a href="07-read-path.html">07 读路径</a><a href="08-concurrency.html">08 并发</a></nav></div></header>
+<section class="hero"><div class="wrap">
+  <div class="kicker">APACHE HUDI SOURCE STUDY · CH 01</div>
+  <h1>Hudi 总体架构：为湖上增量处理而生</h1>
+  <p class="sub">Hudi 的核心主张是把<strong>数据库的增量语义</strong>带到数据湖上：以 Timeline 为一等公民、以 File Group 组织数据、用 Index 把 record key 绑定到文件组，再由表服务持续整理布局。本手册基于 hudi-client / hudi-common 等模块的逐源码分析，带你看清每一个机制在代码里的位置。</p>
+  <div class="stats"><div class="stat"><div class="v">3 类</div><div class="l">COW/MOR 表 + 元数据表</div></div><div class="stat"><div class="v">6 种</div><div class="l">核心 instant action</div></div><div class="stat"><div class="v">8+</div><div class="l">索引实现</div></div><div class="stat"><div class="v">2 条</div><div class="l">读路径：Ro / Snapshot</div></div></div>
+</div></section>
+<main class="wrap">
+<h2><span class="n">01</span>要解决什么问题</h2><p>传统数据湖上只有「整目录扫描」语义：追加一条记录要重写整个分区的 Parquet，更新一条记录更是不可想象。Hudi 用三个机制破解：<strong>Timeline</strong>（把每次变更记录为一条时间线上的 instant）、<strong>File Group + File Slice</strong>（更新只作用于特定文件组，产生新版本切片）、<strong>Index</strong>（把 record key 稳定映射到 file group，更新时才知道该改哪个文件）。</p><p>这三个机制分别由 <code>hudi-common/src/main/java/org/apache/hudi/common/table/timeline/</code>、<code>.../common/table/view/</code> 与 <code>org.apache.hudi.index</code> 三个包承载，是读源码的主线索。</p><h2><span class="n">02</span>总体架构图</h2><div class="fig"><svg viewBox="0 0 1040 560" role="img" aria-label="hudi-arch"><defs><marker id="ar0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5f7ba6"/></marker><marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#38bdf8"/></marker><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/></marker></defs><rect x="0" y="0" width="1040" height="560" fill="#0c1322" rx="10"/><text x="30" y="38" fill="#8fa5c8" font-size="13" font-weight="bold" text-anchor="start">HUDI ARCHITECTURE · 架构总览</text><rect x="30" y="70" width="250" height="96" rx="10" fill="#121a30" stroke="#31435f"/><text x="48" y="96" fill="#7fc8e8" font-size="12" text-anchor="start">写入侧（Write Client）</text><text x="48" y="120" fill="#dbe6f5" font-size="13.5" font-weight="bold" text-anchor="start">BaseHoodieWriteClient</text><text x="48" y="142" fill="#6b7d99" font-size="11.5" text-anchor="start">upsert / insert / delete · Bulk Insert</text><rect x="30" y="190" width="250" height="80" rx="10" fill="#16202f" stroke="#3a5a75"/><text x="48" y="218" fill="#7fc8e8" font-size="12" text-anchor="start">引擎绑定</text><text x="48" y="240" fill="#c9d9ee" font-size="12.5" text-anchor="start">Spark / Flink / Java 客户端</text><rect x="380" y="90" width="260" height="110" rx="9" fill="#0f2438" stroke="#00e5cc"/><text x="510.0" y="139.0" fill="#00e5cc" font-size="13" font-weight="bold" text-anchor="middle">Timeline 时间线</text><text x="510.0" y="159.0" fill="#8fa5c8" font-size="11" text-anchor="middle">HoodieActiveTimeline</text><text x="400" y="140" fill="#8fa5c8" font-size="11.5" text-anchor="start" class="svgm">.commit  .deltacommit  .compaction</text><text x="400" y="160" fill="#8fa5c8" font-size="11.5" text-anchor="start" class="svgm">.clean  .rollback  .replacecommit</text><text x="400" y="180" fill="#fbbf24" font-size="11.5" text-anchor="start" class="svgm">requested → inflight → completed</text><rect x="380" y="240" width="260" height="130" rx="10" fill="#121a30" stroke="#31435f"/><text x="400" y="268" fill="#7fc8e8" font-size="12" text-anchor="start">文件布局（表内）</text><text x="400" y="292" fill="#dbe6f5" font-size="13" font-weight="bold" text-anchor="start">FileGroup → FileSlice</text><text x="400" y="314" fill="#8fa5c8" font-size="11.5" text-anchor="start" class="svgm">Base File: *.parquet (COW)</text><text x="400" y="334" fill="#8fa5c8" font-size="11.5" text-anchor="start" class="svgm">Log File: *.log (MOR 追加块)</text><text x="400" y="354" fill="#6b7d99" font-size="11.5" text-anchor="start" class="svgm">.hoodie/ 元数据目录</text><rect x="380" y="410" width="260" height="100" rx="9" fill="#1a1430" stroke="#a78bfa"/><text x="510.0" y="454.0" fill="#a78bfa" font-size="13" font-weight="bold" text-anchor="middle">Index 索引</text><text x="510.0" y="474.0" fill="#8fa5c8" font-size="11" text-anchor="middle">record key → file group</text><text x="400" y="470" fill="#8fa5c8" font-size="11" text-anchor="start" class="svgm">BLOOM · BUCKET · HBASE · RECORD_INDEX</text><rect x="760" y="90" width="250" height="110" rx="10" fill="#121a30" stroke="#31435f"/><text x="780" y="118" fill="#7fc8e8" font-size="12" text-anchor="start">查询侧</text><text x="780" y="142" fill="#dbe6f5" font-size="13" font-weight="bold" text-anchor="start">Snapshot / Read Optimized</text><text x="780" y="164" fill="#dbe6f5" font-size="13" font-weight="bold" text-anchor="start">Incremental Query</text><text x="780" y="186" fill="#6b7d99" font-size="11" text-anchor="start">Hive/Spark/Presto/Trino InputFormat</text><rect x="760" y="240" width="250" height="130" rx="10" fill="#16202f" stroke="#3a5a75"/><text x="780" y="268" fill="#7fc8e8" font-size="12" text-anchor="start">表服务（Table Services）</text><text x="780" y="292" fill="#dbe6f5" font-size="12.5" text-anchor="start">Compaction（MOR 合并）</text><text x="780" y="314" fill="#dbe6f5" font-size="12.5" text-anchor="start">Clustering（小文件整理）</text><text x="780" y="336" fill="#dbe6f5" font-size="12.5" text-anchor="start">Clean（清理旧版本）</text><text x="780" y="358" fill="#6b7d99" font-size="11" text-anchor="start">由 timeline 驱动 · 可独立部署</text><rect x="760" y="410" width="250" height="100" rx="9" fill="#241a12" stroke="#fbbf24"/><text x="885.0" y="454.0" fill="#fbbf24" font-size="13" font-weight="bold" text-anchor="middle">并发控制 / ACID</text><text x="885.0" y="474.0" fill="#8fa5c8" font-size="11" text-anchor="middle">OCC + Lock Provider</text><text x="780" y="470" fill="#8fa5c8" font-size="11" text-anchor="start" class="svgm">ConflictChecker · Zookeeper/DDB 锁</text><line x1="280" y1="118" x2="380" y2="130" stroke="#5f7ba6" stroke-width="1.5" marker-end="url(#ar0)"/><text x="330.0" y="118.0" fill="#5f7ba6" font-size="11" text-anchor="middle">产生 instant</text><line x1="510" y1="200" x2="510" y2="240" stroke="#5f7ba6" stroke-width="1.5" marker-end="url(#ar0)"/><text x="510.0" y="214.0" fill="#5f7ba6" font-size="11" text-anchor="middle">读取最新 file slice</text><line x1="640" y1="145" x2="760" y2="135" stroke="#5f7ba6" stroke-width="1.5" marker-end="url(#ar0)"/><text x="700.0" y="134.0" fill="#5f7ba6" font-size="11" text-anchor="middle">暴露表视图</text><line x1="280" y1="230" x2="380" y2="440" stroke="#5f7ba6" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ar0)"/><text x="330.0" y="329.0" fill="#5f7ba6" font-size="11" text-anchor="middle">查询索引定位</text><line x1="640" y1="460" x2="760" y2="450" stroke="#5f7ba6" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ar0)"/><text x="700.0" y="449.0" fill="#5f7ba6" font-size="11" text-anchor="middle">写冲突校验</text><line x1="510" y1="410" x2="510" y2="370" stroke="#5f7ba6" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ar0)"/><text x="430" y="384.0" fill="#5f7ba6" font-size="11" text-anchor="middle">compaction 计划/执行</text></svg><div class="figcap"><b>图</b><span>图 1-1 · Hudi 总体架构：写入客户端 → Timeline → 文件布局 → 查询入口（对象存储上同样成立）</span></div></div><p>写入侧只与 Timeline 和 Index 打交道；查询侧通过 FileSystemView 拿到「当前可见的 FileSlice」；表服务（compaction/clustering/clean）作为独立的 timeline 参与者，同样以 instant 的形式留下痕迹——这就是 Hudi 一切组件的统一协作协议。</p><h2><span class="n">03</span>两种表类型与一条分界</h2><p>COW（Copy-On-Write）：每次写都产出新的 Base File（Parquet），读路径纯净但写放大高；MOR（Merge-On-Read）：增量写入 Log File（Avro 追加块），由 compaction 异步合并，写快读慢但可调。<code>HoodieTableType</code> 枚举定义了这两种类型，几乎整个代码库都存在 COW/MOR 的分叉。</p><div class="co"><b>读源码先记住：COW 的提交动作是 .commit，MOR 是 .deltacommit；compaction 只属于 MOR；clustering 两者皆有（.replacecommit）。</b></div><h2><span class="n">04</span>仓库模块地图</h2><p>hudi-common 是地基（timeline/文件布局/日志块/文件系统视图）；hudi-client 是写侧引擎（BaseHoodieWriteClient、compactor、clustering）；hudi-spark-datasource / hudi-flink-datasource 是引擎绑定；hudi-hadoop-mr 提供 Hive/Presto 的 InputFormat；hudi-aws / hudi-gcp 是云存储与锁的实现。</p><p>另一个容易忽略的模块是 <strong>元数据表（Metadata Table, MDT）</strong>：把文件列表、bloom filter 甚至 record index 挪进一张 Hudi 表，避免对象存储的昂贵 List 与 bloom 读取（<code>org.apache.hudi.metadata.HoodieBackedTableMetadata</code>）。</p>
+</main>
+<footer class="foot"><div class="wrap">源码深度学习手册 · 基于逐模块源码分析 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

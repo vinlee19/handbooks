@@ -1,0 +1,185 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "三种查询：Snapshot、Read Optimized、Incremental",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "fresh",
+        "label": "新鲜度",
+        "focus": [
+          "snapshot",
+          "ro"
+        ],
+        "note": "MOR 下两者差 compaction 进度。"
+      },
+      {
+        "id": "incr",
+        "label": "增量消费",
+        "focus": [
+          "incr"
+        ],
+        "note": "instant 区间即变更集。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "snapshot",
+      "type": "backend",
+      "label": "Snapshot Query",
+      "sublabel": "MOR: base + log 实时合并",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "tag": "最新"
+    },
+    {
+      "id": "ro",
+      "type": "backend",
+      "label": "Read Optimized",
+      "sublabel": "只读完成 compaction 的 base",
+      "pos": [
+        400,
+        110
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "tag": "稳定"
+    },
+    {
+      "id": "incr",
+      "type": "backend",
+      "label": "Incremental",
+      "sublabel": "instant 区间变更流",
+      "pos": [
+        760,
+        110
+      ],
+      "size": [
+        196,
+        64
+      ],
+      "tag": "增量"
+    },
+    {
+      "id": "view",
+      "type": "backend",
+      "label": "FileSystemView",
+      "sublabel": "切片选择策略层",
+      "pos": [
+        400,
+        340
+      ],
+      "size": [
+        200,
+        62
+      ],
+      "tag": "核心"
+    },
+    {
+      "id": "inputfmt",
+      "type": "external",
+      "label": "InputFormat / Datasource",
+      "sublabel": "Hive/Presto/Spark/Flink 接入",
+      "pos": [
+        40,
+        340
+      ],
+      "size": [
+        200,
+        62
+      ]
+    },
+    {
+      "id": "schema",
+      "type": "database",
+      "label": "TableSchemaResolver",
+      "sublabel": "avro → 引擎类型映射",
+      "pos": [
+        760,
+        340
+      ],
+      "size": [
+        196,
+        62
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "snapshot",
+      "to": "view",
+      "label": "latest slice"
+    },
+    {
+      "from": "ro",
+      "to": "view",
+      "label": "compacted slice",
+      "variant": "dashed",
+      "labelDy": 24
+    },
+    {
+      "from": "incr",
+      "to": "view",
+      "label": "instant 区间",
+      "variant": "dashed",
+      "labelDy": 24
+    },
+    {
+      "from": "inputfmt",
+      "to": "view",
+      "label": "split 生成",
+      "labelDy": 30
+    },
+    {
+      "from": "view",
+      "to": "schema",
+      "label": "schema 对齐",
+      "variant": "dashed",
+      "labelDy": 30
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "新鲜度谱系",
+      "items": [
+        "Snapshot 最新但 MOR 要 merge",
+        "ReadOptimized 只碰 base",
+        "compaction 桥接两者"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "增量用途",
+      "items": [
+        "下游物化视图增量刷新",
+        "CDC 前后镜像",
+        "Flink 流读共享语义"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "接入",
+      "items": [
+        "hudi-hadoop-mr：Hive/Presto",
+        "hudi-spark-datasource",
+        "hudi-flink-datasource 流读"
+      ]
+    }
+  ]
+}

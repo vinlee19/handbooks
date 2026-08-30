@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "索引家族：record key → fileGroup 的不同实现",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "local",
+        "label": "自管索引",
+        "focus": [
+          "bloom",
+          "bucket",
+          "record"
+        ],
+        "note": "不依赖外部系统。"
+      },
+      {
+        "id": "ext",
+        "label": "外部索引",
+        "focus": [
+          "hbase",
+          "simple"
+        ],
+        "note": "低延迟点查引入外部依赖。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "bloom",
+      "type": "database",
+      "label": "Bloom Index",
+      "sublabel": "bloom header + 精确比对",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ],
+      "tag": "对象存储友好"
+    },
+    {
+      "id": "bucket",
+      "type": "database",
+      "label": "Bucket Index",
+      "sublabel": "hash → bucket · 一致哈希",
+      "pos": [
+        340,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "record",
+      "type": "database",
+      "label": "Record Index (MDT)",
+      "sublabel": "元数据表自管 KV",
+      "pos": [
+        640,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "hbase",
+      "type": "database",
+      "label": "HBase Index",
+      "sublabel": "外部 KV · 低延迟",
+      "pos": [
+        920,
+        110
+      ],
+      "size": [
+        176,
+        64
+      ]
+    },
+    {
+      "id": "simple",
+      "type": "backend",
+      "label": "Simple Index",
+      "sublabel": "全表 join 朴素方案",
+      "pos": [
+        340,
+        340
+      ],
+      "size": [
+        190,
+        62
+      ]
+    },
+    {
+      "id": "iface",
+      "type": "backend",
+      "label": "HoodieIndex 接口",
+      "sublabel": "tagLocation / updateLocation",
+      "pos": [
+        40,
+        340
+      ],
+      "size": [
+        190,
+        62
+      ]
+    },
+    {
+      "id": "global",
+      "type": "security",
+      "label": "isGlobal",
+      "sublabel": "跨分区唯一性开关",
+      "pos": [
+        640,
+        340
+      ],
+      "size": [
+        190,
+        62
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "iface",
+      "to": "bloom",
+      "label": "实现",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDy": -30
+    },
+    {
+      "from": "iface",
+      "to": "simple",
+      "label": "实现",
+      "variant": "dashed"
+    },
+    {
+      "from": "bloom",
+      "to": "bucket",
+      "label": "替代方案",
+      "variant": "dashed"
+    },
+    {
+      "from": "bucket",
+      "to": "record",
+      "label": "演进方向",
+      "variant": "dashed"
+    },
+    {
+      "from": "record",
+      "to": "hbase",
+      "label": "外部 KV 对照",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "选型直觉",
+      "items": [
+        "对象存储大表：Bloom/Record",
+        "低延迟点查：HBase",
+        "固定 key 分布：Bucket"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "MOR 细节",
+      "items": [
+        "canIndexLogFiles 索引 log",
+        "否则靠 bloom/MDT 定位",
+        "rollback 回写索引撤销"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "接口",
+      "items": [
+        "tagLocation 打位置标",
+        "updateLocation 回写新 key",
+        "global 决定跨分区唯一"
+      ]
+    }
+  ]
+}

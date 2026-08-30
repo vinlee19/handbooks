@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MOR 写路径与 Compaction：把合并变成异步服务</title>
+<style>
+:root{
+  --bg:#0a0e16; --panel:#0f1524; --panel2:#131b2e; --line:#22304a; --line2:#2c3d5c;
+  --tx:#dbe6f5; --tx2:#93a5c0; --tx3:#6b7d99; --ac:#00e5cc;
+  --code-bg:#0b1220;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none} a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:16px;height:54px}
+.logo{font-weight:700;font-size:16px;color:var(--tx);white-space:nowrap;flex-shrink:0}
+.logo .m{color:var(--ac)}
+.topnav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap;overflow-x:auto}
+.topnav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.topnav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.topnav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+.hero{padding:44px 0 30px;border-bottom:1px solid var(--line);
+  background:radial-gradient(1100px 300px at 18% 0%,color-mix(in srgb,var(--ac) 10%,transparent),transparent)}
+.kicker{color:var(--ac);font-size:13px;font-weight:600;letter-spacing:2px}
+h1{font-size:32px;line-height:1.3;margin:10px 0 8px}
+.sub{color:var(--tx2);font-size:15px;max-width:880px}
+h2{font-size:22px;margin:46px 0 14px;display:flex;align-items:center;gap:10px}
+h2 .n{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border-radius:8px;
+ background:color-mix(in srgb,var(--ac) 13%,transparent);color:var(--ac);font-size:14px;font-weight:700}
+h3{font-size:17px;margin:28px 0 10px;color:var(--tx)}
+p{margin:10px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:22px 0}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.stat .v{font-size:21px;font-weight:700;color:var(--ac)}
+.stat .l{font-size:12.5px;color:var(--tx2);margin-top:2px}
+.fig{margin:22px 0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px}
+.fig svg{display:block;width:100%;height:auto}
+.figcap{display:flex;gap:8px;align-items:baseline;padding:10px 4px 6px;color:var(--tx2);font-size:13px;border-top:1px dashed var(--line);margin-top:12px}
+.figcap b{color:var(--ac);font-size:12.5px;white-space:nowrap}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px;margin:22px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--dc,#38bdf8);border-radius:12px;padding:14px 16px}
+.card h4{margin:0 0 8px;font-size:14.5px;color:var(--tx)}
+.card ul{margin:0;padding-left:18px;font-size:13px;color:var(--tx2)}
+.card li{margin:4px 0}
+.co{border:1px solid var(--line);border-left:3px solid var(--ac);background:var(--panel);border-radius:10px;padding:12px 16px;margin:16px 0;font-size:14px;color:var(--tx2)}
+.co b{color:var(--tx)}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font:12px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,monospace;color:#c9d9ee}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+ul,ol{color:#c7d3e6;padding-left:22px} li{margin:5px 0}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 40px}
+svg text{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.svgm{font-family:ui-monospace,Menlo,Consolas,monospace!important}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo"><span class="m">🪶</span> Hudi 源码深度学习手册</span><nav class="topnav"><a href="01-overview.html">01 全景</a><a href="02-timeline.html">02 Timeline</a><a href="03-file-layout.html">03 文件布局</a><a href="04-cow-write.html">04 COW 写</a><a href="05-mor-compaction.html" class=on>05 MOR</a><a href="06-index.html">06 索引</a><a href="07-read-path.html">07 读路径</a><a href="08-concurrency.html">08 并发</a></nav></div></header>
+<section class="hero"><div class="wrap">
+  <div class="kicker">APACHE HUDI SOURCE STUDY · CH 05</div>
+  <h1>MOR 写路径与 Compaction：把合并变成异步服务</h1>
+  <p class="sub">MOR 用「追加日志 + 异步合并」换取写入低延迟。compaction 是一个标准的表服务：先在 timeline 上调度一个 plan（requested），再由执行器消费（inflight → completed），全程可独立部署、可重试。</p>
+  <div class="stats"><div class="stat"><div class="v">2 阶段</div><div class="l">调度与执行分离</div></div><div class="stat"><div class="v">8-32MB</div><div class="l">log 块滚动阈值</div></div><div class="stat"><div class="v">payload.merge</div><div class="l">去重合并语义</div></div><div class="stat"><div class="v">独立部署</div><div class="l">compactor 可异构引擎</div></div></div>
+</div></section>
+<main class="wrap">
+<h2><span class="n">01</span>deltacommit：只追加</h2><div class="fig"><svg viewBox="0 0 1040 520" role="img" aria-label="hudi-mor"><defs><marker id="ar0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5f7ba6"/></marker><marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#38bdf8"/></marker><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/></marker></defs><rect x="0" y="0" width="1040" height="520" fill="#0c1322" rx="10"/><text x="30" y="38" fill="#8fa5c8" font-size="13" font-weight="bold" text-anchor="start">MOR + COMPACTION · 写读分离的代价交换</text><rect x="40" y="90" width="220" height="90" rx="9" fill="#0f2438" stroke="#00e5cc"/><text x="150.0" y="129.0" fill="#00e5cc" font-size="13" font-weight="bold" text-anchor="middle">deltacommit</text><text x="150.0" y="149.0" fill="#8fa5c8" font-size="11" text-anchor="middle">只写 log，秒级返回</text><text x="60" y="148" fill="#8fa5c8" font-size="11" text-anchor="start">日志块按大小滚动成 .log_1/.log_2</text><rect x="40" y="220" width="220" height="90" rx="9" fill="#121a30" stroke="#31435f"/><text x="150.0" y="259.0" fill="#dbe6f5" font-size="13" font-weight="bold" text-anchor="middle">调度：ScheduleCompaction</text><text x="150.0" y="279.0" fill="#8fa5c8" font-size="11" text-anchor="middle">生成 compaction plan</text><text x="60" y="278" fill="#8fa5c8" font-size="11" text-anchor="start">plan 写入 .compaction.requested</text><rect x="400" y="90" width="240" height="110" rx="9" fill="#2a2010" stroke="#fbbf24"/><text x="520.0" y="139.0" fill="#fbbf24" font-size="13" font-weight="bold" text-anchor="middle">Compaction 执行</text><text x="520.0" y="159.0" fill="#8fa5c8" font-size="11" text-anchor="middle">BaseCompactor</text><text x="420" y="140" fill="#8fa5c8" font-size="11.5" text-anchor="start">读 base + 全部 log</text><text x="420" y="160" fill="#8fa5c8" font-size="11.5" text-anchor="start">payload.merge 合并重复 key</text><text x="420" y="180" fill="#8fa5c8" font-size="11.5" text-anchor="start">产出新 base file</text><rect x="400" y="240" width="240" height="90" rx="9" fill="#121a30" stroke="#31435f"/><text x="520.0" y="279.0" fill="#dbe6f5" font-size="13" font-weight="bold" text-anchor="middle">FileSlice 轮转</text><text x="520.0" y="299.0" fill="#8fa5c8" font-size="11" text-anchor="middle">新切片替换旧切片</text><text x="420" y="298" fill="#8fa5c8" font-size="11" text-anchor="start">旧 log 归 clean 服务回收</text><rect x="760" y="90" width="240" height="110" rx="9" fill="#0f2a1c" stroke="#34d399"/><text x="880.0" y="139.0" fill="#34d399" font-size="13" font-weight="bold" text-anchor="middle">读路径变纯</text><text x="880.0" y="159.0" fill="#8fa5c8" font-size="11" text-anchor="middle">Snapshot 读只碰 base</text><text x="780" y="148" fill="#8fa5c8" font-size="11.5" text-anchor="start">ReadOptimized 读旧 slice</text><rect x="760" y="240" width="240" height="90" rx="9" fill="#121a30" stroke="#31435f"/><text x="880.0" y="279.0" fill="#dbe6f5" font-size="13" font-weight="bold" text-anchor="middle">调度策略</text><text x="880.0" y="299.0" fill="#8fa5c8" font-size="11" text-anchor="middle">CompactionStrategy</text><text x="780" y="298" fill="#8fa5c8" font-size="11" text-anchor="start">选 slice：IO 放大 vs 延迟</text><line x1="260" y1="135" x2="400" y2="135" stroke="#5f7ba6" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ar0)"/><text x="330.0" y="129.0" fill="#5f7ba6" font-size="11" text-anchor="middle">异步/inline 触发</text><line x1="520" y1="130" x2="520" y2="240" stroke="#5f7ba6" stroke-width="1.5" marker-end="url(#ar0)"/><text x="520.0" y="179.0" fill="#5f7ba6" font-size="11" text-anchor="middle">写新 base</text><line x1="640" y1="135" x2="760" y2="135" stroke="#5f7ba6" stroke-width="1.5" marker-end="url(#ar0)"/><line x1="520" y1="310" x2="760" y2="285" stroke="#5f7ba6" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ar0)"/><text x="690" y="291.5" fill="#5f7ba6" font-size="11" text-anchor="middle">instant: compaction completed</text></svg><div class="figcap"><b>图</b><span>图 5-1 · MOR 写入与 Compaction：deltacommit 追加日志，compaction 异步合成新 base</span></div></div><p>MOR 的写入瞬间是 <code>.deltacommit</code>：update 记录追加到既有 fileGroup 的 log file，insert 可走 log（log-only）或新 base。日志块类型仍由 CH03 的 <code>HoodieLogBlock</code> 家族承担。</p><h2><span class="n">02</span>Compaction：调度与执行分离</h2><p><strong>调度</strong>（<code>ScheduleCompactionActionExecutor</code>）扫描所有带 log 的 file slice，按 <code>CompactionStrategy</code>（默认 <code>UnboundedMergeCompactionStrategy</code>）挑出要合并的 slice，生成 <code>CompactionPlan</code> 写成 <code>.compaction.requested</code> instant。</p><p><strong>执行</strong>（<code>HoodieCompactor</code> / <code>BaseCompactor</code>）消费 requested 计划：对每个 (base, logs) 对做 merge，产出新 base，最后把 instant 推到 completed。因为计划先落盘，执行者可以是任何引擎（Spark/Flink/独立进程），崩溃后重放即恢复。</p><h2><span class="n">03</span>调参要点</h2><p>compaction 触发频率：<code>hoodie.compact.inline</code> + <code>hoodie.compact.inline.max.delta.commits</code>；并发上限与并行度由 plan 的 shuffle 参数控制。clean 服务随后回收被替换 slice 的旧文件（受 <code>hoodie.cleaner.commits.retained</code> 约束，与 Time Travel 窗口联动）。</p>
+</main>
+<footer class="foot"><div class="wrap">源码深度学习手册 · 基于逐模块源码分析 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

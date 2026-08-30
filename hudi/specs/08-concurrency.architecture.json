@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "并发控制与 ACID：锁、OCC 与时间线原子性",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "protocol",
+        "label": "提交协议",
+        "focus": [
+          "writers",
+          "lock",
+          "checker"
+        ],
+        "note": "取锁 → 校验 → 提交临界区。"
+      },
+      {
+        "id": "iso",
+        "label": "隔离粒度",
+        "focus": [
+          "checker",
+          "timeline"
+        ],
+        "note": "文件集相交才冲突。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "writers",
+      "type": "external",
+      "label": "并发 Writer",
+      "sublabel": "流批多管道",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "lock",
+      "type": "security",
+      "label": "TransactionManager",
+      "sublabel": "LockProvider 可插拔",
+      "pos": [
+        400,
+        110
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "tag": "取锁"
+    },
+    {
+      "id": "checker",
+      "type": "security",
+      "label": "ConflictChecker",
+      "sublabel": "文件集比对",
+      "pos": [
+        760,
+        110
+      ],
+      "size": [
+        196,
+        64
+      ],
+      "tag": "校验"
+    },
+    {
+      "id": "timeline",
+      "type": "database",
+      "label": "Timeline 提交",
+      "sublabel": "completed 原子重命名",
+      "pos": [
+        400,
+        340
+      ],
+      "size": [
+        200,
+        62
+      ],
+      "tag": "原子"
+    },
+    {
+      "id": "conflict",
+      "type": "database",
+      "label": "冲突即失败",
+      "sublabel": "早失败省算力",
+      "pos": [
+        760,
+        340
+      ],
+      "size": [
+        196,
+        62
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "writers",
+      "to": "lock",
+      "label": "取锁",
+      "variant": "emphasis"
+    },
+    {
+      "from": "lock",
+      "to": "checker",
+      "label": "临界区"
+    },
+    {
+      "from": "checker",
+      "to": "timeline",
+      "label": "无冲突提交",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    },
+    {
+      "from": "checker",
+      "to": "conflict",
+      "label": "相交失败",
+      "variant": "dashed",
+      "labelAt": [
+        830,
+        420
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "锁提供者",
+      "items": [
+        "Zookeeper / DynamoDB",
+        "FileSystem / 存储 SQL 锁",
+        "自定义 SPI 可插拔"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "冲突场景",
+      "items": [
+        "同 fileGroup 并发 upsert",
+        "clustering 与写入相交",
+        "schema 演进竞争"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "最佳实践",
+      "items": [
+        "流批写不同分区/表",
+        "早期冲突检测省算力",
+        "锁监控与超时治理"
+      ]
+    }
+  ]
+}

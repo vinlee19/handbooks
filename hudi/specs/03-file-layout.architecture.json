@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "文件布局：FileGroup、FileSlice 与 Log File",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "cow",
+        "label": "COW 切片",
+        "focus": [
+          "fg",
+          "slice"
+        ],
+        "note": "新 commit 产生新 base。"
+      },
+      {
+        "id": "mor",
+        "label": "MOR 追加",
+        "focus": [
+          "log"
+        ],
+        "note": "slice 内追加 log，compaction 合并。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "part",
+      "type": "database",
+      "label": "partition 目录",
+      "sublabel": "fileId 永不变名",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "fg",
+      "type": "database",
+      "label": "FileGroup",
+      "sublabel": "记录身份 · 唯一 fileId",
+      "pos": [
+        340,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ],
+      "tag": "身份"
+    },
+    {
+      "id": "slice",
+      "type": "database",
+      "label": "FileSlice",
+      "sublabel": "base + 其后全部 log",
+      "pos": [
+        640,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ],
+      "tag": "版本"
+    },
+    {
+      "id": "base",
+      "type": "database",
+      "label": "Base File",
+      "sublabel": "不可变 Parquet",
+      "pos": [
+        920,
+        110
+      ],
+      "size": [
+        176,
+        64
+      ]
+    },
+    {
+      "id": "log",
+      "type": "database",
+      "label": "Log File",
+      "sublabel": "AVRO/DELETE/COMMAND 块",
+      "pos": [
+        340,
+        340
+      ],
+      "size": [
+        190,
+        62
+      ],
+      "tag": "MOR"
+    },
+    {
+      "id": "view",
+      "type": "backend",
+      "label": "FileSystemView",
+      "sublabel": "切片缓存视图层",
+      "pos": [
+        640,
+        340
+      ],
+      "size": [
+        190,
+        62
+      ]
+    },
+    {
+      "id": "hoodie",
+      "type": "database",
+      "label": ".hoodie/",
+      "sublabel": "timeline 元数据目录",
+      "pos": [
+        40,
+        340
+      ],
+      "size": [
+        186,
+        62
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "part",
+      "to": "fg",
+      "label": "组织"
+    },
+    {
+      "from": "fg",
+      "to": "slice",
+      "label": "版本演进"
+    },
+    {
+      "from": "slice",
+      "to": "base",
+      "label": "COW 重写"
+    },
+    {
+      "from": "slice",
+      "to": "log",
+      "label": "MOR 追加",
+      "variant": "dashed",
+      "labelDy": 20
+    },
+    {
+      "from": "view",
+      "to": "slice",
+      "label": "缓存切片",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDy": -30
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "不变量",
+      "items": [
+        "fileId 永不变名",
+        "base file 不可变",
+        "新版本 = 新文件"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Log 块",
+      "items": [
+        "HOODIE_MAGIC 头部",
+        "AVRO/DELETE/COMMAND 块",
+        "块滚动成 .log_N"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "视图层",
+      "items": [
+        "FileSystemView 缓存",
+        "查询与 compaction 共用",
+        "getLatestFileSlice API"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,149 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "COW 写路径：打标、派发、防漏与提交",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      510
+    ]
+  },
+  "stages": [
+    {
+      "label": "打标"
+    },
+    {
+      "label": "派发"
+    },
+    {
+      "label": "写入与防漏"
+    },
+    {
+      "label": "提交"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "input",
+      "type": "external",
+      "label": "HoodieRecord 流",
+      "sublabel": "key + payload",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "idx",
+      "type": "backend",
+      "label": "Index tagLocation",
+      "sublabel": "key → fileId",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "profile",
+      "type": "backend",
+      "label": "WorkloadProfile",
+      "sublabel": "update/insert 分组",
+      "stage": 1,
+      "row": 2
+    },
+    {
+      "id": "part",
+      "type": "backend",
+      "label": "Partitioner 派发",
+      "sublabel": "小文件策略介入",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "write",
+      "type": "backend",
+      "label": "写新 base",
+      "sublabel": "MergeHandle/CreateHandle",
+      "stage": 3,
+      "row": 0
+    },
+    {
+      "id": "marker",
+      "type": "security",
+      "label": "Marker 防部分写",
+      "sublabel": "先立标记后写文件",
+      "stage": 3,
+      "row": 2
+    },
+    {
+      "id": "commit",
+      "type": "database",
+      "label": "commit 完成",
+      "sublabel": "冲突校验后落 completed",
+      "stage": 3,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "from": "input",
+      "to": "idx",
+      "label": "records"
+    },
+    {
+      "from": "idx",
+      "to": "profile",
+      "label": "位置标记"
+    },
+    {
+      "from": "profile",
+      "to": "part",
+      "label": "工作负载"
+    },
+    {
+      "from": "part",
+      "to": "write",
+      "label": "重写 base",
+      "variant": "emphasis"
+    },
+    {
+      "from": "part",
+      "to": "marker",
+      "label": "立标记",
+      "variant": "dashed"
+    },
+    {
+      "from": "write",
+      "to": "commit",
+      "label": "WriteStatus 汇总",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "索引先行",
+      "items": [
+        "tagLocation 定位更新目标",
+        "未命中 → insert 新 fileGroup",
+        "命中 → update 旧 fileGroup"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "两个保护",
+      "items": [
+        "Marker 防对象存储部分写",
+        "冲突校验在提交临界区",
+        "崩溃由 timeline 判定"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "骨架",
+      "items": [
+        "BaseHoodieTableServiceClient",
+        "UpsertPartitioner 派发",
+        "HoodieCommitMetadata 汇总"
+      ]
+    }
+  ]
+}
