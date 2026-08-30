@@ -13,6 +13,21 @@ try:
         CHAPTERS[i]["sections"].extend([("p", x) if isinstance(x, str) else x for x in ex])
 except ImportError:
     pass
+try:
+    from extra3 import EXTRA3
+    from extra4 import EXTRA4
+    for i, ex in enumerate(EXTRA4):
+        CHAPTERS[i]["sections"].extend([("p", x) if isinstance(x, str) else x for x in ex])
+    for i, ex in enumerate(EXTRA3):
+        CHAPTERS[i]["sections"].extend([("p", x) if isinstance(x, str) else x for x in ex])
+except ImportError:
+    pass
+try:
+    from extra4 import EXTRA4
+    for i, ex in enumerate(EXTRA4):
+        CHAPTERS[i]["sections"].extend([("p", x) if isinstance(x, str) else x for x in ex])
+except ImportError:
+    pass
 
 ACCENT = "#4f8cff"
 ICON = "🔷"
