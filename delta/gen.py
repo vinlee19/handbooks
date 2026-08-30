@@ -4,6 +4,12 @@ import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from site_fw import render_page
 from ch import CHAPTERS
+try:
+    from extra import EXTRA
+    for i, ex in enumerate(EXTRA):
+        CHAPTERS[i]["sections"].extend(ex)
+except ImportError:
+    pass
 
 ACCENT = "#4f8cff"
 ICON = "🔷"
