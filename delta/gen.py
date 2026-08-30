@@ -7,7 +7,7 @@ from ch import CHAPTERS
 try:
     from extra import EXTRA
     for i, ex in enumerate(EXTRA):
-        CHAPTERS[i]["sections"].extend(ex)
+        CHAPTERS[i]["sections"].extend([("p", x) if isinstance(x, str) else x for x in ex])
 except ImportError:
     pass
 
