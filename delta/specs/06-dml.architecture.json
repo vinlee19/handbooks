@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "title": "DML 统一物理路径：四种命令产出 add/remove",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "dels",
+        "label": "删除两路",
+        "focus": [
+          "delete",
+          "dv"
+        ],
+        "note": "全文件命中纯 remove，部分命中可 DV。"
+      },
+      {
+        "id": "merge",
+        "label": "Merge",
+        "focus": [
+          "merge"
+        ],
+        "note": "matched/notMatched 一次事务。"
+      }
+    ]
+  },
+  "diagram_type": "architecture",
+  "components": [
+    {
+      "id": "write",
+      "type": "backend",
+      "label": "WriteIntoDelta",
+      "sublabel": "Append / Overwrite",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "delete",
+      "type": "backend",
+      "label": "DeleteCommand",
+      "sublabel": "重写 or 删除向量",
+      "pos": [
+        400,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "update",
+      "type": "backend",
+      "label": "UpdateCommand",
+      "sublabel": "重写受影响文件",
+      "pos": [
+        400,
+        340
+      ],
+      "size": [
+        190,
+        62
+      ]
+    },
+    {
+      "id": "merge",
+      "type": "backend",
+      "label": "MergeIntoDelta",
+      "sublabel": "matched/notMatched",
+      "pos": [
+        40,
+        340
+      ],
+      "size": [
+        190,
+        62
+      ],
+      "tag": "一次事务"
+    },
+    {
+      "id": "dv",
+      "type": "database",
+      "label": "Deletion Vectors",
+      "sublabel": "行级位图 · puffin",
+      "pos": [
+        700,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "out",
+      "type": "database",
+      "label": "统一输出",
+      "sublabel": "add + remove 对",
+      "pos": [
+        700,
+        340
+      ],
+      "size": [
+        190,
+        62
+      ],
+      "tag": "一并提交"
+    }
+  ],
+  "connections": [
+    {
+      "from": "write",
+      "to": "out",
+      "label": "纯 add",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55,
+      "labelAt": [
+        140,
+        250
+      ]
+    },
+    {
+      "from": "delete",
+      "to": "dv",
+      "label": "部分命中",
+      "variant": "dashed"
+    },
+    {
+      "from": "delete",
+      "to": "out",
+      "label": "remove/add",
+      "labelAt": [
+        500,
+        240
+      ]
+    },
+    {
+      "from": "update",
+      "to": "out",
+      "label": "重写文件",
+      "labelAt": [
+        560,
+        320
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Write",
+      "items": [
+        "Append / Overwrite / replaceWhere",
+        "动态分区覆写",
+        "mergeSchema 演进"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Delete 两路",
+      "items": [
+        "全文件命中 → 纯 remove",
+        "部分命中 → 重写或 DV",
+        "DV 由表属性启用"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Merge",
+      "items": [
+        "matched/notMatched 两集合",
+        "whenMatched 子句族",
+        "一次事务整体可见"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "title": "Transaction Log：七个 action 定义一张表",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "data",
+        "label": "数据动作",
+        "focus": [
+          "add",
+          "remove"
+        ],
+        "note": "文件账本。"
+      },
+      {
+        "id": "def",
+        "label": "表定义",
+        "focus": [
+          "meta",
+          "protocol"
+        ],
+        "note": "schema 与协议版本。"
+      }
+    ]
+  },
+  "diagram_type": "architecture",
+  "components": [
+    {
+      "id": "add",
+      "type": "database",
+      "label": "add",
+      "sublabel": "path · stats · partitionValues",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ],
+      "tag": "新增"
+    },
+    {
+      "id": "remove",
+      "type": "database",
+      "label": "remove",
+      "sublabel": "逻辑删除 · dataChange",
+      "pos": [
+        340,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "meta",
+      "type": "database",
+      "label": "meta",
+      "sublabel": "schemaString · 分区列",
+      "pos": [
+        640,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "protocol",
+      "type": "security",
+      "label": "protocol",
+      "sublabel": "minReader / minWriter",
+      "pos": [
+        920,
+        110
+      ],
+      "size": [
+        180,
+        64
+      ]
+    },
+    {
+      "id": "txn",
+      "type": "messagebus",
+      "label": "setTransaction",
+      "sublabel": "appId + version 幂等",
+      "pos": [
+        40,
+        340
+      ],
+      "size": [
+        186,
+        62
+      ]
+    },
+    {
+      "id": "info",
+      "type": "database",
+      "label": "commitInfo",
+      "sublabel": "操作 · 用户 · 参数审计",
+      "pos": [
+        340,
+        340
+      ],
+      "size": [
+        186,
+        62
+      ]
+    },
+    {
+      "id": "domain",
+      "type": "backend",
+      "label": "domainMetadata",
+      "sublabel": "表级扩展配置",
+      "pos": [
+        640,
+        340
+      ],
+      "size": [
+        186,
+        62
+      ]
+    },
+    {
+      "id": "json",
+      "type": "database",
+      "label": "00000N.json",
+      "sublabel": "每行一个 action 的提交文件",
+      "pos": [
+        920,
+        340
+      ],
+      "size": [
+        186,
+        62
+      ],
+      "tag": "原子"
+    }
+  ],
+  "connections": [
+    {
+      "from": "add",
+      "to": "json",
+      "label": "追加成提交",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    },
+    {
+      "from": "remove",
+      "to": "json",
+      "label": "追加成提交",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    },
+    {
+      "from": "meta",
+      "to": "json",
+      "label": "追加成提交",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "数据动作",
+      "items": [
+        "add：新文件 + stats 裁剪原料",
+        "remove：逻辑删除",
+        "dataChange=false 纯布局变化"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "表定义",
+      "items": [
+        "meta：schema 与分区列",
+        "protocol：版本门槛",
+        "domainMetadata：可扩展配置"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "提交形态",
+      "items": [
+        "一次提交 = 一个 json",
+        "文件完整即完整可见",
+        "LogStore 补齐 S3 原子性"
+      ]
+    }
+  ]
+}

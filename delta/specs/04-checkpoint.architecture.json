@@ -1,0 +1,179 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "title": "Checkpoint：让快照构建 O(1) 起步",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "v1",
+        "label": "v1 结构",
+        "focus": [
+          "parquet",
+          "last"
+        ],
+        "note": "10 个 part 并行写。"
+      },
+      {
+        "id": "v2",
+        "label": "v2 结构",
+        "focus": [
+          "sidecar",
+          "crc"
+        ],
+        "note": "sidecar 溢出大动作。"
+      }
+    ]
+  },
+  "diagram_type": "architecture",
+  "components": [
+    {
+      "id": "parquet",
+      "type": "database",
+      "label": "N.checkpoint.parquet",
+      "sublabel": "v1：最多 10 part",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "tag": "全量"
+    },
+    {
+      "id": "sidecar",
+      "type": "database",
+      "label": "sidecar 文件",
+      "sublabel": "v2：大动作溢出",
+      "pos": [
+        400,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "crc",
+      "type": "security",
+      "label": "CRC 校验和",
+      "sublabel": "快照完整性校验",
+      "pos": [
+        700,
+        110
+      ],
+      "size": [
+        176,
+        64
+      ]
+    },
+    {
+      "id": "last",
+      "type": "database",
+      "label": "_last_checkpoint",
+      "sublabel": "version · parts · size",
+      "pos": [
+        400,
+        340
+      ],
+      "size": [
+        190,
+        62
+      ]
+    },
+    {
+      "id": "content",
+      "type": "database",
+      "label": "内容 = 全部 action",
+      "sublabel": "active add + tombstone + meta",
+      "pos": [
+        40,
+        340
+      ],
+      "size": [
+        200,
+        62
+      ]
+    },
+    {
+      "id": "trigger",
+      "type": "backend",
+      "label": "触发",
+      "sublabel": "checkpointInterval 提交后钩子",
+      "pos": [
+        700,
+        340
+      ],
+      "size": [
+        186,
+        62
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "trigger",
+      "to": "parquet",
+      "label": "每 N 次提交",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDy": -30
+    },
+    {
+      "from": "parquet",
+      "to": "sidecar",
+      "label": "v2 溢出",
+      "variant": "dashed"
+    },
+    {
+      "from": "parquet",
+      "to": "last",
+      "label": "写入元信息",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    },
+    {
+      "from": "last",
+      "to": "content",
+      "label": "指向起点",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "读路径收益",
+      "items": [
+        "快照构建 O(1) 起步",
+        "免 List 对象存储友好",
+        "并行读多个 part"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "v2 sidecar",
+      "items": [
+        "大 add 集合溢出存储",
+        "主文件保持精简",
+        "按需加载"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "一致性",
+      "items": [
+        "CRC 校验和",
+        "_last_checkpoint 先行",
+        "失败可安全重做"
+      ]
+    }
+  ]
+}

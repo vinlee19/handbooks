@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "title": "乐观事务：读快照、改、校验、提交",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      470
+    ],
+    "views": [
+      {
+        "id": "loop",
+        "label": "重试循环",
+        "focus": [
+          "rw",
+          "check",
+          "commit"
+        ],
+        "note": "冲突自动重试。"
+      }
+    ]
+  },
+  "diagram_type": "dataflow",
+  "stages": [
+    {
+      "label": "开始"
+    },
+    {
+      "label": "读写"
+    },
+    {
+      "label": "校验"
+    },
+    {
+      "label": "提交"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "start",
+      "type": "backend",
+      "label": "txn 开始",
+      "sublabel": "绑定 Snapshot 版本",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "rw",
+      "type": "backend",
+      "label": "读文件 / 改状态",
+      "sublabel": "touchedFiles 登记",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "check",
+      "type": "security",
+      "label": "ConflictChecker",
+      "sublabel": "与并发提交比对",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "commit",
+      "type": "database",
+      "label": "写 json 提交",
+      "sublabel": "版本号递增重试",
+      "stage": 3,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "from": "start",
+      "to": "rw",
+      "label": "基于快照"
+    },
+    {
+      "from": "rw",
+      "to": "check",
+      "label": "prepare",
+      "variant": "emphasis",
+      "labelAt": [
+        330,
+        208
+      ]
+    },
+    {
+      "from": "check",
+      "to": "commit",
+      "label": "无冲突",
+      "variant": "emphasis"
+    },
+    {
+      "from": "check",
+      "to": "rw",
+      "label": "重试",
+      "variant": "dashed",
+      "labelAt": [
+        500,
+        316
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "隔离级别",
+      "items": [
+        "WriteSerializable 默认",
+        "Serializable 全序化",
+        "append-only 快速路径"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "冲突判定",
+      "items": [
+        "读写文件集相交即冲突",
+        "metadata 变更单独判",
+        "setTransaction 幂等"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "后置钩子",
+      "items": [
+        "checkpoint 触发",
+        "UniForm 元数据同步",
+        "metrics 上报"
+      ]
+    }
+  ]
+}

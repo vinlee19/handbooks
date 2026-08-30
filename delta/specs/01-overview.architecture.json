@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "title": "Delta Lake 总体架构：日志即表",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "log",
+        "label": "日志主线",
+        "focus": [
+          "engine",
+          "txn",
+          "log"
+        ],
+        "note": "提交 = 追加 JSON，读取 = 重放。"
+      },
+      {
+        "id": "tx",
+        "label": "事务",
+        "focus": [
+          "txn",
+          "log"
+        ],
+        "note": "OCC 提交前冲突校验。"
+      }
+    ]
+  },
+  "diagram_type": "architecture",
+  "components": [
+    {
+      "id": "engine",
+      "type": "external",
+      "label": "查询/写入引擎",
+      "sublabel": "Spark · Flink · Trino",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        186,
+        64
+      ]
+    },
+    {
+      "id": "log",
+      "type": "database",
+      "label": "_delta_log/",
+      "sublabel": "N.json + checkpoint",
+      "pos": [
+        640,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ],
+      "tag": "唯一真相"
+    },
+    {
+      "id": "files",
+      "type": "database",
+      "label": "Parquet 数据文件",
+      "sublabel": "不可变 · add/remove 引用",
+      "pos": [
+        920,
+        110
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "txn",
+      "type": "security",
+      "label": "OptimisticTransaction",
+      "sublabel": "OCC + ConflictChecker",
+      "pos": [
+        340,
+        110
+      ],
+      "size": [
+        196,
+        62
+      ],
+      "tag": "核心"
+    },
+    {
+      "id": "snapshot",
+      "type": "backend",
+      "label": "Snapshot",
+      "sublabel": "重放日志的内存视图",
+      "pos": [
+        640,
+        340
+      ],
+      "size": [
+        190,
+        62
+      ]
+    },
+    {
+      "id": "ck",
+      "type": "database",
+      "label": "Checkpoint / CRC",
+      "sublabel": "加速快照构建",
+      "pos": [
+        920,
+        340
+      ],
+      "size": [
+        186,
+        62
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "engine",
+      "to": "txn",
+      "label": "提交入口"
+    },
+    {
+      "from": "txn",
+      "to": "log",
+      "label": "写入新版本",
+      "variant": "emphasis"
+    },
+    {
+      "from": "log",
+      "to": "files",
+      "label": "引用文件"
+    },
+    {
+      "from": "log",
+      "to": "snapshot",
+      "label": "重放",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    },
+    {
+      "from": "files",
+      "to": "ck",
+      "label": "状态固化",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 55
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "三大设计",
+      "items": [
+        "日志即表：_delta_log 唯一真相",
+        "数据文件不可变",
+        "提交原子可见"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "免费副产品",
+      "items": [
+        "Time Travel 读旧日志",
+        "CommitInfo 审计",
+        "meta action 演进 schema"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "读源码主线",
+      "items": [
+        "DeltaLog → Snapshot",
+        "OptimisticTransaction 提交",
+        "ConflictChecker 并发"
+      ]
+    }
+  ]
+}

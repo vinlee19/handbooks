@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "title": "Snapshot 构建：checkpoint + 增量重放",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      900,
+      470
+    ],
+    "views": [
+      {
+        "id": "build",
+        "label": "构建",
+        "focus": [
+          "cp",
+          "replay",
+          "snap"
+        ],
+        "note": "最短路径重放。"
+      }
+    ]
+  },
+  "diagram_type": "dataflow",
+  "stages": [
+    {
+      "label": "定位"
+    },
+    {
+      "label": "全量"
+    },
+    {
+      "label": "增量"
+    },
+    {
+      "label": "快照"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "last",
+      "type": "database",
+      "label": "_last_checkpoint",
+      "sublabel": "免 List 定位起点",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "cp",
+      "type": "database",
+      "label": "checkpoint parquet",
+      "sublabel": "全量状态一次装入",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "replay",
+      "type": "backend",
+      "label": "重放增量 json",
+      "sublabel": "checkpoint 后的提交",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "snap",
+      "type": "database",
+      "label": "Snapshot N",
+      "sublabel": "active/tombstone/txn",
+      "stage": 3,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "from": "last",
+      "to": "cp",
+      "label": "定位"
+    },
+    {
+      "from": "cp",
+      "to": "replay",
+      "label": "基线状态"
+    },
+    {
+      "from": "replay",
+      "to": "snap",
+      "label": "三集合",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "三集合",
+      "items": [
+        "activeFiles：有效文件",
+        "tombstones：冲突检测用",
+        "setTransactions：流幂等"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Time Travel",
+      "items": [
+        "versionAsOf / timestampAsOf",
+        "从目标版本重放",
+        "受 vacuum retention 限制"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "加速",
+      "items": [
+        "_last_checkpoint 免 List",
+        "CRC 校验和防损坏",
+        "SnapshotManagement 缓存"
+      ]
+    }
+  ]
+}

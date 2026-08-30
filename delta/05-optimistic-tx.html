@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>乐观事务：OptimisticTransaction 与冲突判定</title>
+<style>
+:root{
+  --bg:#0a0e16; --panel:#0f1524; --panel2:#131b2e; --line:#22304a; --line2:#2c3d5c;
+  --tx:#dbe6f5; --tx2:#93a5c0; --tx3:#6b7d99; --ac:#4f8cff;
+  --code-bg:#0b1220;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none} a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:16px;height:54px}
+.logo{font-weight:700;font-size:16px;color:var(--tx);white-space:nowrap;flex-shrink:0}
+.logo .m{color:var(--ac)}
+.topnav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap;overflow-x:auto}
+.topnav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.topnav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.topnav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+.hero{padding:44px 0 30px;border-bottom:1px solid var(--line);
+  background:radial-gradient(1100px 300px at 18% 0%,color-mix(in srgb,var(--ac) 10%,transparent),transparent)}
+.kicker{color:var(--ac);font-size:13px;font-weight:600;letter-spacing:2px}
+h1{font-size:32px;line-height:1.3;margin:10px 0 8px}
+.sub{color:var(--tx2);font-size:15px;max-width:880px}
+h2{font-size:22px;margin:46px 0 14px;display:flex;align-items:center;gap:10px}
+h2 .n{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border-radius:8px;
+ background:color-mix(in srgb,var(--ac) 13%,transparent);color:var(--ac);font-size:14px;font-weight:700}
+h3{font-size:17px;margin:28px 0 10px;color:var(--tx)}
+p{margin:10px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:22px 0}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.stat .v{font-size:21px;font-weight:700;color:var(--ac)}
+.stat .l{font-size:12.5px;color:var(--tx2);margin-top:2px}
+.fig{margin:22px 0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px}
+.fig svg{display:block;width:100%;height:auto}
+.figcap{display:flex;gap:8px;align-items:baseline;padding:10px 4px 6px;color:var(--tx2);font-size:13px;border-top:1px dashed var(--line);margin-top:12px}
+.figcap b{color:var(--ac);font-size:12.5px;white-space:nowrap}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px;margin:22px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--dc,#38bdf8);border-radius:12px;padding:14px 16px}
+.card h4{margin:0 0 8px;font-size:14.5px;color:var(--tx)}
+.card ul{margin:0;padding-left:18px;font-size:13px;color:var(--tx2)}
+.card li{margin:4px 0}
+.co{border:1px solid var(--line);border-left:3px solid var(--ac);background:var(--panel);border-radius:10px;padding:12px 16px;margin:16px 0;font-size:14px;color:var(--tx2)}
+.co b{color:var(--tx)}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font:12px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,monospace;color:#c9d9ee}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+ul,ol{color:#c7d3e6;padding-left:22px} li{margin:5px 0}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 40px}
+svg text{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.svgm{font-family:ui-monospace,Menlo,Consolas,monospace!important}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo"><span class="m">🔷</span> Delta Lake 源码深度学习手册</span><nav class="topnav"><a href="index.html">目录</a><a href="01-overview.html">01 全景</a><a href="02-transaction-log.html">02 事务日志</a><a href="03-snapshot.html">03 快照</a><a href="04-checkpoint.html">04 Checkpoint</a><a href="05-optimistic-tx.html" class=on>05 乐观事务</a><a href="06-dml.html">06 DML</a><a href="07-maintenance.html">07 表维护</a><a href="08-kernel-ecosystem.html">08 内核生态</a></nav></div></header>
+<section class="hero"><div class="wrap">
+  <div class="kicker">DELTA LAKE SOURCE STUDY · CH 05</div>
+  <h1>乐观事务：OptimisticTransaction 与冲突判定</h1>
+  <p class="sub">所有写入都运行在 <code>OptimisticTransaction</code> 里：读快照做修改，提交时用 <code>ConflictChecker</code> 与并发提交比对，赢者落日志、输者重试或失败。</p>
+  <div class="stats"><div class="stat"><div class="v">OCC</div><div class="l">无锁乐观并发</div></div><div class="stat"><div class="v">2 级</div><div class="l">WriteSerializable/Serializable</div></div><div class="stat"><div class="v">重试</div><div class="l">冲突自动重试 N 次</div></div><div class="stat"><div class="v">幂等</div><div class="l">setTransaction 防重放</div></div></div>
+</div></section>
+<main class="wrap">
+<h2><span class="n">01</span>事务生命周期</h2><div class="fig"><svg viewBox="0 0 1040 440" role="img" aria-label="delta-txn"><defs><marker id="ar0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5f7ba6"/></marker><marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#38bdf8"/></marker><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/></marker></defs><rect x="0" y="0" width="1040" height="440" fill="#0c1322" rx="10"/><text x="30" y="38" fill="#8fa5c8" font-size="13" font-weight="bold" text-anchor="start">OPTIMISTIC TRANSACTION · OptimisticTransaction.scala</text><rect x="40" y="90" width="230" height="90" rx="9" fill="#0f2438" stroke="#4f8cff"/><text x="155.0" y="129.0" fill="#4f8cff" font-size="13" font-weight="bold" text-anchor="middle">txn 开始</text><text x="155.0" y="149.0" fill="#8fa5c8" font-size="11" text-anchor="middle">绑定 Snapshot 版本</text><rect x="340" y="90" width="230" height="90" rx="9" fill="#121a30" stroke="#31435f"/><text x="455.0" y="129.0" fill="#dbe6f5" font-size="13" font-weight="bold" text-anchor="middle">读写文件</text><text x="455.0" y="149.0" fill="#8fa5c8" font-size="11" text-anchor="middle">readFiles / touchedFiles 登记</text><rect x="640" y="90" width="200" height="90" rx="9" fill="#2a2010" stroke="#fbbf24"/><text x="740.0" y="129.0" fill="#dbe6f5" font-size="13" font-weight="bold" text-anchor="middle">prepareCommit</text><text x="740.0" y="149.0" fill="#8fa5c8" font-size="11" text-anchor="middle">组装 action 序列</text><rect x="340" y="240" width="230" height="90" rx="9" fill="#121a30" stroke="#31435f"/><text x="455.0" y="279.0" fill="#dbe6f5" font-size="13" font-weight="bold" text-anchor="middle">doCommit 循环</text><text x="455.0" y="299.0" fill="#8fa5c8" font-size="11" text-anchor="middle">写 json → 失败重试</text><rect x="640" y="240" width="200" height="90" rx="9" fill="#0f2438" stroke="#4f8cff"/><text x="740.0" y="279.0" fill="#4f8cff" font-size="13" font-weight="bold" text-anchor="middle">ConflictChecker</text><text x="740.0" y="299.0" fill="#8fa5c8" font-size="11" text-anchor="middle">与并发提交比对</text><rect x="40" y="240" width="230" height="90" rx="9" fill="#0f2a1c" stroke="#34d399"/><text x="155.0" y="279.0" fill="#34d399" font-size="13" font-weight="bold" text-anchor="middle">post-commit</text><text x="155.0" y="299.0" fill="#8fa5c8" font-size="11" text-anchor="middle">checkpoint / metrics / UniForm</text><line x1="270" y1="135" x2="340" y2="135" stroke="#5f7ba6" stroke-width="1.5" marker-end="url(#ar0)"/><line x1="570" y1="135" x2="640" y2="135" stroke="#5f7ba6" stroke-width="1.5" marker-end="url(#ar0)"/><line x1="740" y1="180" x2="740" y2="240" stroke="#5f7ba6" stroke-width="1.5" marker-end="url(#ar0)"/><text x="800" y="204.0" fill="#5f7ba6" font-size="11" text-anchor="middle">尝试写入</text><line x1="570" y1="285" x2="640" y2="285" stroke="#5f7ba6" stroke-width="1.5" marker-end="url(#ar0)"/><text x="605.0" y="279.0" fill="#5f7ba6" font-size="11" text-anchor="middle">冲突?</text><line x1="455" y1="240" x2="455" y2="180" stroke="#5f7ba6" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ar0)"/><text x="380" y="204.0" fill="#5f7ba6" font-size="11" text-anchor="middle">赢者重放</text><line x1="340" y1="285" x2="155" y2="285" stroke="#5f7ba6" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ar0)"/><text x="247.5" y="279.0" fill="#5f7ba6" font-size="11" text-anchor="middle">提交成功</text></svg><div class="figcap"><b>图</b><span>图 5-1 · 事务生命周期：读快照 → 修改 → 校验 → 提交</span></div></div><p>提交的核心是 <code>doCommitRetryLoop</code>：把 action 写成版本号为 (读取版本 + 重试次数) 的 json；若目标文件已存在（别人先提交），进入 <code>ConflictChecker.checkForReads/Writes</code> 判定能否重试。</p><h2><span class="n">02</span>冲突判定</h2><p><code>ConflictChecker</code> 区分：并发提交是否读取了我要改的文件（读写冲突）、是否修改了同一批文件（写写冲突）、是否改了 metadata（schema 冲突）。<strong>WriteSerializable</strong>（默认）允许「只读不写」的并发与纯追加并行；Serializable 更严格。</p><p>流式查询用 <code>setTransaction(appId, version)</code> 做恰好一次语义：同一 appId 重复提交会被日志直接拒绝——这是 Structured Streaming 的 checkpoint 机制与 Delta 的握手点。</p>
+</main>
+<footer class="foot"><div class="wrap">源码深度学习手册 · 基于逐模块源码分析 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>

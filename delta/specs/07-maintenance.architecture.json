@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "title": "表维护：Optimize、Z-Order 与 Vacuum",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "opt",
+        "label": "Optimize",
+        "focus": [
+          "cand",
+          "pack"
+        ],
+        "note": "bin-pack 合并小文件。"
+      },
+      {
+        "id": "vac",
+        "label": "Vacuum",
+        "focus": [
+          "vac"
+        ],
+        "note": "清理日志未引用文件。"
+      }
+    ]
+  },
+  "diagram_type": "architecture",
+  "components": [
+    {
+      "id": "cand",
+      "type": "database",
+      "label": "候选小文件",
+      "sublabel": "where 谓词圈定分区",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "pack",
+      "type": "backend",
+      "label": "bin-pack 合并",
+      "sublabel": "目标 ~1GB 输出",
+      "pos": [
+        400,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ],
+      "tag": "Optimize"
+    },
+    {
+      "id": "zord",
+      "type": "backend",
+      "label": "Z-Order 重排",
+      "sublabel": "多列交错 → 局部性",
+      "pos": [
+        700,
+        110
+      ],
+      "size": [
+        190,
+        64
+      ]
+    },
+    {
+      "id": "out",
+      "type": "database",
+      "label": "dataChange=false",
+      "sublabel": "add/remove 纯布局",
+      "pos": [
+        940,
+        110
+      ],
+      "size": [
+        170,
+        64
+      ]
+    },
+    {
+      "id": "vac",
+      "type": "backend",
+      "label": "Vacuum",
+      "sublabel": "retention 默认 7 天",
+      "pos": [
+        400,
+        340
+      ],
+      "size": [
+        190,
+        62
+      ],
+      "tag": "物理清理"
+    },
+    {
+      "id": "stats",
+      "type": "database",
+      "label": "stats 聚集",
+      "sublabel": "min/max 更紧 → 裁剪更强",
+      "pos": [
+        700,
+        340
+      ],
+      "size": [
+        190,
+        62
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "cand",
+      "to": "pack",
+      "label": "按大小分桶"
+    },
+    {
+      "from": "pack",
+      "to": "zord",
+      "label": "zOrderCols 指定",
+      "variant": "dashed"
+    },
+    {
+      "from": "zord",
+      "to": "out",
+      "label": "重排写出",
+      "variant": "emphasis"
+    },
+    {
+      "from": "out",
+      "to": "stats",
+      "label": "统计聚集",
+      "variant": "dashed",
+      "labelAt": [
+        830,
+        260
+      ]
+    },
+    {
+      "from": "vac",
+      "to": "out",
+      "label": "清理未引用",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "via": [
+        [
+          495,
+          280
+        ],
+        [
+          1025,
+          280
+        ]
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Optimize",
+      "items": [
+        "bin-pack 小文件合并",
+        "按分区/谓词圈定",
+        "dataChange=false"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Z-Order",
+      "items": [
+        "多维聚类改善局部性",
+        "stats 聚集裁剪更强",
+        "liquid clustering 演进"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Vacuum",
+      "items": [
+        "删日志未引用文件",
+        "retention 是 TT 安全窗",
+        "dry-run 先看清单"
+      ]
+    }
+  ]
+}

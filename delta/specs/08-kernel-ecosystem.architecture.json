@@ -1,0 +1,212 @@
+{
+  "schema_version": 1,
+  "meta": {
+    "title": "内核与生态：Kernel、UniForm 与 Catalog",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1240,
+      560
+    ],
+    "views": [
+      {
+        "id": "kernel",
+        "label": "Kernel",
+        "focus": [
+          "kernel",
+          "engines"
+        ],
+        "note": "读能力下沉为独立库。"
+      },
+      {
+        "id": "uniform",
+        "label": "UniForm",
+        "focus": [
+          "uniform"
+        ],
+        "note": "同时暴露为 Iceberg。"
+      }
+    ]
+  },
+  "diagram_type": "architecture",
+  "components": [
+    {
+      "id": "kernel",
+      "type": "backend",
+      "label": "Delta Kernel (Rust)",
+      "sublabel": "读日志 + 扫描最小库",
+      "pos": [
+        40,
+        110
+      ],
+      "size": [
+        200,
+        64
+      ],
+      "tag": "独立内核"
+    },
+    {
+      "id": "jkernel",
+      "type": "backend",
+      "label": "Java Kernel",
+      "sublabel": "JVM 引擎轻量接入",
+      "pos": [
+        40,
+        340
+      ],
+      "size": [
+        200,
+        62
+      ]
+    },
+    {
+      "id": "uniform",
+      "type": "backend",
+      "label": "UniForm",
+      "sublabel": "异步生成 Iceberg 元数据",
+      "pos": [
+        400,
+        110
+      ],
+      "size": [
+        196,
+        64
+      ],
+      "tag": "互操作"
+    },
+    {
+      "id": "hudi",
+      "type": "backend",
+      "label": "Hudi 同步",
+      "sublabel": "DeltaStamp 协同",
+      "pos": [
+        400,
+        340
+      ],
+      "size": [
+        196,
+        62
+      ]
+    },
+    {
+      "id": "engines",
+      "type": "external",
+      "label": "接入的引擎",
+      "sublabel": "Spark/Flink/Presto/Trino",
+      "pos": [
+        760,
+        110
+      ],
+      "size": [
+        196,
+        64
+      ]
+    },
+    {
+      "id": "catalog",
+      "type": "database",
+      "label": "Catalog",
+      "sublabel": "UC / Glue / Hive 绑定",
+      "pos": [
+        760,
+        340
+      ],
+      "size": [
+        196,
+        62
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "kernel",
+      "to": "engines",
+      "label": "实现读 SPI",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "top",
+      "via": [
+        [
+          140,
+          60
+        ],
+        [
+          858,
+          60
+        ]
+      ]
+    },
+    {
+      "from": "jkernel",
+      "to": "engines",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "right",
+      "via": [
+        [
+          140,
+          480
+        ],
+        [
+          1060,
+          480
+        ],
+        [
+          1060,
+          142
+        ]
+      ]
+    },
+    {
+      "from": "uniform",
+      "to": "engines",
+      "label": "零拷贝接入 Iceberg 引擎",
+      "variant": "emphasis"
+    },
+    {
+      "from": "hudi",
+      "to": "uniform",
+      "label": "互操作",
+      "variant": "dashed"
+    },
+    {
+      "from": "engines",
+      "to": "catalog",
+      "label": "目录绑定",
+      "labelDx": 40,
+      "labelAt": [
+        858,
+        262
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Kernel",
+      "items": [
+        "Rust 实现 + Java 封装",
+        "只做读：日志重放 + 扫描",
+        "写仍走 Spark 命令"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "UniForm",
+      "items": [
+        "IcebergCompat 开关",
+        "异步生成 Iceberg 元数据",
+        "Hudi 双向互通"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "流与目录",
+      "items": [
+        "setTransaction 恰好一次",
+        "Catalog 绑定 UC/Glue",
+        "streaming table / CDC 视图"
+      ]
+    }
+  ]
+}

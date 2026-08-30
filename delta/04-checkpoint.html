@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Checkpoint：让快照构建从 O(日志) 变 O(1)</title>
+<style>
+:root{
+  --bg:#0a0e16; --panel:#0f1524; --panel2:#131b2e; --line:#22304a; --line2:#2c3d5c;
+  --tx:#dbe6f5; --tx2:#93a5c0; --tx3:#6b7d99; --ac:#4f8cff;
+  --code-bg:#0b1220;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+a{color:var(--ac);text-decoration:none} a:hover{text-decoration:underline}
+.wrap{max-width:1080px;margin:0 auto;padding:0 28px}
+.top{position:sticky;top:0;z-index:50;background:rgba(10,14,22,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.top .wrap{display:flex;align-items:center;gap:16px;height:54px}
+.logo{font-weight:700;font-size:16px;color:var(--tx);white-space:nowrap;flex-shrink:0}
+.logo .m{color:var(--ac)}
+.topnav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap;overflow-x:auto}
+.topnav a{font-size:12.5px;color:var(--tx2);padding:4px 8px;white-space:nowrap;border-radius:6px}
+.topnav a:hover{color:var(--tx);background:var(--panel2);text-decoration:none}
+.topnav a.on{color:var(--ac);background:color-mix(in srgb,var(--ac) 13%,transparent)}
+.hero{padding:44px 0 30px;border-bottom:1px solid var(--line);
+  background:radial-gradient(1100px 300px at 18% 0%,color-mix(in srgb,var(--ac) 10%,transparent),transparent)}
+.kicker{color:var(--ac);font-size:13px;font-weight:600;letter-spacing:2px}
+h1{font-size:32px;line-height:1.3;margin:10px 0 8px}
+.sub{color:var(--tx2);font-size:15px;max-width:880px}
+h2{font-size:22px;margin:46px 0 14px;display:flex;align-items:center;gap:10px}
+h2 .n{display:inline-flex;align-items:center;justify-content:center;min-width:30px;height:30px;border-radius:8px;
+ background:color-mix(in srgb,var(--ac) 13%,transparent);color:var(--ac);font-size:14px;font-weight:700}
+h3{font-size:17px;margin:28px 0 10px;color:var(--tx)}
+p{margin:10px 0;color:#c7d3e6}
+strong{color:#eaf2fd}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:22px 0}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.stat .v{font-size:21px;font-weight:700;color:var(--ac)}
+.stat .l{font-size:12.5px;color:var(--tx2);margin-top:2px}
+.fig{margin:22px 0;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 18px 10px}
+.fig svg{display:block;width:100%;height:auto}
+.figcap{display:flex;gap:8px;align-items:baseline;padding:10px 4px 6px;color:var(--tx2);font-size:13px;border-top:1px dashed var(--line);margin-top:12px}
+.figcap b{color:var(--ac);font-size:12.5px;white-space:nowrap}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(290px,1fr));gap:12px;margin:22px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--dc,#38bdf8);border-radius:12px;padding:14px 16px}
+.card h4{margin:0 0 8px;font-size:14.5px;color:var(--tx)}
+.card ul{margin:0;padding-left:18px;font-size:13px;color:var(--tx2)}
+.card li{margin:4px 0}
+.co{border:1px solid var(--line);border-left:3px solid var(--ac);background:var(--panel);border-radius:10px;padding:12px 16px;margin:16px 0;font-size:14px;color:var(--tx2)}
+.co b{color:var(--tx)}
+code{background:#0e1626;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font:12px ui-monospace,Menlo,monospace;color:#8fd3ff}
+pre{background:var(--code-bg);border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font:12.5px/1.6 ui-monospace,Menlo,monospace;color:#c9d9ee}
+pre code{background:none;border:none;padding:0;color:inherit}
+table{border-collapse:collapse;margin:18px 0;width:100%;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 12px;text-align:left;color:#c7d3e6}
+th{background:var(--panel2);color:var(--tx);font-weight:600}
+ul,ol{color:#c7d3e6;padding-left:22px} li{margin:5px 0}
+.foot{border-top:1px solid var(--line);color:var(--tx3);font-size:12.5px;padding:20px 0 40px}
+svg text{font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.svgm{font-family:ui-monospace,Menlo,Consolas,monospace!important}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap"><span class="logo"><span class="m">🔷</span> Delta Lake 源码深度学习手册</span><nav class="topnav"><a href="index.html">目录</a><a href="01-overview.html">01 全景</a><a href="02-transaction-log.html">02 事务日志</a><a href="03-snapshot.html">03 快照</a><a href="04-checkpoint.html" class=on>04 Checkpoint</a><a href="05-optimistic-tx.html">05 乐观事务</a><a href="06-dml.html">06 DML</a><a href="07-maintenance.html">07 表维护</a><a href="08-kernel-ecosystem.html">08 内核生态</a></nav></div></header>
+<section class="hero"><div class="wrap">
+  <div class="kicker">DELTA LAKE SOURCE STUDY · CH 04</div>
+  <h1>Checkpoint：让快照构建从 O(日志) 变 O(1)</h1>
+  <p class="sub">日志会无限增长，重放越来越慢。Checkpoint 把全量状态写成结构化 Parquet（可多 part），此后构建快照只需 checkpoint + 少量增量 JSON。</p>
+  <div class="stats"><div class="stat"><div class="v">Parquet</div><div class="l">checkpoint 格式</div></div><div class="stat"><div class="v">10 parts</div><div class="l">可并行的分片文件</div></div><div class="stat"><div class="v">v2</div><div class="l">sidecar 文件结构</div></div><div class="stat"><div class="v">_last_checkpoint</div><div class="l">元信息指针</div></div></div>
+</div></section>
+<main class="wrap">
+<h2><span class="n">01</span>Checkpoint 结构</h2><div class="fig"><svg viewBox="0 0 1040 420" role="img" aria-label="delta-checkpoint"><defs><marker id="ar0" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5f7ba6"/></marker><marker id="ar1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#38bdf8"/></marker><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#fbbf24"/></marker></defs><rect x="0" y="0" width="1040" height="420" fill="#0c1322" rx="10"/><text x="30" y="38" fill="#8fa5c8" font-size="13" font-weight="bold" text-anchor="start">CHECKPOINT · Checkpoints.scala</text><rect x="40" y="90" width="300" height="90" rx="9" fill="#0f2438" stroke="#4f8cff"/><text x="190.0" y="129.0" fill="#4f8cff" font-size="13" font-weight="bold" text-anchor="middle">N.checkpoint.parquet</text><text x="190.0" y="149.0" fill="#8fa5c8" font-size="11" text-anchor="middle">v1：最多 10 个 part 并行写</text><rect x="40" y="220" width="300" height="90" rx="9" fill="#121a30" stroke="#31435f"/><text x="190.0" y="259.0" fill="#dbe6f5" font-size="13" font-weight="bold" text-anchor="middle">_last_checkpoint</text><text x="190.0" y="279.0" fill="#8fa5c8" font-size="11" text-anchor="middle">version · parts · size · checksum</text><rect x="420" y="90" width="300" height="90" rx="9" fill="#121a30" stroke="#31435f"/><text x="570.0" y="129.0" fill="#dbe6f5" font-size="13" font-weight="bold" text-anchor="middle">v2：sidecar 文件</text><text x="570.0" y="149.0" fill="#8fa5c8" font-size="11" text-anchor="middle">大动作溢出到 .sidecar</text><rect x="420" y="220" width="300" height="90" rx="9" fill="#2a2010" stroke="#fbbf24"/><text x="570.0" y="259.0" fill="#fbbf24" font-size="13" font-weight="bold" text-anchor="middle">CRC 校验文件</text><text x="570.0" y="279.0" fill="#8fa5c8" font-size="11" text-anchor="middle">快照构建时的完整性校验</text><rect x="780" y="90" width="220" height="220" rx="9" fill="#0f2a1c" stroke="#34d399"/><text x="890.0" y="194.0" fill="#34d399" font-size="13" font-weight="bold" text-anchor="middle">内容 = 全部 action</text><text x="890.0" y="214.0" fill="#8fa5c8" font-size="11" text-anchor="middle">active add 集合</text><text x="800" y="150" fill="#8fa5c8" font-size="11" text-anchor="start">tombstones（截断窗口）</text><text x="800" y="172" fill="#8fa5c8" font-size="11" text-anchor="start">setTransactions</text><text x="800" y="194" fill="#8fa5c8" font-size="11" text-anchor="start">meta / protocol</text><text x="800" y="216" fill="#8fa5c8" font-size="11" text-anchor="start">CheckpointMetadata</text><text x="800" y="248" fill="#6b7d99" font-size="10.5" text-anchor="start">写入前先写 _last</text><text x="800" y="270" fill="#6b7d99" font-size="10.5" text-anchor="start">checkpoint 再原子收尾</text><line x1="340" y1="135" x2="420" y2="135" stroke="#5f7ba6" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#ar0)"/><text x="380.0" y="129.0" fill="#5f7ba6" font-size="11" text-anchor="middle">v2 溢出</text><line x1="190" y1="180" x2="190" y2="220" stroke="#5f7ba6" stroke-width="1.5" marker-end="url(#ar0)"/><text x="240" y="194.0" fill="#5f7ba6" font-size="11" text-anchor="middle">指向</text></svg><div class="figcap"><b>图</b><span>图 4-1 · Checkpoint 文件族与 last_checkpoint 元信息</span></div></div><p><code>Checkpoints.scala</code> 的 <code>writeCheckpointFiles</code> 用 Spark 并行写出 parts；v2 checkpoint 引入 sidecar：主 checkpoint 只含少量代表性 action，大体积内容进 sidecar 文件，读取时按需加载。</p><h2><span class="n">02</span>触发与校验</h2><p>默认每 <code>delta.checkpointInterval</code>（10）次提交触发一次；由 <code>OptimisticTransaction.commit</code> 后的 post-commit hook 驱动。checksum（v2）让快照构建后能校验 action 数与文件数是否与上次一致，及早发现损坏。</p>
+</main>
+<footer class="foot"><div class="wrap">源码深度学习手册 · 基于逐模块源码分析 · <a href="index.html">返回目录</a></div></footer>
+</body>
+</html>
