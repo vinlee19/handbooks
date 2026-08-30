@@ -4,30 +4,32 @@ import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from site_fw import render_page
 from ch import CHAPTERS
-from extra import EXTRA
-for i, ex in enumerate(EXTRA):
-    CHAPTERS[i]["sections"].extend([("p", x) if isinstance(x, str) else x for x in ex])
-try:
-    from extra2 import EXTRA2
-    for i, ex in enumerate(EXTRA2):
-        CHAPTERS[i]["sections"].extend([("p", x) if isinstance(x, str) else x for x in ex])
-except ImportError:
-    pass
-try:
-    from extra3 import EXTRA3
-    from extra4 import EXTRA4
-    for i, ex in enumerate(EXTRA4):
-        CHAPTERS[i]["sections"].extend([("p", x) if isinstance(x, str) else x for x in ex])
-    for i, ex in enumerate(EXTRA3):
-        CHAPTERS[i]["sections"].extend([("p", x) if isinstance(x, str) else x for x in ex])
-except ImportError:
-    pass
-try:
-    from extra4 import EXTRA4
-    for i, ex in enumerate(EXTRA4):
-        CHAPTERS[i]["sections"].extend([("p", x) if isinstance(x, str) else x for x in ex])
-except ImportError:
-    pass
+
+# 加载补充内容到每个 chapter 的最后一个 section 的 items 内
+def _load(mod_name, attr_name):
+    try:
+        m = __import__(mod_name)
+        items_list = getattr(m, attr_name, [])
+        for i, ex in enumerate(items_list):
+            if i >= len(CHAPTERS):
+                break
+            norm = []
+            for x in ex:
+                if isinstance(x, str):
+                    norm.append(("p", x))
+                elif isinstance(x, tuple) and len(x) == 3:
+                    norm.append((x[0], x[1]))
+                    norm.append(("p", x[2]))
+                else:
+                    norm.append(x)
+            CHAPTERS[i]["sections"][-1][1].extend(norm)
+    except ImportError:
+        pass
+
+_load("extra", "EXTRA")
+_load("extra2", "EXTRA2")
+_load("extra3", "EXTRA3")
+_load("extra4", "EXTRA4")
 
 ACCENT = "#4f8cff"
 ICON = "🔷"

@@ -16,13 +16,15 @@ for mod, attr in (("extra", "EXTRA"), ("extra2", "EXTRA2"), ("extra3", "EXTRA3")
     try:
         m = __import__(mod)
         for i, ex in enumerate(getattr(m, attr, [])):
+            if i >= len(CHAPTERS): break
             norm = []
             for x in ex:
                 if isinstance(x, str): norm.append(("p", x))
                 elif isinstance(x, tuple) and len(x) == 3:
                     norm.append((x[0], x[1])); norm.append(("p", x[2]))
                 else: norm.append(x)
-            CHAPTERS[i]["sections"].extend(norm)
+            # 修复：追加到最后一个 section 的 items 列表内，而非 sections 层
+            CHAPTERS[i]["sections"][-1][1].extend(norm)
     except ImportError:
         pass
 NAV_LABELS = {
