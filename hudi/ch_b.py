@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Hudi 手册 05-08 章内容（深度版）。"""
+"""Hudi 手册 05-08 章内容（深度版 v2：面面俱到）。"""
 from site_fw import B, A, T, R, FIG
 
 C = "#00e5cc"
@@ -13,31 +13,26 @@ CHAPTERS_B = []
 # ================ 05 MOR 与 Compaction ================
 fig_mor = FIG("hudi-mor", "图 5-1 · MOR 生命周期：deltacommit 追加 → 调度 plan → 执行合并 → 切片轮转 → clean", 1040, 620, (
     T(30, 40, "MOR + COMPACTION · 五个阶段的完整循环", 13, "#8fa5c8", True)
-    # 阶段 1：deltacommit
     + R(30, 70, 300, 150, "#0f2438", 10, C)
     + T(50, 98, "① deltacommit（写入瞬间）", 12, C, True)
     + T(50, 124, "update 记录 → 追加到 fileGroup 的 .log", 11.5, "#dbe6f5")
     + T(50, 148, "insert 可选 log-only 或新建 base", 11.5, "#dbe6f5")
     + T(50, 172, "block 达到 max.size 滚动 .log_N", 11.5, "#8fa5c8", mono=True)
     + T(50, 198, "index 可选：canIndexLogFiles", 11, "#6b7d99")
-    # 阶段 2：调度
     + R(370, 70, 300, 150, "#121a30", 10, "#31435f")
     + T(390, 98, "② 调度 ScheduleCompaction", 12, "#7fc8e8", True)
     + T(390, 124, "扫描有 log 的 file slice", 11.5, "#dbe6f5")
     + T(390, 148, "CompactionStrategy 打分选片", 11.5, "#dbe6f5")
     + T(390, 172, "生成 CompactionPlan（FileSlice 列表）", 11.5, "#8fa5c8", mono=True)
     + T(390, 198, "落盘 .compaction.requested instant", 11.5, CY, mono=True)
-    # 阶段 3：执行
     + R(710, 70, 300, 150, "#2a2010", 10, CY)
     + T(730, 98, "③ 执行 HoodieCompactor", 12, CY, True)
     + T(730, 124, "消费 requested plan（幂等）", 11.5, "#dbe6f5")
     + T(730, 148, "读 base + 全部 log → merge", 11.5, "#dbe6f5")
     + T(730, 172, "payload.merge 按序去重", 11.5, "#8fa5c8", mono=True)
     + T(730, 198, "写出新 base + compaction completed", 11.5, "#8fa5c8", mono=True)
-    # 中部箭头
     + A(330, 145, 370, 145, "达到阈值/定时", color="#5f7ba6", dash=True, lx=350, ly=135)
     + A(670, 145, 710, 145, "任何引擎接手", color="#5f7ba6", lx=690, ly=135)
-    # 阶段 4：切片轮转（时间线视角）
     + R(30, 280, 980, 160, "#121a30", 10, "#31435f")
     + T(50, 308, "④ FileSlice 轮转（同一 fileGroup 内的版本交替）", 12, "#7fc8e8", True)
     + B(50, 326, 280, 64, "#0e2a20", CG, "slice @ t1（已 compaction）", "base v1", tcolor=CG)
@@ -46,7 +41,6 @@ fig_mor = FIG("hudi-mor", "图 5-1 · MOR 生命周期：deltacommit 追加 → 
     + A(330, 358, 400, 358, "deltacommit", color="#5f7ba6", lx=365, ly=346)
     + A(680, 358, 750, 358, "compaction", color="#5f7ba6", lx=715, ly=346)
     + T(50, 416, "Read Optimized 查询只读纯 base 切片（t1/t5）；Snapshot 查询读最新（t2 需实时合并）", 11.5, "#93a5c0")
-    # 底部：clean 与参数
     + R(30, 470, 980, 120, "#121a30", 10, "#31435f")
     + T(50, 498, "⑤ Clean：compaction completed 后，旧 log 与被替换 base 不再被最新视图引用", 12, "#7fc8e8", True)
     + T(50, 524, "cleaner.commits.retained 控制保留多少个历史 commit（与 Time Travel 窗口对齐）；hoodie.clean.async 控制是否异步", 11.5, "#dbe6f5")
@@ -61,8 +55,9 @@ CHAPTERS_B.append(dict(
     stats=[("2 阶段", "schedule / execute 分离"), ("幂等", "plan 落盘崩溃可恢复"), ("异步", "compactor 可异构引擎"), ("5", "默认触发阈值 commits")],
     sections=[
         ("deltacommit：只追加不重写", [
-            "MOR 的写入瞬间是 <code>.deltacommit</code>。update 记录不重写 base，而是追加到所属 fileGroup 的 log file（CH03 的 AVRO_DATA_BLOCK）；insert 可选两种落地：log-only（进一步降低延迟，代价是读合并更多）或新建 base（<code>hoodie.datasource.write.operation</code> 配置与 <code>handleEachPartition</code> 策略决定）。",
+            "MOR 的写入瞬间是 <code>.deltacommit</code>。update 记录不重写 base，而是追加到所属 fileGroup 的 log file（CH03 的 AVRO_DATA_BLOCK）；insert 可选两种落地：log-only（进一步降低延迟，代价是读合并更多）或新建 base。写入 handle 是 <code>HoodieAppendHandle</code>：它持有 fileGroup 的当前 log writer，把记录序列化成块追加。",
             "log file 的大小滚动由 <code>hoodie.logfile.data.block.max.size</code> 控制；block 内记录按 commit 分组并带 sequence number，merge 时按序回放保证语义正确。",
+            "MOR 特有的一个语义：<code>canIndexLogFiles=true</code> 的索引（Bucket/Record Index）可以在 deltacommit 阶段就完成 update 定位（记录直接追加到正确 fileGroup）；false 的索引（Bloom）则把 update 记录与 base bloom 比对后追加，log 内的重复 key 靠 merge 阶段按序去重。",
         ]),
         ("两阶段 Compaction", [
             ("fig", fig_mor),
@@ -72,11 +67,15 @@ CHAPTERS_B.append(dict(
         ("为什么两阶段是关键设计", [
             "计划先落盘意味着：① 执行器崩溃后计划仍在，重试不丢工作；② 执行可以换引擎——Spark 调度、Flink 执行完全合法；③ 多个 compactor 可以分片消费同一 plan（fileGroup 粒度去重）。这也是 Flink MOR 表把 compaction 做成常驻算子的基础。",
         ]),
+        ("Log Compaction：MOR 的新优化", [
+            "除了把 base+log 合成新 base，Hudi 还支持 <strong>log compaction</strong>（<code>hoodie.log.compaction.block.types</code>）：把多个小 log 块合并成更少的块而不生成新 base。适合「写频繁但读走 RO」的表，降低 compaction 的 IO 放大。",
+        ]),
         ("与 Read Optimized 的联动", [
             "compaction completed 之后，最新纯 base 切片前进到 t5——Read Optimized 查询「看到」的数据就此更新。MOR 表的新鲜度 = 最后一次 compaction 时间；对新鲜度敏感的下游应该用 Snapshot Query 或把 compaction 频率调高（代价是 IO 放大）。",
         ]),
         ("Clean：最后一环", [
-            "compaction 后，旧 slice 的 log 与 base 失去引用，但 Time Travel / 增量查询可能还要用它们。<code>CleanActionExecutor</code> 按 <code>hoodie.cleaner.commits.retained</code> 保留最近 N 个 commit 的文件，其余删除。保留窗口要 ≥ 下游消费延迟，否则增量消费者会读到「文件已被删」的异常。",
+            "compaction 后，旧 slice 的 log 与 base 失去引用，但 Time Travel / 增量查询可能还要用它们。<code>CleanActionExecutor</code> 按 <code>hoodie.cleaner.commits.retained</code> 保留最近 N 个 commit 的文件，其余删除。保留策略还有 <code>hoodie.cleaner.hours.retained</code>（按小时）与增量清理模式（<code>INCREMENTAL</code>：只清理上次 clean 后新失效的文件，避免全表扫描）。",
+            "保留窗口要 ≥ 下游消费延迟，否则增量消费者会读到「文件已被删」的异常。clean 与 archival、compaction 三者的调度顺序由 <code>HoodieTableServiceManager</code> 统一编排。",
         ]),
     ],
     cards=[
@@ -89,7 +88,6 @@ CHAPTERS_B.append(dict(
 # ================ 06 索引 ================
 fig_index = FIG("hudi-idx", "图 6-1 · 索引家族全景：tagLocation 的六种实现与两种关键开关", 1040, 620, (
     T(30, 40, "INDEX FAMILY · HoodieIndex 抽象的六个实现", 13, "#8fa5c8", True)
-    # 上排三个
     + R(40, 70, 300, 130, "#0f2438", 10, C)
     + T(60, 96, "Bloom Index · SparkHoodieBloomIndex", 12, C, True)
     + T(60, 122, "① 范围裁剪：interval tree 按 key", 10.5, "#8fa5c8")
@@ -108,7 +106,6 @@ fig_index = FIG("hudi-idx", "图 6-1 · 索引家族全景：tagLocation 的六�
     + T(720, 142, "读 O(1)：哈希分片 + 本地缓存", 10.5, "#8fa5c8")
     + T(720, 162, "随表自愈：无外部依赖", 10.5, "#8fa5c8")
     + T(720, 182, "0.14+ 推荐的默认演进方向", 10.5, "#6b7d99")
-    # 下排三个
     + R(40, 240, 300, 100, "#2a2010", 10, CY)
     + T(60, 264, "HBase Index · 外部 KV", 12, CY, True)
     + T(60, 290, "低延迟点查 · 写放大在 HBase", 10.5, "#8fa5c8")
@@ -122,7 +119,6 @@ fig_index = FIG("hudi-idx", "图 6-1 · 索引家族全景：tagLocation 的六�
     + T(720, 264, "InMemory / Java", 12, "#dbe6f5", True)
     + T(720, 290, "单机测试与轻量用法", 10.5, "#8fa5c8")
     + T(720, 310, "与 Simple 同层的轻实现", 10.5, "#8fa5c8")
-    # 底部：两个关键开关 + 接口
     + R(30, 400, 980, 190, "#121a30", 10, "#31435f")
     + T(50, 428, "两个决定行为分叉的开关", 12, "#7fc8e8", True)
     + T(50, 454, "canIndexLogFiles：MOR 的 log 记录是否也索引。false（默认）时 update 记录先与 base bloom 比对，log 记录靠 merge 阶段去重；true 时 tagLocation 直接定位 log 位置（Bloom 不支持，Bucket/Record 支持）", 11.5, "#dbe6f5")
@@ -145,9 +141,11 @@ CHAPTERS_B.append(dict(
         ("Bloom Index：为对象存储而生", [
             "默认实现。四步：① <code>bucketRecords</code> 用 interval tree 按 key 范围把记录与候选文件配对（依赖 keyGenerator 生成可比对的 key）；② 并行读每个候选文件的 bloom filter（base file footer 内嵌，或 MDT 托管版本——后者避免为查索引而随机读数据文件）；③ bloom 可能误报，命中的文件再读实际 key 列精确比对（<code>KeyLookupHandle</code> 批处理）；④ 比对命中 → update，未命中 → insert。",
             "代价模型：一次 upsert 的索引成本 ≈ 候选文件数 × bloom 读取。数据按 key 聚得越紧（排序/聚簇），候选越少越快——这就是「写入前排序」对 Hudi 特别重要的原因。",
+            "bloom 参数：<code>hoodie.bloom.index.filter.type</code>（DYNAMIC 按文件大小动态调大小 / SIZED 固定）、<code>hoodie.bloom.index.expected.insertion.rate</code>（预期装入率，默认 0.05）、<code>hoodie.bloom.index.parallelism</code>（bloom 读取的并行度）。误报率越高精确比对越贵——动态 bloom 会按文件记录数自动扩容位数组。",
         ]),
         ("Bucket Index：用布局换查找", [
             "<code>HoodieBucketIndex</code> 彻底跳过「查找」：hash(record key) 决定 bucket（<code>BucketIdentifier.bucketId</code>），bucket 即 fileGroup——写入 O(1)，且天然把同 key 数据聚在一起。代价：bucket 数量建表时固定（<code>hoodie.bucket.index.num.buckets</code>）。<code>ConsistentBucketIndex</code> 用一致性哈希环支持扩缩容，代价是需要额外的迁移元数据。",
+            "Bucket Index 与 keyGenerator 的关系：bucket 只按 key 哈希，不感知分区——同 key 永远落同一 bucket，分区由写入时的 partition path 决定，因此它天然要求 <code>isGlobal=false</code> 语义下的本地唯一。",
         ]),
         ("Record Index：元数据表托管", [
             "0.14+ 的演进方向：key→location 存进 Metadata Table 的 record index 分区，由 Hudi 自管（随表 commit 自愈、随 rollback 撤销）。读取 O(1)（哈希分片 + 执行器本地缓存），无外部依赖，天然支持 MOR 的 log 索引与二级索引（secondary index）构建。开启方式 <code>hoodie.metadata.record.index.enable=true</code> + 一次性 bootstrap。",
@@ -166,7 +164,6 @@ CHAPTERS_B.append(dict(
 # ================ 07 读路径 ================
 fig_read = FIG("hudi-read", "图 7-1 · 三种查询的切片选择策略：同一 FileSystemView 的三种消费方式", 1040, 600, (
     T(30, 40, "QUERY TYPES · FileSystemView 的三种消费", 13, "#8fa5c8", True)
-    # Snapshot
     + R(30, 70, 320, 200, "#0f2438", 10, C)
     + T(50, 98, "Snapshot Query（最新）", 12.5, C, True)
     + T(50, 124, "COW：latest base slice 直读", 11.5, "#dbe6f5")
@@ -175,7 +172,6 @@ fig_read = FIG("hudi-read", "图 7-1 · 三种查询的切片选择策略：同�
     + T(50, 196, "Hive: HoodieParquetRealtimeInputFormat", 10.5, "#6b7d99", mono=True)
     + T(50, 216, "Spark: 实时合并迭代器链", 10.5, "#6b7d99", mono=True)
     + T(50, 244, "新鲜度最高，MOR 读延迟波动", 10.5, "#6b7d99")
-    # ReadOptimized
     + R(390, 70, 320, 200, "#121a30", 10, "#31435f")
     + T(410, 98, "Read Optimized Query", 12.5, "#7fc8e8", True)
     + T(410, 124, "只读「最近一次 compaction 前」", 11.5, "#dbe6f5")
@@ -184,7 +180,6 @@ fig_read = FIG("hudi-read", "图 7-1 · 三种查询的切片选择策略：同�
     + T(410, 196, "COW 下与 Snapshot 等价", 11, "#8fa5c8")
     + T(410, 216, "Hive: HoodieParquetInputFormat", 10.5, "#6b7d99", mono=True)
     + T(410, 244, "延迟曲线平稳，OLAP 友好", 10.5, "#6b7d99")
-    # Incremental
     + R(750, 70, 260, 200, "#1a1430", 10, CP)
     + T(770, 98, "Incremental Query", 12.5, CP, True)
     + T(770, 124, "beginInstant / endInstant 区间", 11.5, "#dbe6f5", mono=True)
@@ -193,7 +188,6 @@ fig_read = FIG("hudi-read", "图 7-1 · 三种查询的切片选择策略：同�
     + T(770, 196, "下游物化视图 / 同步管道", 10.5, "#6b7d99")
     + T(770, 220, "timeline 区间即变更集", 10.5, "#6b7d99")
     + T(770, 244, "消费落后过快会遇 clean", 10.5, "#6b7d99")
-    # 底部：视图装配细节
     + R(30, 320, 980, 250, "#121a30", 10, "#31435f")
     + T(50, 348, "视图装配的源码细节", 12, "#7fc8e8", True)
     + T(50, 376, "① MetaClient.reloadActiveTimeline() → 取最新 completed instant 作为查询水位", 11.5, "#dbe6f5", mono=True)
@@ -237,31 +231,29 @@ CHAPTERS_B.append(dict(
 # ================ 08 并发控制 ================
 fig_cc = FIG("hudi-cc", "图 8-1 · 提交协议时序：取锁 → 校验 → 提交 的临界区，以及两种失败路径", 1040, 620, (
     T(30, 40, "CONCURRENCY · OCC COMMIT PROTOCOL", 13, "#8fa5c8", True)
-    # Writer A 时序
     + R(30, 70, 300, 170, "#121a30", 10, "#31435f")
     + T(50, 98, "Writer A（流式管道）", 12, "#7fc8e8", True)
     + T(50, 124, "写完成：WriteStatus 汇总", 11.5, "#dbe6f5")
     + T(50, 148, "t=A1 产生 instant（inflight）", 11.5, "#8fa5c8", mono=True)
     + T(50, 172, "写数据文件（带 marker）", 11.5, "#8fa5c8")
     + T(50, 200, "准备提交：文件集 = {fg-1, fg-3}", 11.5, "#8fa5c8")
-    # Writer B
     + R(30, 270, 300, 130, "#121a30", 10, "#31435f")
     + T(50, 298, "Writer B（批处理作业）", 12, "#7fc8e8", True)
     + T(50, 324, "t=B1 instant，文件集 = {fg-5}", 11.5, "#8fa5c8", mono=True)
     + T(50, 348, "与 A 无交集 → 可同时提交", 11.5, CG, mono=True)
     + T(50, 372, "Snapshot Isolation 默认语义", 11, "#6b7d99")
-    # 临界区
     + R(400, 100, 260, 74, "#2a2010", 10, CY)
     + T(420, 126, "TransactionManager · begin() 取锁", 12, CY, True)
-    + T(420, 158, "Zookeeper / DynamoDB / FS / SQL", 11, "#8fa5c8", mono=True)
+    + T(420, 150, "Zookeeper / DynamoDB / FS / SQL", 10.5, "#8fa5c8", mono=True)
+    + A(550, 174, 550, 240, "临界区", color="#5f7ba6", lx=590)
     + R(400, 240, 260, 74, "#0f2438", 10, C)
     + T(420, 266, "ConflictChecker · 文件集比对", 12, C, True)
-    + T(420, 298, "SimpleConcurrentFileWrites…", 11, "#8fa5c8", mono=True)
+    + T(420, 290, "metadata 冲突单独判定", 10.5, "#8fa5c8")
+    + A(530, 174, 530, 240, "", color="#5f7ba6", lx=568)
     + R(400, 380, 260, 74, "#121a30", 10, "#31435f")
     + T(420, 404, "早期冲突检测", 12, "#dbe6f5", True)
     + T(420, 428, "写入过程中周期校验", 10.5, "#8fa5c8")
     + T(420, 452, "hoodie.write.concurrency.…", 10.5, "#8fa5c8", mono=True)
-    # 结果
     + R(760, 120, 240, 100, "#0f2a1c", 10, CG)
     + T(780, 146, "通过 → 提交", 12, CG, True)
     + T(780, 170, "completed 原子重命名", 10.5, "#dbe6f5", mono=True)
@@ -270,12 +262,11 @@ fig_cc = FIG("hudi-cc", "图 8-1 · 提交协议时序：取锁 → 校验 → �
     + T(780, 286, "冲突 → 失败", 12, CR, True)
     + T(780, 310, "HoodieWriteConflictException", 10.5, "#dbe6f5", mono=True)
     + T(780, 334, "调用方决定重试或告警", 10.5, "#8fa5c8")
-    # 箭头
     + A(330, 145, 400, 145, "", color="#5f7ba6")
-    + A(530, 200, 530, 240, "", color="#5f7ba6")
-    + A(660, 145, 760, 155, "无冲突", color="#5f7ba6", lx=710, ly=135)
-    + A(660, 285, 760, 300, "相交", color="#fb7185", dash=True, lx=710, ly=275)
-    # 底部横条
+    + A(330, 275, 400, 275, "", color="#5f7ba6")
+    + A(530, 174, 530, 240, "", color="#5f7ba6", lx=568)
+    + A(660, 137, 760, 155, "无冲突", color="#5f7ba6", lx=710, ly=130)
+    + A(660, 277, 760, 295, "相交", color="#fb7185", dash=True, lx=710, ly=268)
     + R(30, 480, 980, 110, "#121a30", 10, "#31435f")
     + T(50, 508, "隔离级别与边界", 12, "#7fc8e8", True)
     + T(50, 534, "默认 Snapshot Isolation：并发提交只要文件集不相交即可同时成功；Repeatable Read / Serializable 需要额外读取冲突校验", 11.5, "#dbe6f5")
