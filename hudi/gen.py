@@ -12,6 +12,19 @@ SITE = "Hudi 源码深度学习手册"
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 CHAPTERS = CHAPTERS_A + CHAPTERS_B
+for mod, attr in (("extra", "EXTRA"), ("extra2", "EXTRA2"), ("extra3", "EXTRA3")):
+    try:
+        m = __import__(mod)
+        for i, ex in enumerate(getattr(m, attr, [])):
+            norm = []
+            for x in ex:
+                if isinstance(x, str): norm.append(("p", x))
+                elif isinstance(x, tuple) and len(x) == 3:
+                    norm.append((x[0], x[1])); norm.append(("p", x[2]))
+                else: norm.append(x)
+            CHAPTERS[i]["sections"].extend(norm)
+    except ImportError:
+        pass
 NAV_LABELS = {
     "01-overview.html": "01 全景", "02-timeline.html": "02 Timeline",
     "03-file-layout.html": "03 文件布局", "04-cow-write.html": "04 COW 写",
